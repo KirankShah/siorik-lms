@@ -11,7 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.models import Organization, User
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from certificates.services import generate_certificate
-from courses.models import Course, Enrollment, Lesson, Module
+from courses.models import Course, CourseAccess, Enrollment, Lesson, Module
 
 
 class BaseAPITestCase(APITestCase):
@@ -106,15 +106,27 @@ class AuthFlowTests(BaseAPITestCase):
 
 
 class CourseVisibilityTests(BaseAPITestCase):
-    def test_learner_sees_only_published_courses_in_own_org_or_platform(self):
+    def test_learner_sees_only_published_own_org_courses_without_a_grant(self):
+        self.auth_as(self.learner)
+        slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
+        self.assertEqual(slugs, {'org-onboarding'})
+
+    def test_org_admin_sees_unpublished_own_org_courses_without_a_grant(self):
+        self.auth_as(self.org_admin)
+        slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
+        self.assertEqual(slugs, {'org-onboarding', 'org-draft'})
+
+    def test_platform_course_becomes_visible_after_grant(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
         self.auth_as(self.learner)
         slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
         self.assertEqual(slugs, {'org-onboarding', 'platform-basics'})
 
-    def test_org_admin_sees_unpublished_org_courses_plus_platform(self):
-        self.auth_as(self.org_admin)
+    def test_platform_course_invisible_to_ungranted_org(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
+        self.auth_as(self.other_org_learner)
         slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
-        self.assertEqual(slugs, {'org-onboarding', 'org-draft', 'platform-basics'})
+        self.assertNotIn('platform-basics', slugs)
 
     def test_platform_admin_sees_every_course(self):
         self.auth_as(self.platform_admin)
@@ -412,24 +424,34 @@ class CourseBuilderTests(BaseAPITestCase):
         response = self.client.post('/api/courses/', {'title': 'New', 'slug': 'new-course'})
         self.assertEqual(response.status_code, 403)
 
-    def test_instructor_create_forces_own_organization(self):
+    def test_instructor_create_forces_own_organization_and_content_owner(self):
         self.auth_as(self.instructor)
         response = self.client.post('/api/courses/', {
             'title': 'Instructor Course', 'slug': 'instructor-course',
-            'organization': self.other_org.id,
+            'organization': self.other_org.id, 'content_owner': 'PLATFORM',
         })
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['organization'], self.org.id)
+        self.assertEqual(response.data['content_owner'], 'ORGANIZATION')
         self.assertEqual(Course.objects.get(slug='instructor-course').created_by, self.instructor)
 
-    def test_platform_admin_can_set_arbitrary_organization(self):
+    def test_platform_admin_create_forces_platform_content_owner(self):
         self.auth_as(self.platform_admin)
         response = self.client.post('/api/courses/', {
             'title': 'Platform Managed', 'slug': 'platform-managed',
-            'organization': self.other_org.id,
+            'organization': self.other_org.id, 'content_owner': 'ORGANIZATION',
         })
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['organization'], self.other_org.id)
+        self.assertEqual(response.data['content_owner'], 'PLATFORM')
+
+    def test_org_admin_cannot_edit_content_owner_on_update(self):
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/courses/{self.published_org_course.slug}/', {'content_owner': 'PLATFORM'}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['content_owner'], 'ORGANIZATION')
 
     def test_instructor_cannot_edit_other_org_course(self):
         self.auth_as(self.instructor)
@@ -450,6 +472,59 @@ class CourseBuilderTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.published_org_course.refresh_from_db()
         self.assertEqual(self.published_org_course.organization_id, self.org.id)
+
+
+class CourseAccessGrantTests(BaseAPITestCase):
+    def test_platform_admin_can_grant_and_list_access(self):
+        self.auth_as(self.platform_admin)
+        grant_response = self.client.post(
+            f'/api/courses/{self.platform_course.slug}/access-grants/', {'organization': self.org.id}
+        )
+        self.assertEqual(grant_response.status_code, 201)
+
+        list_response = self.client.get(f'/api/courses/{self.platform_course.slug}/access-grants/')
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]['organization']['id'], self.org.id)
+
+    def test_granting_is_idempotent(self):
+        self.auth_as(self.platform_admin)
+        first = self.client.post(f'/api/courses/{self.platform_course.slug}/access-grants/', {'organization': self.org.id})
+        second = self.client.post(f'/api/courses/{self.platform_course.slug}/access-grants/', {'organization': self.org.id})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(CourseAccess.objects.filter(course=self.platform_course, organization=self.org).count(), 1)
+
+    def test_cannot_grant_access_to_an_organization_owned_course(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/access-grants/', {'organization': self.other_org.id}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_revoke_removes_the_grant(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(
+            f'/api/courses/{self.platform_course.slug}/access-grants/revoke/', {'organization': self.org.id},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(CourseAccess.objects.filter(course=self.platform_course, organization=self.org).exists())
+
+    def test_org_admin_cannot_manage_grants_on_platform_course(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.platform_course.slug}/access-grants/', {'organization': self.org.id}
+        )
+        # editable_courses_for_user excludes PLATFORM-owned courses for ORG_ADMIN,
+        # so the object lookup itself 404s before any content_owner check runs.
+        self.assertEqual(response.status_code, 404)
+
+    def test_org_admin_with_granted_access_still_cannot_edit_platform_course(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(f'/api/courses/{self.platform_course.slug}/', {'title': 'Hacked'})
+        self.assertEqual(response.status_code, 404)
 
 
 class ModuleLessonBuilderTests(BaseAPITestCase):

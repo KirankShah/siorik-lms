@@ -22,7 +22,10 @@ class Course(models.Model):
         null=True,
         blank=True,
         related_name='courses',
-        help_text='Null means platform/managed content.',
+        help_text=(
+            'The owning organization for ORGANIZATION-owned courses. Ignored for '
+            'access control on PLATFORM-owned courses — see CourseAccess instead.'
+        ),
     )
     content_owner = models.CharField(max_length=20, choices=ContentOwner.choices, default=ContentOwner.PLATFORM)
     cover_image = models.ImageField(upload_to='course_covers/', blank=True, null=True)
@@ -42,6 +45,25 @@ class Course(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class CourseAccess(models.Model):
+    """
+    Grants an organization visibility into a PLATFORM-owned course. Stands in for a
+    per-user billing/entitlement step that isn't automated yet — for now, granting
+    access is a manual action taken by a PLATFORM_ADMIN.
+    """
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='access_grants')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='course_access_grants')
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-granted_at']
+        unique_together = ('course', 'organization')
+
+    def __str__(self):
+        return f'{self.course.title} -> {self.organization.name}'
 
 
 class Module(models.Model):

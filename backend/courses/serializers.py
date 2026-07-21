@@ -2,9 +2,10 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 
+from accounts.serializers import OrganizationSerializer
 from assessments.serializers import QuizSummarySerializer
 
-from .models import Course, Enrollment, Lesson, Module
+from .models import Course, CourseAccess, Enrollment, Lesson, Module
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -45,9 +46,18 @@ class CourseListSerializer(serializers.ModelSerializer):
         ]
 
 
+class CourseAccessSerializer(serializers.ModelSerializer):
+    organization = OrganizationSerializer(read_only=True)
+
+    class Meta:
+        model = CourseAccess
+        fields = ['id', 'organization', 'granted_at']
+
+
 class CourseDetailSerializer(serializers.ModelSerializer):
     modules = ModuleSerializer(many=True, read_only=True)
     quizzes = QuizSummarySerializer(many=True, read_only=True)
+    access_grants = CourseAccessSerializer(many=True, read_only=True)
 
     class Meta:
         model = Course
@@ -65,6 +75,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'updated_at',
             'modules',
             'quizzes',
+            'access_grants',
         ]
 
 

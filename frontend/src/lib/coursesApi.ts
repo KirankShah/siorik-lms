@@ -1,6 +1,6 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
 import type { BulkEnrollResult, ReportRow } from '../types/admin'
-import type { ContentOwner, CourseDetail, CourseListItem, Enrollment, LessonType } from '../types/courses'
+import type { CourseAccessGrant, CourseDetail, CourseListItem, Enrollment, LessonType } from '../types/courses'
 
 export function fetchCourses(): Promise<CourseListItem[]> {
   return apiFetch<CourseListItem[]>('/courses/')
@@ -41,8 +41,9 @@ export interface CourseInput {
   title: string
   slug: string
   description: string
+  // Only meaningful for PLATFORM_ADMIN — the backend forces this to the
+  // caller's own org for ORG_ADMIN/INSTRUCTOR regardless of what's sent.
   organization: number | null
-  content_owner: ContentOwner
   is_published: boolean
   cover_image?: File | null
 }
@@ -55,6 +56,22 @@ export function createCourse(input: CourseInput): Promise<CourseDetail> {
 export function updateCourse(slug: string, input: Partial<CourseInput>): Promise<CourseDetail> {
   const body = input.cover_image instanceof File ? buildFormData(input) : input
   return apiFetch<CourseDetail>(`/courses/${slug}/`, { method: 'PATCH', body })
+}
+
+// --- Admin: PLATFORM_ADMIN course access grants ---
+
+export function grantCourseAccess(courseSlug: string, organizationId: number): Promise<CourseAccessGrant> {
+  return apiFetch<CourseAccessGrant>(`/courses/${courseSlug}/access-grants/`, {
+    method: 'POST',
+    body: { organization: organizationId },
+  })
+}
+
+export function revokeCourseAccess(courseSlug: string, organizationId: number): Promise<void> {
+  return apiFetch<void>(`/courses/${courseSlug}/access-grants/revoke/`, {
+    method: 'DELETE',
+    body: { organization: organizationId },
+  })
 }
 
 export interface ModuleInput {

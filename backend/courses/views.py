@@ -12,13 +12,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import User
+from accounts.models import Organization, User
 from assessments.models import QuizAttempt
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 
-from .models import Course, Enrollment, Lesson, LessonProgress, Module
+from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module
 from .permissions import editable_courses_for_user, visible_courses_for_user
 from .serializers import (
+    CourseAccessSerializer,
     CourseDetailSerializer,
     CourseListSerializer,
     CourseWriteSerializer,
@@ -33,8 +34,10 @@ WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 class CourseViewSet(viewsets.ModelViewSet):
     lookup_field = 'slug'
 
+    ACCESS_GRANT_ACTIONS = ('access_grants', 'revoke_access')
+
     def get_permissions(self):
-        if self.action in WRITE_ACTIONS or self.action == 'bulk_enroll':
+        if self.action in WRITE_ACTIONS or self.action == 'bulk_enroll' or self.action in self.ACCESS_GRANT_ACTIONS:
             return [IsAuthenticated(), IsAdminRole()]
         return [IsAuthenticated()]
 
@@ -51,15 +54,47 @@ class CourseViewSet(viewsets.ModelViewSet):
         return CourseDetailSerializer
 
     def perform_create(self, serializer):
-        if self.request.user.role == User.Role.PLATFORM_ADMIN:
-            serializer.save(created_by=self.request.user)
+        user = self.request.user
+        if user.role == User.Role.PLATFORM_ADMIN:
+            # PLATFORM_ADMIN-authored courses are always platform-owned, regardless
+            # of whatever organization value (if any) they attach as metadata.
+            serializer.save(created_by=user, content_owner=Course.ContentOwner.PLATFORM)
         else:
-            serializer.save(created_by=self.request.user, organization=self.request.user.organization)
+            # ORG_ADMIN/INSTRUCTOR can only author self-serve content scoped to
+            # their own org — both fields are forced, ignoring the request body.
+            serializer.save(created_by=user, content_owner=Course.ContentOwner.ORGANIZATION, organization=user.organization)
 
     def perform_update(self, serializer):
-        if self.request.user.role != User.Role.PLATFORM_ADMIN:
+        user = self.request.user
+        if user.role == User.Role.PLATFORM_ADMIN:
+            serializer.save(content_owner=Course.ContentOwner.PLATFORM)
+        else:
             serializer.validated_data.pop('organization', None)
-        serializer.save()
+            serializer.save(content_owner=Course.ContentOwner.ORGANIZATION)
+
+    @action(detail=True, methods=['get', 'post'], url_path='access-grants')
+    def access_grants(self, request, slug=None):
+        """List (GET) or grant (POST) organization access to a PLATFORM-owned course."""
+        course = self.get_object()
+
+        if request.method == 'GET':
+            grants = course.access_grants.select_related('organization')
+            return Response(CourseAccessSerializer(grants, many=True).data)
+
+        if course.content_owner != Course.ContentOwner.PLATFORM:
+            raise ValidationError({'detail': 'Access grants only apply to platform-managed courses.'})
+
+        organization = get_object_or_404(Organization, pk=request.data.get('organization'))
+        grant, created = CourseAccess.objects.get_or_create(course=course, organization=organization)
+        return Response(CourseAccessSerializer(grant).data, status=201 if created else 200)
+
+    @action(detail=True, methods=['delete'], url_path='access-grants/revoke')
+    def revoke_access(self, request, slug=None):
+        course = self.get_object()
+        deleted, _ = CourseAccess.objects.filter(course=course, organization_id=request.data.get('organization')).delete()
+        if not deleted:
+            return Response({'detail': 'No matching access grant.'}, status=404)
+        return Response(status=204)
 
     @action(detail=True, methods=['post'], url_path='bulk-enroll')
     def bulk_enroll(self, request, slug=None):

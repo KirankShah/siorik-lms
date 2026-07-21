@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Course, Enrollment, Lesson, LessonProgress, Module
+from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module
 
 
 class ModuleInline(admin.TabularInline):
@@ -28,6 +28,13 @@ class CourseAdmin(admin.ModelAdmin):
     search_fields = ('title', 'slug', 'description')
     prepopulated_fields = {'slug': ('title',)}
     inlines = [ModuleInline]
+
+
+@admin.register(CourseAccess)
+class CourseAccessAdmin(admin.ModelAdmin):
+    list_display = ('course', 'organization', 'granted_at')
+    list_filter = ('organization',)
+    search_fields = ('course__title', 'organization__name')
 
 
 @admin.register(Module)

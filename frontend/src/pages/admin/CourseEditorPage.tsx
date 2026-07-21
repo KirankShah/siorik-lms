@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { ModuleEditor } from '../../components/admin/ModuleEditor'
 import { QuizList } from '../../components/admin/QuizList'
 import { useAuth } from '../../context/AuthContext'
@@ -8,7 +9,7 @@ import { fetchOrganizations } from '../../lib/accountsApi'
 import { createCourse, createModule, fetchCourseDetail, updateCourse } from '../../lib/coursesApi'
 import { slugify } from '../../lib/slugify'
 import type { Organization } from '../../types/auth'
-import type { ContentOwner, CourseDetail } from '../../types/courses'
+import type { CourseDetail } from '../../types/courses'
 
 export function CourseEditorPage() {
   const { slug: slugParam } = useParams<{ slug: string }>()
@@ -25,7 +26,6 @@ export function CourseEditorPage() {
   const [slug, setSlug] = useState('')
   const [slugTouched, setSlugTouched] = useState(false)
   const [description, setDescription] = useState('')
-  const [contentOwner, setContentOwner] = useState<ContentOwner>('PLATFORM')
   const [organizationId, setOrganizationId] = useState<number | ''>('')
   const [isPublished, setIsPublished] = useState(false)
   const [coverImage, setCoverImage] = useState<File | null>(null)
@@ -50,7 +50,6 @@ export function CourseEditorPage() {
         setTitle(detail.title)
         setSlug(detail.slug)
         setDescription(detail.description)
-        setContentOwner(detail.content_owner)
         setOrganizationId(detail.organization ?? '')
         setIsPublished(detail.is_published)
       })
@@ -71,7 +70,6 @@ export function CourseEditorPage() {
         title,
         slug,
         description,
-        content_owner: contentOwner,
         organization: isPlatformAdmin ? (organizationId === '' ? null : Number(organizationId)) : null,
         is_published: isPublished,
         cover_image: coverImage,
@@ -148,37 +146,35 @@ export function CourseEditorPage() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700">Content owner</label>
-              <select
-                value={contentOwner}
-                onChange={(e) => setContentOwner(e.target.value as ContentOwner)}
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="PLATFORM">Platform</option>
-                <option value="ORGANIZATION">Organization</option>
-              </select>
-            </div>
-
-            {isPlatformAdmin && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700">Organization</label>
-                <select
-                  value={organizationId}
-                  onChange={(e) => setOrganizationId(e.target.value === '' ? '' : Number(e.target.value))}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                >
-                  <option value="">Platform-wide (no organization)</option>
-                  {organizations.map((org) => (
-                    <option key={org.id} value={org.id}>
-                      {org.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          <div>
+            <p className="text-sm font-medium text-slate-700">Content owner</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {isPlatformAdmin
+                ? 'Platform — courses you create are platform-managed. Organizations only see it once granted access below.'
+                : "Organization — this course belongs to your organization's own self-serve content and is scoped to your org automatically."}
+            </p>
           </div>
+
+          {isPlatformAdmin && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Organization (metadata only)</label>
+              <select
+                value={organizationId}
+                onChange={(e) => setOrganizationId(e.target.value === '' ? '' : Number(e.target.value))}
+                className="mt-1 w-full max-w-xs rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">None</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-400">
+                Doesn't control visibility for platform courses — use the access grants below for that.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-700">Cover image</label>
@@ -250,6 +246,15 @@ export function CourseEditorPage() {
             quizzes={course.quizzes}
             onChanged={() => loadCourse(course.slug)}
           />
+
+          {isPlatformAdmin && course.content_owner === 'PLATFORM' && (
+            <AccessGrantsPanel
+              courseSlug={course.slug}
+              grants={course.access_grants}
+              organizations={organizations}
+              onChanged={() => loadCourse(course.slug)}
+            />
+          )}
         </>
       )}
     </div>
