@@ -1,8 +1,11 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from accounts.models import Organization
+
+from .validators import LESSON_TYPE_ALLOWED_EXTENSIONS, validate_lesson_file_size
 
 
 class Course(models.Model):
@@ -64,7 +67,12 @@ class Lesson(models.Model):
     module = models.ForeignKey(Module, on_delete=models.CASCADE, related_name='lessons')
     title = models.CharField(max_length=255)
     lesson_type = models.CharField(max_length=20, choices=LessonType.choices, default=LessonType.TEXT)
-    content_file = models.FileField(upload_to='lesson_content/', blank=True, null=True)
+    content_file = models.FileField(
+        upload_to='lesson_content/',
+        blank=True,
+        null=True,
+        validators=[validate_lesson_file_size],
+    )
     content_url = models.URLField(blank=True)
     order = models.PositiveIntegerField(default=0)
     estimated_minutes = models.PositiveIntegerField(default=0)
@@ -72,6 +80,19 @@ class Lesson(models.Model):
     class Meta:
         ordering = ['order']
         unique_together = ('module', 'order')
+
+    def clean(self):
+        super().clean()
+        if self.content_file:
+            extension = self.content_file.name.rsplit('.', 1)[-1].lower()
+            allowed_extensions = LESSON_TYPE_ALLOWED_EXTENSIONS.get(self.lesson_type)
+            if allowed_extensions and extension not in allowed_extensions:
+                raise ValidationError({
+                    'content_file': (
+                        f"'.{extension}' files are not allowed for lesson type {self.lesson_type}. "
+                        f"Allowed extensions: {', '.join(allowed_extensions)}."
+                    )
+                })
 
     def __str__(self):
         return f'{self.module.title} - {self.title}'
