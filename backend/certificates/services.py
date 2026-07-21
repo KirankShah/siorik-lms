@@ -11,6 +11,8 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from assessments.models import Quiz, QuizAttempt
+from audit.models import AuditLog
+from audit.services import log_action
 from courses.models import Enrollment
 
 from .models import Certificate
@@ -49,6 +51,7 @@ def generate_certificate(user, course):
         pdf_bytes = _render_certificate_pdf(certificate)
         certificate.pdf_file.save(f'{certificate.certificate_number}.pdf', ContentFile(pdf_bytes), save=True)
 
+    log_action(user, AuditLog.Action.CERTIFICATE_GENERATED, certificate)
     return certificate
 
 

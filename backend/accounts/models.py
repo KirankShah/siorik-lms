@@ -2,11 +2,13 @@ from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from .validators import validate_image_size, validate_phone_number
+
 
 class Organization(models.Model):
     name = models.CharField(max_length=255)
     slug = models.SlugField(unique=True)
-    logo = models.ImageField(upload_to='organization_logos/', blank=True, null=True)
+    logo = models.ImageField(upload_to='organization_logos/', blank=True, null=True, validators=[validate_image_size])
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -61,7 +63,7 @@ class User(AbstractUser):
         blank=True,
         related_name='users',
     )
-    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True, validators=[validate_phone_number])
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

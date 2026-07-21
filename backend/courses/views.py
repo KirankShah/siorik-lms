@@ -14,6 +14,8 @@ from rest_framework.views import APIView
 
 from accounts.models import Organization, User
 from assessments.models import QuizAttempt
+from audit.models import AuditLog
+from audit.services import log_action
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 
 from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module
@@ -29,6 +31,17 @@ from .serializers import (
 )
 
 WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
+
+# Prevents CSV/formula injection: a cell starting with =, +, -, or @ can be
+# interpreted as a formula (and executed) when the file is opened in Excel.
+_FORMULA_PREFIXES = ('=', '+', '-', '@')
+
+
+def _csv_safe(value):
+    text = str(value)
+    if text.startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
 
 
 class CourseViewSet(viewsets.ModelViewSet):
@@ -58,11 +71,12 @@ class CourseViewSet(viewsets.ModelViewSet):
         if user.role == User.Role.PLATFORM_ADMIN:
             # PLATFORM_ADMIN-authored courses are always platform-owned, regardless
             # of whatever organization value (if any) they attach as metadata.
-            serializer.save(created_by=user, content_owner=Course.ContentOwner.PLATFORM)
+            course = serializer.save(created_by=user, content_owner=Course.ContentOwner.PLATFORM)
         else:
             # ORG_ADMIN/INSTRUCTOR can only author self-serve content scoped to
             # their own org — both fields are forced, ignoring the request body.
-            serializer.save(created_by=user, content_owner=Course.ContentOwner.ORGANIZATION, organization=user.organization)
+            course = serializer.save(created_by=user, content_owner=Course.ContentOwner.ORGANIZATION, organization=user.organization)
+        log_action(user, AuditLog.Action.COURSE_CREATED, course)
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -158,6 +172,10 @@ class LessonViewSet(viewsets.ModelViewSet):
 
 
 class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
+    # Deliberately just IsAuthenticated (no IsAdminRole): learners self-enroll and
+    # mark their own lesson progress; RoleScopedQuerysetMixin restricts which rows
+    # are visible/editable, so no explicit role gate is needed on top of it.
+    permission_classes = [IsAuthenticated]
     queryset = Enrollment.objects.select_related('user', 'course')
     serializer_class = EnrollmentSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -175,7 +193,12 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         course = serializer.validated_data['course']
         if not visible_courses_for_user(self.request.user).filter(pk=course.pk).exists():
             raise ValidationError({'course': 'This course is not available to you.'})
-        serializer.save()
+        enrollment = serializer.save()
+        log_action(self.request.user, AuditLog.Action.ENROLLMENT_CREATED, enrollment)
+
+    def perform_update(self, serializer):
+        enrollment = serializer.save()
+        log_action(self.request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
 
     @action(detail=True, methods=['post'], url_path='complete-lesson')
     def complete_lesson(self, request, pk=None):
@@ -200,6 +223,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.IN_PROGRESS
 
         enrollment.save()
+        log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
 
 
@@ -256,9 +280,9 @@ class EnrollmentReportView(APIView):
         writer.writerow(['Learner Email', 'Learner Name', 'Course', 'Status', 'Score %', 'Completion Date'])
         for row in rows:
             writer.writerow([
-                row['learner_email'],
-                row['learner_name'],
-                row['course_title'],
+                _csv_safe(row['learner_email']),
+                _csv_safe(row['learner_name']),
+                _csv_safe(row['course_title']),
                 row['status'],
                 row['score_percent'] if row['score_percent'] is not None else '',
                 row['completion_date'] or '',

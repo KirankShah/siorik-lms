@@ -4,12 +4,14 @@ End-to-end API flow tests for the LMS backend.
 Run with:
     python manage.py test test_api_flows
 """
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import Organization, User
 from assessments.models import Choice, Question, Quiz, QuizAttempt
+from audit.models import AuditLog
 from certificates.services import generate_certificate
 from courses.models import Course, CourseAccess, Enrollment, Lesson, Module
 
@@ -688,3 +690,95 @@ class EnrollmentReportTests(BaseAPITestCase):
         content = response.content.decode()
         self.assertIn(self.learner.email, content)
         self.assertIn('90.0', content)
+
+    def test_report_csv_export_neutralizes_formula_injection(self):
+        evil_learner = User.objects.create_user(
+            email='formula@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org,
+            first_name='=HYPERLINK("http://evil.test")', last_name='X',
+        )
+        Enrollment.objects.create(user=evil_learner, course=self.published_org_course)
+
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/enrollments/?export=csv')
+        content = response.content.decode()
+        self.assertNotIn('\n=HYPERLINK', content)
+        self.assertIn("'=HYPERLINK", content)
+
+
+class RateLimitingTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
+
+    def test_login_is_rate_limited(self):
+        payload = {'email': self.learner.email, 'password': 'wrong-password'}
+        statuses = [self.client.post('/api/auth/login/', payload).status_code for _ in range(10)]
+        self.assertTrue(all(code == 401 for code in statuses))
+
+        throttled = self.client.post('/api/auth/login/', payload)
+        self.assertEqual(throttled.status_code, 429)
+
+    def test_quiz_submit_is_rate_limited(self):
+        self.auth_as(self.learner)
+        payload = {'answers': [
+            {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+            {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+        ]}
+        # max_attempts=2 on self.quiz would mask the throttle after 2 tries, so
+        # raise it for this test to isolate the rate limit specifically.
+        self.quiz.max_attempts = None
+        self.quiz.save()
+
+        statuses = [
+            self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json').status_code
+            for _ in range(20)
+        ]
+        self.assertTrue(all(code == 201 for code in statuses))
+
+        throttled = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+        self.assertEqual(throttled.status_code, 429)
+
+
+class AuditLogTests(BaseAPITestCase):
+    def test_login_is_audit_logged(self):
+        self.client.post('/api/auth/login/', {'email': self.learner.email, 'password': 'pass12345'})
+        log = AuditLog.objects.get(action=AuditLog.Action.LOGIN, object_id=str(self.learner.id))
+        self.assertEqual(log.user, self.learner)
+
+    def test_failed_login_is_not_audit_logged(self):
+        self.client.post('/api/auth/login/', {'email': self.learner.email, 'password': 'wrong'})
+        self.assertFalse(AuditLog.objects.filter(action=AuditLog.Action.LOGIN).exists())
+
+    def test_course_creation_is_audit_logged(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/courses/', {'title': 'Audited Course', 'slug': 'audited-course'})
+        log = AuditLog.objects.get(action=AuditLog.Action.COURSE_CREATED, object_id=str(response.data['id']))
+        self.assertEqual(log.user, self.platform_admin)
+
+    def test_enrollment_create_and_update_are_audit_logged(self):
+        self.auth_as(self.learner)
+        create_response = self.client.post('/api/enrollments/', {'course': self.published_org_course.id})
+        enrollment_id = create_response.data['id']
+        self.assertTrue(
+            AuditLog.objects.filter(action=AuditLog.Action.ENROLLMENT_CREATED, object_id=str(enrollment_id)).exists()
+        )
+
+        self.client.patch(f'/api/enrollments/{enrollment_id}/', {'status': 'IN_PROGRESS'})
+        self.assertTrue(
+            AuditLog.objects.filter(action=AuditLog.Action.ENROLLMENT_UPDATED, object_id=str(enrollment_id)).exists()
+        )
+
+    def test_certificate_generation_is_audit_logged(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        certificate = generate_certificate(self.learner, self.published_org_course)
+
+        log = AuditLog.objects.get(action=AuditLog.Action.CERTIFICATE_GENERATED, object_id=str(certificate.id))
+        self.assertEqual(log.user, self.learner)

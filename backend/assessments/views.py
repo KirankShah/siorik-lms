@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from core.permissions import IsAdminRole
 from courses.permissions import editable_courses_for_user, visible_courses_for_user
@@ -29,6 +30,7 @@ class QuizViewSet(
     viewsets.GenericViewSet,
 ):
     queryset = Quiz.objects.select_related('course').prefetch_related('questions__choices')
+    throttle_scope = None  # overridden per-action to 'quiz-submit' on the submit() action below
 
     def get_permissions(self):
         if self.action in WRITE_ACTIONS:
@@ -51,7 +53,7 @@ class QuizViewSet(
             raise ValidationError({'course': 'You do not have permission to modify this course.'})
         serializer.save()
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], throttle_classes=[ScopedRateThrottle], throttle_scope='quiz-submit')
     def submit(self, request, pk=None):
         quiz = self.get_object()
 

@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.permissions import RoleScopedQuerysetMixin
@@ -15,6 +16,7 @@ from .services import CertificateIssuanceError, generate_certificate
 
 
 class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
     queryset = Certificate.objects.select_related('user', 'course')
     serializer_class = CertificateSerializer
     org_lookup = 'user__organization'
@@ -47,6 +49,9 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
         )
 
 
+# Intentionally public and unauthenticated — this is the link anyone (e.g. an
+# employer) can visit to verify a certificate's authenticity by its opaque
+# UUID token. Returns only non-sensitive summary fields, never the PDF itself.
 def verify_certificate(request, token):
     certificate = Certificate.objects.select_related('user', 'course').filter(verification_token=token).first()
 

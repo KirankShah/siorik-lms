@@ -31,7 +31,8 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-+^gh7!0eaq!brkfea7-po
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = []
+# Comma-separated in production, e.g. ALLOWED_HOSTS=api.example.com,www.example.com
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
 
 
 # Application definition
@@ -51,6 +52,7 @@ INSTALLED_APPS = [
     'courses',
     'assessments',
     'certificates',
+    'audit',
 ]
 
 MIDDLEWARE = [
@@ -64,10 +66,18 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://localhost:5174',
-]
+# Explicit allowlist only — never enable CORS_ALLOW_ALL_ORIGINS in production.
+# Set the CORS_ALLOWED_ORIGINS env var (comma-separated) in production, e.g.
+# CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
+# Falls back to the local Vite dev ports when unset.
+CORS_ALLOW_ALL_ORIGINS = False
+_cors_env_origins = [o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
+CORS_ALLOWED_ORIGINS = _cors_env_origins or ['http://localhost:5173', 'http://localhost:5174']
+
+# Required by Django for cross-origin POSTs (e.g. the Django admin, browsable
+# API) once served over HTTPS with a real domain. Reuses the CORS allowlist
+# above since it's the same set of trusted frontend origins.
+CSRF_TRUSTED_ORIGINS = _cors_env_origins
 
 AUTH_USER_MODEL = 'accounts.User'
 
@@ -86,6 +96,15 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
+    # No blanket throttle — only endpoints that opt in via throttle_scope
+    # (login, quiz submission) are rate-limited. See SECURITY.md.
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '10/min',
+        'quiz-submit': '20/min',
+    },
 }
 
 SIMPLE_JWT = {
@@ -213,3 +232,25 @@ else:
             'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
         },
     }
+
+
+# Production security hardening (HTTPS-only cookies, HSTS, SSL redirect).
+# Skipped under DEBUG so local http://localhost dev isn't broken — see SECURITY.md.
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SAMESITE = 'Lax'
+
+    SECURE_SSL_REDIRECT = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30  # 30 days; raise once HTTPS rollout is confirmed stable
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # Trust the X-Forwarded-Proto header from the load balancer/reverse proxy
+    # when determining whether the original request was HTTPS.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

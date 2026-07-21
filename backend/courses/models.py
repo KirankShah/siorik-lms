@@ -1,11 +1,14 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxLengthValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 
 from accounts.models import Organization
+from accounts.validators import validate_image_size
 
 from .validators import LESSON_TYPE_ALLOWED_EXTENSIONS, validate_lesson_file_size
+
+MAX_DESCRIPTION_LENGTH = 10_000
 
 
 class Course(models.Model):
@@ -15,7 +18,7 @@ class Course(models.Model):
 
     title = models.CharField(max_length=255)
     slug = models.SlugField(unique=True)
-    description = models.TextField(blank=True)
+    description = models.TextField(blank=True, validators=[MaxLengthValidator(MAX_DESCRIPTION_LENGTH)])
     organization = models.ForeignKey(
         Organization,
         on_delete=models.SET_NULL,
@@ -28,7 +31,9 @@ class Course(models.Model):
         ),
     )
     content_owner = models.CharField(max_length=20, choices=ContentOwner.choices, default=ContentOwner.PLATFORM)
-    cover_image = models.ImageField(upload_to='course_covers/', blank=True, null=True)
+    cover_image = models.ImageField(
+        upload_to='course_covers/', blank=True, null=True, validators=[validate_image_size]
+    )
     is_published = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

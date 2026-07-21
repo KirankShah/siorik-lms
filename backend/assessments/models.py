@@ -1,12 +1,14 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxLengthValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Sum
 from django.utils import timezone
 
 from courses.models import Course
+
+MAX_QUESTION_TEXT_LENGTH = 5_000
 
 
 class Quiz(models.Model):
@@ -38,7 +40,7 @@ class Question(models.Model):
         TRUE_FALSE = 'TRUE_FALSE', 'True/False'
 
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
-    question_text = models.TextField()
+    question_text = models.TextField(validators=[MaxLengthValidator(MAX_QUESTION_TEXT_LENGTH)])
     question_type = models.CharField(
         max_length=20,
         choices=QuestionType.choices,
