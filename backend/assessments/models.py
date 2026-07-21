@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -74,7 +76,7 @@ class QuizAttempt(models.Model):
         max_digits=5,
         decimal_places=2,
         default=0,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        validators=[MinValueValidator(Decimal('0')), MaxValueValidator(Decimal('100'))],
     )
     passed = models.BooleanField(default=False)
     attempt_number = models.PositiveIntegerField(default=1)

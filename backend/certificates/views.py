@@ -1,7 +1,36 @@
-from django.http import JsonResponse
+from django.http import FileResponse, Http404, JsonResponse
 from django.utils import timezone
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from core.permissions import RoleScopedQuerysetMixin
 
 from .models import Certificate
+from .serializers import CertificateSerializer
+
+
+class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
+    queryset = Certificate.objects.select_related('user', 'course')
+    serializer_class = CertificateSerializer
+    org_lookup = 'user__organization'
+    owner_lookup = 'user'
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        certificate = self.get_object()
+        if not certificate.pdf_file:
+            return Response({'detail': 'No PDF is available for this certificate.'}, status=404)
+        try:
+            file_handle = certificate.pdf_file.open('rb')
+        except FileNotFoundError:
+            raise Http404('Certificate PDF file is missing.')
+        return FileResponse(
+            file_handle,
+            content_type='application/pdf',
+            as_attachment=True,
+            filename=f'{certificate.certificate_number}.pdf',
+        )
 
 
 def verify_certificate(request, token):

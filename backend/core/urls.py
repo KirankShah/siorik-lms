@@ -22,6 +22,11 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('certificates.urls')),
+    path('api-auth/', include('rest_framework.urls')),
+    path('api/auth/', include('accounts.urls')),
+    path('api/', include('courses.urls')),
+    path('api/', include('assessments.urls')),
+    path('api/', include('certificates.api_urls')),
 ]
 
 if settings.DEBUG and not settings.USE_S3:
