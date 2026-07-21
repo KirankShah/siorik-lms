@@ -53,8 +53,9 @@ class BaseAPITestCase(APITestCase):
             content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
         )
 
-        module = Module.objects.create(course=self.published_org_course, title='Intro', order=1)
-        Lesson.objects.create(module=module, title='Welcome', order=1, estimated_minutes=5)
+        self.module = Module.objects.create(course=self.published_org_course, title='Intro', order=1)
+        self.lesson1 = Lesson.objects.create(module=self.module, title='Welcome', order=1, estimated_minutes=5)
+        self.lesson2 = Lesson.objects.create(module=self.module, title='Next steps', order=2, estimated_minutes=5)
 
         self.quiz = Quiz.objects.create(course=self.published_org_course, title='Final Exam', pass_percentage=50, max_attempts=2)
         self.q1 = Question.objects.create(quiz=self.quiz, question_text='2+2=?', order=1, points=1)
@@ -177,6 +178,60 @@ class EnrollmentFlowTests(BaseAPITestCase):
         self.auth_as(self.platform_admin)
         response = self.client.get('/api/enrollments/')
         self.assertEqual(len(response.data), 2)
+
+    def test_list_enrollments_filtered_by_course_query_param(self):
+        Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        Enrollment.objects.create(user=self.learner, course=self.platform_course)
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/enrollments/?course={self.published_org_course.id}')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['course'], self.published_org_course.id)
+
+    def test_complete_lesson_updates_progress_and_completed_ids(self):
+        self.auth_as(self.learner)
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+
+        response = self.client.post(
+            f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['completed_lesson_ids'], [self.lesson1.id])
+        self.assertEqual(response.data['progress_percent'], 50)
+        self.assertEqual(response.data['status'], 'IN_PROGRESS')
+
+    def test_completing_all_lessons_marks_enrollment_completed(self):
+        self.auth_as(self.learner)
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+
+        self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson2.id})
+
+        self.assertEqual(response.data['progress_percent'], 100)
+        self.assertEqual(response.data['status'], 'COMPLETED')
+        self.assertIsNotNone(response.data['completed_at'])
+        self.assertCountEqual(response.data['completed_lesson_ids'], [self.lesson1.id, self.lesson2.id])
+
+    def test_complete_lesson_is_idempotent(self):
+        self.auth_as(self.learner)
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
+        self.assertEqual(response.data['completed_lesson_ids'], [self.lesson1.id])
+        self.assertEqual(response.data['progress_percent'], 50)
+
+    def test_cannot_complete_lesson_from_a_different_course(self):
+        self.auth_as(self.learner)
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        other_module = Module.objects.create(course=self.platform_course, title='Other', order=1)
+        other_lesson = Lesson.objects.create(module=other_module, title='Other lesson', order=1)
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': other_lesson.id})
+        self.assertEqual(response.status_code, 404)
+
+    def test_other_learner_cannot_complete_lesson_on_someone_elses_enrollment(self):
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        self.auth_as(self.other_org_learner)
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
+        self.assertEqual(response.status_code, 404)
 
 
 class QuizFlowTests(BaseAPITestCase):

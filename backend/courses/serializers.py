@@ -64,6 +64,8 @@ class CourseDetailSerializer(serializers.ModelSerializer):
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
+    completed_lesson_ids = serializers.SerializerMethodField()
+
     class Meta:
         model = Enrollment
         fields = [
@@ -74,8 +76,12 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'completed_at',
             'status',
             'progress_percent',
+            'completed_lesson_ids',
         ]
-        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at']
+        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids']
+
+    def get_completed_lesson_ids(self, enrollment):
+        return list(enrollment.lesson_progress.values_list('lesson_id', flat=True))
 
     def validate_course(self, course):
         request = self.context['request']
