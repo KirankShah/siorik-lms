@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'accounts',
     'courses',
     'assessments',
+    'certificates',
 ]
 
 MIDDLEWARE = [
@@ -66,6 +67,9 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
+
+# Base URL used to build the certificate verification link encoded in the QR code.
+CERTIFICATE_VERIFICATION_BASE_URL = os.environ.get('CERTIFICATE_VERIFICATION_BASE_URL', 'http://localhost:8000')
 
 ROOT_URLCONF = 'core.urls'
 
