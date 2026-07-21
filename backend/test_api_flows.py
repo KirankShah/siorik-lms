@@ -4,6 +4,7 @@ End-to-end API flow tests for the LMS backend.
 Run with:
     python manage.py test test_api_flows
 """
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -30,6 +31,10 @@ class BaseAPITestCase(APITestCase):
         self.org_admin = User.objects.create_user(
             email='orgadmin@example.com', password='pass12345',
             role=User.Role.ORG_ADMIN, organization=self.org,
+        )
+        self.instructor = User.objects.create_user(
+            email='instructor@example.com', password='pass12345',
+            role=User.Role.INSTRUCTOR, organization=self.org,
         )
         self.platform_admin = User.objects.create_user(
             email='platformadmin@example.com', password='pass12345',
@@ -127,6 +132,12 @@ class CourseVisibilityTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data['modules']), 1)
         self.assertEqual(response.data['modules'][0]['lessons'][0]['title'], 'Welcome')
+
+    def test_course_retrieve_lists_its_quizzes(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/courses/org-onboarding/')
+        self.assertEqual([q['id'] for q in response.data['quizzes']], [self.quiz.id])
+        self.assertEqual(response.data['quizzes'][0]['title'], 'Final Exam')
 
 
 class EnrollmentFlowTests(BaseAPITestCase):
@@ -344,3 +355,261 @@ class CertificateFlowTests(BaseAPITestCase):
         response = self.client.get('/verify/00000000-0000-0000-0000-000000000000/')
         self.assertEqual(response.status_code, 404)
         self.assertFalse(response.json()['valid'])
+
+
+class CertificateIssueEndpointTests(BaseAPITestCase):
+    def test_issue_endpoint_creates_certificate_once_eligible(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+
+        self.auth_as(self.learner)
+        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('certificate_number', response.data)
+        self.assertTrue(response.data['pdf_file'])
+
+    def test_issue_endpoint_rejects_when_quiz_not_passed(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED,
+        )
+        self.auth_as(self.learner)
+        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(response.status_code, 400)
+
+    def test_issue_endpoint_is_idempotent(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+
+        self.auth_as(self.learner)
+        first = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        second = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(first.data['id'], second.data['id'])
+
+
+class OrganizationListTests(BaseAPITestCase):
+    def test_platform_admin_can_list_organizations(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/organizations/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.org.slug, [o['slug'] for o in response.data])
+
+    def test_learner_forbidden_from_organization_list(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/organizations/')
+        self.assertEqual(response.status_code, 403)
+
+
+class CourseBuilderTests(BaseAPITestCase):
+    def test_learner_cannot_create_course(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/courses/', {'title': 'New', 'slug': 'new-course'})
+        self.assertEqual(response.status_code, 403)
+
+    def test_instructor_create_forces_own_organization(self):
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/courses/', {
+            'title': 'Instructor Course', 'slug': 'instructor-course',
+            'organization': self.other_org.id,
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['organization'], self.org.id)
+        self.assertEqual(Course.objects.get(slug='instructor-course').created_by, self.instructor)
+
+    def test_platform_admin_can_set_arbitrary_organization(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/courses/', {
+            'title': 'Platform Managed', 'slug': 'platform-managed',
+            'organization': self.other_org.id,
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['organization'], self.other_org.id)
+
+    def test_instructor_cannot_edit_other_org_course(self):
+        self.auth_as(self.instructor)
+        response = self.client.patch(f'/api/courses/{self.other_org_course.slug}/', {'title': 'Hacked'})
+        self.assertEqual(response.status_code, 404)
+
+    def test_org_admin_can_edit_draft_course_in_own_org(self):
+        self.auth_as(self.org_admin)
+        response = self.client.patch(f'/api/courses/{self.unpublished_org_course.slug}/', {'is_published': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['is_published'])
+
+    def test_org_admin_cannot_move_course_to_another_org(self):
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/courses/{self.published_org_course.slug}/', {'organization': self.other_org.id}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.published_org_course.refresh_from_db()
+        self.assertEqual(self.published_org_course.organization_id, self.org.id)
+
+
+class ModuleLessonBuilderTests(BaseAPITestCase):
+    def test_org_admin_can_create_module_and_lesson(self):
+        self.auth_as(self.org_admin)
+        module_response = self.client.post('/api/modules/', {
+            'course': self.published_org_course.id, 'title': 'New Module', 'order': 5,
+        })
+        self.assertEqual(module_response.status_code, 201)
+
+        lesson_response = self.client.post('/api/lessons/', {
+            'module': module_response.data['id'], 'title': 'New Lesson',
+            'lesson_type': 'TEXT', 'order': 1,
+        })
+        self.assertEqual(lesson_response.status_code, 201)
+
+    def test_instructor_cannot_create_module_for_other_org_course(self):
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/modules/', {
+            'course': self.other_org_course.id, 'title': 'Nope', 'order': 1,
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_lesson_file_extension_validated_through_api(self):
+        self.auth_as(self.org_admin)
+        bad_file = SimpleUploadedFile('lesson.exe', b'not a video', content_type='application/octet-stream')
+        response = self.client.post('/api/lessons/', {
+            'module': self.module.id, 'title': 'Bad Video', 'lesson_type': 'VIDEO',
+            'order': 9, 'content_file': bad_file,
+        }, format='multipart')
+        self.assertEqual(response.status_code, 400)
+
+    def test_learner_cannot_create_lesson(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/lessons/', {
+            'module': self.module.id, 'title': 'Nope', 'lesson_type': 'TEXT', 'order': 9,
+        })
+        self.assertEqual(response.status_code, 403)
+
+
+class QuizBuilderTests(BaseAPITestCase):
+    def test_org_admin_can_build_quiz_question_choice(self):
+        self.auth_as(self.org_admin)
+        quiz_response = self.client.post('/api/quizzes/', {
+            'course': self.published_org_course.id, 'title': 'New Quiz', 'pass_percentage': 60,
+        })
+        self.assertEqual(quiz_response.status_code, 201)
+
+        question_response = self.client.post('/api/questions/', {
+            'quiz': quiz_response.data['id'], 'question_text': 'Q1?',
+            'question_type': 'SINGLE_CHOICE', 'order': 1, 'points': 1,
+        })
+        self.assertEqual(question_response.status_code, 201)
+
+        choice_response = self.client.post('/api/choices/', {
+            'question': question_response.data['id'], 'choice_text': 'A', 'is_correct': True,
+        })
+        self.assertEqual(choice_response.status_code, 201)
+
+    def test_learner_cannot_create_quiz(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/quizzes/', {
+            'course': self.published_org_course.id, 'title': 'Nope',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_cannot_add_question_to_other_org_quiz(self):
+        other_quiz = Quiz.objects.create(course=self.other_org_course, title='Other Quiz')
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/questions/', {
+            'quiz': other_quiz.id, 'question_text': 'Q?', 'order': 1, 'points': 1,
+        })
+        self.assertEqual(response.status_code, 400)
+
+
+class BulkEnrollTests(BaseAPITestCase):
+    def test_bulk_enroll_csv_enrolls_existing_users(self):
+        csv_content = f'email\n{self.learner.email}\nnobody@example.com\n'.encode()
+        upload = SimpleUploadedFile('emails.csv', csv_content, content_type='text/csv')
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['enrolled'], [self.learner.email])
+        self.assertEqual(response.data['not_found'], ['nobody@example.com'])
+        self.assertTrue(Enrollment.objects.filter(user=self.learner, course=self.published_org_course).exists())
+
+    def test_bulk_enroll_already_enrolled_is_reported_separately(self):
+        Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        csv_content = f'{self.learner.email}\n'.encode()
+        upload = SimpleUploadedFile('emails.csv', csv_content, content_type='text/csv')
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.data['already_enrolled'], [self.learner.email])
+        self.assertEqual(response.data['enrolled'], [])
+
+    def test_bulk_enroll_forbidden_for_learner(self):
+        upload = SimpleUploadedFile('emails.csv', b'a@example.com\n', content_type='text/csv')
+        self.auth_as(self.learner)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_bulk_enroll_rejects_course_outside_org(self):
+        upload = SimpleUploadedFile('emails.csv', f'{self.learner.email}\n'.encode(), content_type='text/csv')
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            f'/api/courses/{self.other_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 404)
+
+
+class EnrollmentReportTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(
+            user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=90,
+        )
+        Enrollment.objects.create(user=self.other_org_learner, course=self.other_org_course)
+
+    def test_learner_forbidden_from_report(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/reports/enrollments/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_org_admin_sees_only_their_org_rows(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/reports/enrollments/')
+        self.assertEqual(len(response.data), 1)
+        row = response.data[0]
+        self.assertEqual(row['learner_email'], self.learner.email)
+        self.assertEqual(row['status'], 'COMPLETED')
+        self.assertEqual(row['score_percent'], 90.0)
+
+    def test_platform_admin_sees_all_rows(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/enrollments/')
+        self.assertEqual(len(response.data), 2)
+
+    def test_report_filterable_by_status(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/enrollments/?status=NOT_STARTED')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['learner_email'], self.other_org_learner.email)
+
+    def test_report_csv_export(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/enrollments/?export=csv')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode()
+        self.assertIn(self.learner.email, content)
+        self.assertIn('90.0', content)

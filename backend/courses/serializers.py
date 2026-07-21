@@ -1,5 +1,8 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
+
+from assessments.serializers import QuizSummarySerializer
 
 from .models import Course, Enrollment, Lesson, Module
 
@@ -44,6 +47,7 @@ class CourseListSerializer(serializers.ModelSerializer):
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     modules = ModuleSerializer(many=True, read_only=True)
+    quizzes = QuizSummarySerializer(many=True, read_only=True)
 
     class Meta:
         model = Course
@@ -60,7 +64,56 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'modules',
+            'quizzes',
         ]
+
+
+class CourseWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Course
+        fields = [
+            'id',
+            'title',
+            'slug',
+            'description',
+            'organization',
+            'content_owner',
+            'cover_image',
+            'is_published',
+        ]
+
+
+class ModuleWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Module
+        fields = ['id', 'course', 'title', 'order']
+
+
+class LessonWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = [
+            'id',
+            'module',
+            'title',
+            'lesson_type',
+            'content_file',
+            'content_url',
+            'order',
+            'estimated_minutes',
+        ]
+
+    def validate(self, attrs):
+        # Lesson.clean() enforces file-extension-vs-lesson_type, but ModelSerializer
+        # doesn't call it automatically — run it explicitly against a merged instance.
+        instance = self.instance or Lesson()
+        for field, value in attrs.items():
+            setattr(instance, field, value)
+        try:
+            instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict if hasattr(exc, 'message_dict') else exc.messages)
+        return attrs
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):

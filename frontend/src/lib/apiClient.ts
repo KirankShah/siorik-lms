@@ -55,12 +55,15 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   skipAuth?: boolean
 }
 
-export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function requestWithAuth(path: string, options: RequestOptions = {}): Promise<Response> {
   const { skipAuth, body, headers, ...rest } = options
 
   const doFetch = async (): Promise<Response> => {
     const requestHeaders = new Headers(headers)
-    if (body !== undefined && !requestHeaders.has('Content-Type')) {
+    const isFormData = body instanceof FormData
+    // Leave Content-Type unset for FormData — the browser fills in the
+    // multipart boundary itself; setting it manually breaks the upload.
+    if (body !== undefined && !isFormData && !requestHeaders.has('Content-Type')) {
       requestHeaders.set('Content-Type', 'application/json')
     }
     if (!skipAuth) {
@@ -70,7 +73,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     return fetch(`${API_BASE_URL}${path}`, {
       ...rest,
       headers: requestHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     })
   }
 
@@ -86,18 +89,32 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     }
   }
 
-  if (!response.ok) {
-    let errorBody: unknown = null
-    try {
-      errorBody = await response.json()
-    } catch {
-      // response had no JSON body
-    }
-    throw new ApiError(response.status, errorBody)
-  }
+  return response
+}
 
+async function throwIfNotOk(response: Response): Promise<void> {
+  if (response.ok) return
+  let errorBody: unknown = null
+  try {
+    errorBody = await response.json()
+  } catch {
+    // response had no JSON body
+  }
+  throw new ApiError(response.status, errorBody)
+}
+
+export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await requestWithAuth(path, options)
+  await throwIfNotOk(response)
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+// For binary responses (e.g. certificate PDF downloads) that shouldn't be parsed as JSON.
+export async function apiFetchBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const response = await requestWithAuth(path, options)
+  await throwIfNotOk(response)
+  return response.blob()
 }
 
 export function login(email: string, password: string): Promise<AuthTokens> {

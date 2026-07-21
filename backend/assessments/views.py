@@ -1,21 +1,55 @@
 from django.db import transaction
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from courses.permissions import visible_courses_for_user
+from core.permissions import IsAdminRole
+from courses.permissions import editable_courses_for_user, visible_courses_for_user
 
-from .models import Quiz, QuizAnswer, QuizAttempt
-from .serializers import QuizAttemptSerializer, QuizSerializer, QuizSubmitSerializer
+from .models import Choice, Question, Quiz, QuizAnswer, QuizAttempt
+from .serializers import (
+    ChoiceWriteSerializer,
+    QuestionWriteSerializer,
+    QuizAttemptSerializer,
+    QuizSerializer,
+    QuizSubmitSerializer,
+    QuizWriteSerializer,
+)
+
+WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
 
-class QuizViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    serializer_class = QuizSerializer
+class QuizViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     queryset = Quiz.objects.select_related('course').prefetch_related('questions__choices')
 
+    def get_permissions(self):
+        if self.action in WRITE_ACTIONS:
+            return [IsAuthenticated(), IsAdminRole()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
-        visible_courses = visible_courses_for_user(self.request.user)
-        return super().get_queryset().filter(course__in=visible_courses)
+        if self.action in ('retrieve', 'submit'):
+            return super().get_queryset().filter(course__in=visible_courses_for_user(self.request.user))
+        return super().get_queryset().filter(course__in=editable_courses_for_user(self.request.user))
+
+    def get_serializer_class(self):
+        if self.action in WRITE_ACTIONS:
+            return QuizWriteSerializer
+        return QuizSerializer
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data['course']
+        if not editable_courses_for_user(self.request.user).filter(pk=course.pk).exists():
+            raise ValidationError({'course': 'You do not have permission to modify this course.'})
+        serializer.save()
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
@@ -50,3 +84,31 @@ class QuizViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
             attempt.calculate_score_percent()
 
         return Response(QuizAttemptSerializer(attempt).data, status=201)
+
+
+class QuestionViewSet(viewsets.ModelViewSet):
+    serializer_class = QuestionWriteSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_queryset(self):
+        return Question.objects.filter(quiz__course__in=editable_courses_for_user(self.request.user))
+
+    def perform_create(self, serializer):
+        quiz = serializer.validated_data['quiz']
+        if not editable_courses_for_user(self.request.user).filter(pk=quiz.course_id).exists():
+            raise ValidationError({'quiz': 'You do not have permission to modify this quiz.'})
+        serializer.save()
+
+
+class ChoiceViewSet(viewsets.ModelViewSet):
+    serializer_class = ChoiceWriteSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_queryset(self):
+        return Choice.objects.filter(question__quiz__course__in=editable_courses_for_user(self.request.user))
+
+    def perform_create(self, serializer):
+        question = serializer.validated_data['question']
+        if not editable_courses_for_user(self.request.user).filter(pk=question.quiz.course_id).exists():
+            raise ValidationError({'question': 'You do not have permission to modify this question.'})
+        serializer.save()

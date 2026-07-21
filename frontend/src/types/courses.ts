@@ -1,3 +1,5 @@
+import type { QuizSummary } from './quiz'
+
 export type LessonType = 'VIDEO' | 'SLIDES' | 'DOCUMENT' | 'TEXT'
 
 export interface Lesson {
@@ -35,6 +37,7 @@ export interface CourseDetail extends CourseListItem {
   created_by: number | null
   updated_at: string
   modules: Module[]
+  quizzes: QuizSummary[]
 }
 
 export type EnrollmentStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'

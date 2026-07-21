@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { CertificateButton } from '../components/CertificateButton'
 import { ProgressBar } from '../components/ProgressBar'
+import { QuizPlayer } from '../components/QuizPlayer'
 import { completeLesson, enrollInCourse, fetchCourseDetail, fetchEnrollments } from '../lib/coursesApi'
 import type { CourseDetail, Enrollment, Lesson } from '../types/courses'
 
@@ -72,6 +74,7 @@ export function CourseDetailPage() {
   const [course, setCourse] = useState<CourseDetail | null>(null)
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null)
   const [activeLessonId, setActiveLessonId] = useState<number | null>(null)
+  const [viewingQuiz, setViewingQuiz] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isEnrolling, setIsEnrolling] = useState(false)
   const [isMarkingComplete, setIsMarkingComplete] = useState(false)
@@ -110,6 +113,8 @@ export function CourseDetailPage() {
     () => new Set(enrollment?.completed_lesson_ids ?? []),
     [enrollment],
   )
+  const allLessonsComplete = lessons.length > 0 && lessons.every((lesson) => completedLessonIds.has(lesson.id))
+  const quiz = course?.quizzes[0] ?? null
 
   async function handleEnroll() {
     if (!course) return
@@ -165,9 +170,12 @@ export function CourseDetailPage() {
                       <li key={lesson.id}>
                         <button
                           type="button"
-                          onClick={() => setActiveLessonId(lesson.id)}
+                          onClick={() => {
+                            setActiveLessonId(lesson.id)
+                            setViewingQuiz(false)
+                          }}
                           className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition ${
-                            isActive ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
+                            isActive && !viewingQuiz ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
                           }`}
                         >
                           <span
@@ -185,6 +193,28 @@ export function CourseDetailPage() {
                 </ul>
               </div>
             ))}
+
+            {quiz && (
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Quiz</p>
+                <button
+                  type="button"
+                  disabled={!allLessonsComplete}
+                  onClick={() => setViewingQuiz(true)}
+                  title={!allLessonsComplete ? 'Complete all lessons to unlock the quiz' : undefined}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition disabled:cursor-not-allowed disabled:text-slate-300 ${
+                    viewingQuiz ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <span
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                      allLessonsComplete ? 'border border-slate-300' : 'border border-slate-200'
+                    }`}
+                  />
+                  <span className="line-clamp-1">{quiz.title}</span>
+                </button>
+              </div>
+            )}
           </nav>
         </div>
       </aside>
@@ -204,7 +234,9 @@ export function CourseDetailPage() {
           </div>
         )}
 
-        {activeLesson ? (
+        {viewingQuiz && quiz ? (
+          <QuizPlayer quizSummary={quiz} courseId={course.id} />
+        ) : activeLesson ? (
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -226,6 +258,17 @@ export function CourseDetailPage() {
             </div>
 
             <LessonContent lesson={activeLesson} />
+
+            {allLessonsComplete && !quiz && (
+              <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                <p className="text-sm font-medium text-emerald-800">
+                  You've completed every lesson in this course.
+                </p>
+                <div className="mt-3">
+                  <CertificateButton courseId={course.id} />
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-slate-500">This course has no lessons yet.</p>

@@ -1,13 +1,17 @@
 from django.http import FileResponse, Http404, JsonResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from core.permissions import RoleScopedQuerysetMixin
+from courses.models import Course
 
 from .models import Certificate
 from .serializers import CertificateSerializer
+from .services import CertificateIssuanceError, generate_certificate
 
 
 class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
@@ -15,6 +19,16 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
     serializer_class = CertificateSerializer
     org_lookup = 'user__organization'
     owner_lookup = 'user'
+
+    @action(detail=False, methods=['post'])
+    def issue(self, request):
+        """Issue (or return the existing valid) certificate for the caller on a given course."""
+        course = get_object_or_404(Course, pk=request.data.get('course'))
+        try:
+            certificate = generate_certificate(request.user, course)
+        except CertificateIssuanceError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(CertificateSerializer(certificate, context={'request': request}).data)
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):

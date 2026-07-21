@@ -1,3 +1,15 @@
+from rest_framework.permissions import BasePermission
+
+ADMIN_ROLES = ('INSTRUCTOR', 'ORG_ADMIN', 'PLATFORM_ADMIN')
+
+
+class IsAdminRole(BasePermission):
+    """Allows INSTRUCTOR, ORG_ADMIN, and PLATFORM_ADMIN — blocks LEARNER."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role in ADMIN_ROLES)
+
+
 class RoleScopedQuerysetMixin:
     """
     Restricts a ViewSet's queryset by the requesting user's role:

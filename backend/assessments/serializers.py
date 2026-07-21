@@ -30,6 +30,14 @@ class QuestionSerializer(serializers.ModelSerializer):
         fields = ['id', 'question_text', 'question_type', 'order', 'points', 'choices']
 
 
+class QuizSummarySerializer(serializers.ModelSerializer):
+    """Lightweight quiz representation for nesting under a course, without questions."""
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'title', 'pass_percentage', 'time_limit_minutes', 'max_attempts']
+
+
 class QuizSerializer(serializers.ModelSerializer):
     questions = QuestionSerializer(many=True, read_only=True)
 
@@ -51,6 +59,32 @@ class QuizSerializer(serializers.ModelSerializer):
         if instance.randomize_questions:
             random.shuffle(data['questions'])
         return data
+
+
+class QuizWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Quiz
+        fields = [
+            'id',
+            'course',
+            'title',
+            'pass_percentage',
+            'time_limit_minutes',
+            'max_attempts',
+            'randomize_questions',
+        ]
+
+
+class QuestionWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['id', 'quiz', 'question_text', 'question_type', 'order', 'points']
+
+
+class ChoiceWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
+        fields = ['id', 'question', 'choice_text', 'is_correct']
 
 
 class QuizAnswerInputSerializer(serializers.Serializer):

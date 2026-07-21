@@ -6,8 +6,11 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
   }`
 
+const ADMIN_ROLES = ['INSTRUCTOR', 'ORG_ADMIN', 'PLATFORM_ADMIN']
+
 export function AppLayout() {
   const { user, logout } = useAuth()
+  const isAdmin = !!user && ADMIN_ROLES.includes(user.role)
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -23,6 +26,11 @@ export function AppLayout() {
             <NavLink to="/certificates" className={navLinkClass}>
               Certificates
             </NavLink>
+            {isAdmin && (
+              <NavLink to="/admin/courses" className={navLinkClass}>
+                Admin
+              </NavLink>
+            )}
           </nav>
           <div className="flex items-center gap-3">
             <span className="text-sm text-slate-500">{user?.email}</span>
