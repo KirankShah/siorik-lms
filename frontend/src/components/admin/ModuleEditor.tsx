@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { deleteLesson, deleteModule, updateModule } from '../../lib/coursesApi'
 import type { Lesson, Module } from '../../types/courses'
 import { LessonForm } from './LessonForm'
+import { PageList } from './PageList'
 
 interface ModuleEditorProps {
   module: Module
@@ -102,22 +103,25 @@ export function ModuleEditor({ module, onChanged }: ModuleEditorProps) {
                 onCancel={() => setEditingLessonId(null)}
               />
             ) : (
-              <div className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm">
-                <span>
-                  {lesson.order}. {lesson.title} <span className="text-xs text-slate-400">({lesson.lesson_type})</span>
-                </span>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setEditingLessonId(lesson.id)}
-                    className="text-slate-600 hover:underline"
-                  >
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => handleDeleteLesson(lesson)} className="text-red-600 hover:underline">
-                    Delete
-                  </button>
+              <div className="rounded-md border border-slate-100 px-3 py-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span>
+                    {lesson.order}. {lesson.title} <span className="text-xs text-slate-400">({lesson.lesson_type})</span>
+                  </span>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditingLessonId(lesson.id)}
+                      className="text-slate-600 hover:underline"
+                    >
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => handleDeleteLesson(lesson)} className="text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
                 </div>
+                <PageList lessonId={lesson.id} pages={lesson.pages} onChanged={onChanged} />
               </div>
             )}
           </li>

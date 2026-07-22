@@ -1,0 +1,13 @@
+/*
+ * Reuses BlockNote's own approach for collapsible blocks (see its
+ * `bn-toggle-wrapper` / `data-show-children` mechanism for `toggleListItem`
+ * and toggleable headings): a block's nested children live in a sibling
+ * `.bn-block-group` DOM node that the block's own render() can't reach
+ * directly, so hiding it has to happen via CSS. We use our own class name
+ * (rather than `bn-toggle-wrapper`) and a plain :has() descendant match, so
+ * this doesn't depend on the exact DOM depth BlockNote nests custom React
+ * blocks at.
+ */
+.bn-block:has(> .react-renderer .lms-toggle-wrapper[data-show-children='false']) > .bn-block-group {
+  display: none;
+}

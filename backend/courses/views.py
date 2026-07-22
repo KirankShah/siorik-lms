@@ -1,6 +1,9 @@
 import csv
 import io
+import uuid
+from pathlib import PurePosixPath
 
+from django.core.files.storage import default_storage
 from django.db.models import Max
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -8,6 +11,7 @@ from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,7 +22,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 
-from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module
+from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module, Page
 from .permissions import editable_courses_for_user, visible_courses_for_user
 from .serializers import (
     CourseAccessSerializer,
@@ -28,7 +32,9 @@ from .serializers import (
     EnrollmentSerializer,
     LessonWriteSerializer,
     ModuleWriteSerializer,
+    PageSerializer,
 )
+from .validators import MAX_LESSON_FILE_SIZE_BYTES
 
 WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
@@ -169,6 +175,60 @@ class LessonViewSet(viewsets.ModelViewSet):
         if not editable_courses_for_user(self.request.user).filter(pk=module.course_id).exists():
             raise ValidationError({'module': 'You do not have permission to modify this course.'})
         serializer.save()
+
+
+class PageViewSet(viewsets.ModelViewSet):
+    serializer_class = PageSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_queryset(self):
+        return Page.objects.filter(lesson__module__course__in=editable_courses_for_user(self.request.user))
+
+    def perform_create(self, serializer):
+        lesson = serializer.validated_data['lesson']
+        if not editable_courses_for_user(self.request.user).filter(pk=lesson.module.course_id).exists():
+            raise ValidationError({'lesson': 'You do not have permission to modify this lesson.'})
+        serializer.save(edited_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(edited_by=self.request.user)
+
+
+class MediaUploadView(APIView):
+    """
+    Generic file upload for rich page content (BlockNote images, video, audio,
+    file attachments). Saves through the same storage backend configured in
+    STORAGES['default'] (core/settings.py — filesystem locally, S3 in
+    production via USE_S3) that every other FileField/ImageField in this app
+    already uses, rather than standing up a separate upload pipeline.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        upload = request.FILES.get('file')
+        if not upload:
+            return Response({'detail': 'A file is required (field name "file").'}, status=400)
+        if upload.size > MAX_LESSON_FILE_SIZE_BYTES:
+            return Response(
+                {'detail': f'File size must not exceed {MAX_LESSON_FILE_SIZE_BYTES // (1024 * 1024)}MB.'},
+                status=400,
+            )
+
+        extension = PurePosixPath(upload.name).suffix
+        stored_name = f'page_media/{uuid.uuid4().hex}{extension}'
+        saved_path = default_storage.save(stored_name, upload)
+
+        return Response(
+            {
+                'url': default_storage.url(saved_path),
+                'name': upload.name,
+                'size': upload.size,
+                'content_type': upload.content_type or '',
+            },
+            status=201,
+        )
 
 
 class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):

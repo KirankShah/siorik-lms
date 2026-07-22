@@ -4,10 +4,20 @@ from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
 
-from .models import Course, CourseAccess, Enrollment, Lesson, Module
+from .models import Course, CourseAccess, Enrollment, Lesson, Module, Page
+
+
+class PageSummarySerializer(serializers.ModelSerializer):
+    """Lightweight page representation for nesting under a lesson, without content_json."""
+
+    class Meta:
+        model = Page
+        fields = ['id', 'title', 'order', 'page_type', 'estimated_minutes']
 
 
 class LessonSerializer(serializers.ModelSerializer):
+    pages = PageSummarySerializer(many=True, read_only=True)
+
     class Meta:
         model = Lesson
         fields = [
@@ -18,6 +28,7 @@ class LessonSerializer(serializers.ModelSerializer):
             'content_url',
             'order',
             'estimated_minutes',
+            'pages',
         ]
 
 
@@ -122,6 +133,36 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict if hasattr(exc, 'message_dict') else exc.messages)
         return attrs
+
+
+class PageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Page
+        fields = [
+            'id',
+            'lesson',
+            'title',
+            'order',
+            'page_type',
+            'content_json',
+            'estimated_minutes',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        edited_by = validated_data.pop('edited_by', None)
+        instance = Page(**validated_data)
+        instance.save(edited_by=edited_by)
+        return instance
+
+    def update(self, instance, validated_data):
+        edited_by = validated_data.pop('edited_by', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save(edited_by=edited_by)
+        return instance
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):

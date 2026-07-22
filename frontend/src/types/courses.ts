@@ -3,6 +3,31 @@ import type { QuizSummary } from './quiz'
 
 export type LessonType = 'VIDEO' | 'SLIDES' | 'DOCUMENT' | 'TEXT'
 
+export type PageType = 'CONTENT' | 'QUIZ' | 'ASSIGNMENT'
+
+// Nested under a Lesson without content_json — see PageDetail for the full page.
+export interface PageSummary {
+  id: number
+  title: string
+  order: number
+  page_type: PageType
+  estimated_minutes: number
+}
+
+export interface PageDetail {
+  id: number
+  lesson: number
+  title: string
+  order: number
+  page_type: PageType
+  // BlockNote document — an array of blocks, kept as unknown[] here so this
+  // module doesn't need to depend on @blocknote/core's types.
+  content_json: unknown[]
+  estimated_minutes: number
+  created_at: string
+  updated_at: string
+}
+
 export interface Lesson {
   id: number
   title: string
@@ -11,6 +36,7 @@ export interface Lesson {
   content_url: string
   order: number
   estimated_minutes: number
+  pages: PageSummary[]
 }
 
 export interface Module {
