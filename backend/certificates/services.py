@@ -34,7 +34,7 @@ def generate_certificate(user, course):
     if enrollment is None or enrollment.status != Enrollment.Status.COMPLETED:
         raise CertificateIssuanceError('Enrollment must be completed before a certificate can be issued.')
 
-    for quiz in Quiz.objects.filter(course=course):
+    for quiz in Quiz.objects.filter(page__lesson__module__course=course):
         if not QuizAttempt.objects.filter(user=user, quiz=quiz, passed=True).exists():
             raise CertificateIssuanceError(f'Quiz "{quiz.title}" has not been passed yet.')
 

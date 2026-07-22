@@ -29,7 +29,7 @@ class QuizViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Quiz.objects.select_related('course').prefetch_related('questions__choices')
+    queryset = Quiz.objects.select_related('page__lesson__module__course').prefetch_related('questions__choices')
     throttle_scope = None  # overridden per-action to 'quiz-submit' on the submit() action below
 
     def get_permissions(self):
@@ -39,8 +39,12 @@ class QuizViewSet(
 
     def get_queryset(self):
         if self.action in ('retrieve', 'submit'):
-            return super().get_queryset().filter(course__in=visible_courses_for_user(self.request.user))
-        return super().get_queryset().filter(course__in=editable_courses_for_user(self.request.user))
+            return super().get_queryset().filter(
+                page__lesson__module__course__in=visible_courses_for_user(self.request.user)
+            )
+        return super().get_queryset().filter(
+            page__lesson__module__course__in=editable_courses_for_user(self.request.user)
+        )
 
     def get_serializer_class(self):
         if self.action in WRITE_ACTIONS:
@@ -48,9 +52,10 @@ class QuizViewSet(
         return QuizSerializer
 
     def perform_create(self, serializer):
-        course = serializer.validated_data['course']
+        page = serializer.validated_data['page']
+        course = page.lesson.module.course
         if not editable_courses_for_user(self.request.user).filter(pk=course.pk).exists():
-            raise ValidationError({'course': 'You do not have permission to modify this course.'})
+            raise ValidationError({'page': 'You do not have permission to modify this course.'})
         serializer.save()
 
     @action(detail=True, methods=['post'], throttle_classes=[ScopedRateThrottle], throttle_scope='quiz-submit')
@@ -93,11 +98,14 @@ class QuestionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get_queryset(self):
-        return Question.objects.filter(quiz__course__in=editable_courses_for_user(self.request.user))
+        return Question.objects.filter(
+            quiz__page__lesson__module__course__in=editable_courses_for_user(self.request.user)
+        )
 
     def perform_create(self, serializer):
         quiz = serializer.validated_data['quiz']
-        if not editable_courses_for_user(self.request.user).filter(pk=quiz.course_id).exists():
+        course_id = quiz.page.lesson.module.course_id
+        if not editable_courses_for_user(self.request.user).filter(pk=course_id).exists():
             raise ValidationError({'quiz': 'You do not have permission to modify this quiz.'})
         serializer.save()
 
@@ -107,10 +115,13 @@ class ChoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get_queryset(self):
-        return Choice.objects.filter(question__quiz__course__in=editable_courses_for_user(self.request.user))
+        return Choice.objects.filter(
+            question__quiz__page__lesson__module__course__in=editable_courses_for_user(self.request.user)
+        )
 
     def perform_create(self, serializer):
         question = serializer.validated_data['question']
-        if not editable_courses_for_user(self.request.user).filter(pk=question.quiz.course_id).exists():
+        course_id = question.quiz.page.lesson.module.course_id
+        if not editable_courses_for_user(self.request.user).filter(pk=course_id).exists():
             raise ValidationError({'question': 'You do not have permission to modify this question.'})
         serializer.save()

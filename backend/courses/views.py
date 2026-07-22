@@ -258,7 +258,7 @@ class EnrollmentReportView(APIView):
         rows = []
         for enrollment in queryset.order_by('-enrolled_at'):
             best_score = QuizAttempt.objects.filter(
-                user=enrollment.user, quiz__course=enrollment.course
+                user=enrollment.user, quiz__page__lesson__module__course=enrollment.course
             ).aggregate(best=Max('score_percent'))['best']
             rows.append({
                 'learner_email': enrollment.user.email,

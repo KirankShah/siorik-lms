@@ -13,7 +13,7 @@ from accounts.models import Organization, User
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from audit.models import AuditLog
 from certificates.services import generate_certificate
-from courses.models import Course, CourseAccess, Enrollment, Lesson, Module
+from courses.models import Course, CourseAccess, Enrollment, Lesson, Module, Page
 
 
 class BaseAPITestCase(APITestCase):
@@ -64,7 +64,10 @@ class BaseAPITestCase(APITestCase):
         self.lesson1 = Lesson.objects.create(module=self.module, title='Welcome', order=1, estimated_minutes=5)
         self.lesson2 = Lesson.objects.create(module=self.module, title='Next steps', order=2, estimated_minutes=5)
 
-        self.quiz = Quiz.objects.create(course=self.published_org_course, title='Final Exam', pass_percentage=50, max_attempts=2)
+        self.quiz_page = Page.objects.create(
+            lesson=self.lesson1, order=99, title='Final Exam', page_type=Page.PageType.QUIZ,
+        )
+        self.quiz = Quiz.objects.create(page=self.quiz_page, title='Final Exam', pass_percentage=50, max_attempts=2)
         self.q1 = Question.objects.create(quiz=self.quiz, question_text='2+2=?', order=1, points=1)
         self.q1_wrong = Choice.objects.create(question=self.q1, choice_text='3', is_correct=False)
         self.q1_right = Choice.objects.create(question=self.q1, choice_text='4', is_correct=True)
@@ -146,12 +149,6 @@ class CourseVisibilityTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data['modules']), 1)
         self.assertEqual(response.data['modules'][0]['lessons'][0]['title'], 'Welcome')
-
-    def test_course_retrieve_lists_its_quizzes(self):
-        self.auth_as(self.learner)
-        response = self.client.get('/api/courses/org-onboarding/')
-        self.assertEqual([q['id'] for q in response.data['quizzes']], [self.quiz.id])
-        self.assertEqual(response.data['quizzes'][0]['title'], 'Final Exam')
 
 
 class EnrollmentFlowTests(BaseAPITestCase):
@@ -570,8 +567,11 @@ class ModuleLessonBuilderTests(BaseAPITestCase):
 class QuizBuilderTests(BaseAPITestCase):
     def test_org_admin_can_build_quiz_question_choice(self):
         self.auth_as(self.org_admin)
+        new_quiz_page = Page.objects.create(
+            lesson=self.lesson2, order=99, title='New Quiz', page_type=Page.PageType.QUIZ,
+        )
         quiz_response = self.client.post('/api/quizzes/', {
-            'course': self.published_org_course.id, 'title': 'New Quiz', 'pass_percentage': 60,
+            'page': new_quiz_page.id, 'title': 'New Quiz', 'pass_percentage': 60,
         })
         self.assertEqual(quiz_response.status_code, 201)
 
@@ -588,13 +588,21 @@ class QuizBuilderTests(BaseAPITestCase):
 
     def test_learner_cannot_create_quiz(self):
         self.auth_as(self.learner)
+        new_quiz_page = Page.objects.create(
+            lesson=self.lesson2, order=99, title='Nope', page_type=Page.PageType.QUIZ,
+        )
         response = self.client.post('/api/quizzes/', {
-            'course': self.published_org_course.id, 'title': 'Nope',
+            'page': new_quiz_page.id, 'title': 'Nope',
         })
         self.assertEqual(response.status_code, 403)
 
     def test_cannot_add_question_to_other_org_quiz(self):
-        other_quiz = Quiz.objects.create(course=self.other_org_course, title='Other Quiz')
+        other_module = Module.objects.create(course=self.other_org_course, title='Other', order=1)
+        other_lesson = Lesson.objects.create(module=other_module, title='Other lesson', order=1)
+        other_quiz_page = Page.objects.create(
+            lesson=other_lesson, order=1, title='Other Quiz', page_type=Page.PageType.QUIZ,
+        )
+        other_quiz = Quiz.objects.create(page=other_quiz_page, title='Other Quiz')
         self.auth_as(self.instructor)
         response = self.client.post('/api/questions/', {
             'quiz': other_quiz.id, 'question_text': 'Q?', 'order': 1, 'points': 1,

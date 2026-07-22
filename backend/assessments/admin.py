@@ -18,20 +18,20 @@ class QuestionInline(admin.TabularInline):
 class QuizAdmin(admin.ModelAdmin):
     list_display = (
         'title',
-        'course',
+        'page',
         'pass_percentage',
         'time_limit_minutes',
         'max_attempts',
         'randomize_questions',
     )
-    list_filter = ('course', 'randomize_questions')
-    search_fields = ('title', 'course__title')
+    list_filter = ('randomize_questions',)
+    search_fields = ('title', 'page__title')
     inlines = [QuestionInline]
 
 
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
-    list_display = ('question_text', 'quiz', 'question_type', 'order', 'points')
+    list_display = ('question_text', 'quiz', 'question_type', 'order', 'points', 'marks')
     list_filter = ('question_type', 'quiz')
     search_fields = ('question_text', 'quiz__title')
     inlines = [ChoiceInline]

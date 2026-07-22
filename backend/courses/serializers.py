@@ -3,7 +3,6 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
-from assessments.serializers import QuizSummarySerializer
 
 from .models import Course, CourseAccess, Enrollment, Lesson, Module
 
@@ -56,7 +55,6 @@ class CourseAccessSerializer(serializers.ModelSerializer):
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     modules = ModuleSerializer(many=True, read_only=True)
-    quizzes = QuizSummarySerializer(many=True, read_only=True)
     access_grants = CourseAccessSerializer(many=True, read_only=True)
 
     class Meta:
@@ -74,7 +72,6 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'modules',
-            'quizzes',
             'access_grants',
         ]
 

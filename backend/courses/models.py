@@ -125,6 +125,60 @@ class Lesson(models.Model):
         return f'{self.module.title} - {self.title}'
 
 
+class Page(models.Model):
+    class PageType(models.TextChoices):
+        CONTENT = 'CONTENT', 'Content'
+        QUIZ = 'QUIZ', 'Quiz'
+        ASSIGNMENT = 'ASSIGNMENT', 'Assignment'
+
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='pages')
+    title = models.CharField(max_length=255)
+    order = models.PositiveIntegerField(default=0)
+    page_type = models.CharField(max_length=20, choices=PageType.choices, default=PageType.CONTENT)
+    content_json = models.JSONField(default=list, blank=True, help_text='BlockNote document for this page.')
+    estimated_minutes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order']
+        unique_together = ('lesson', 'order')
+
+    def save(self, *args, edited_by=None, **kwargs):
+        is_new = self._state.adding
+        content_changed = True
+        if not is_new:
+            previous_content = Page.objects.filter(pk=self.pk).values_list('content_json', flat=True).first()
+            content_changed = previous_content != self.content_json
+
+        super().save(*args, **kwargs)
+
+        if is_new or content_changed:
+            PageRevision.objects.create(page=self, content_json=self.content_json, edited_by=edited_by)
+
+    def __str__(self):
+        return f'{self.lesson.title} - {self.title}'
+
+
+class PageRevision(models.Model):
+    page = models.ForeignKey(Page, on_delete=models.CASCADE, related_name='revisions')
+    content_json = models.JSONField(default=list, blank=True)
+    edited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='page_revisions',
+    )
+    edited_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-edited_at']
+
+    def __str__(self):
+        return f'{self.page} @ {self.edited_at:%Y-%m-%d %H:%M}'
+
+
 class Enrollment(models.Model):
     class Status(models.TextChoices):
         NOT_STARTED = 'NOT_STARTED', 'Not started'
@@ -161,3 +215,20 @@ class LessonProgress(models.Model):
 
     def __str__(self):
         return f'{self.enrollment} - {self.lesson}'
+
+
+class PageProgress(models.Model):
+    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name='page_progress')
+    page = models.ForeignKey(Page, on_delete=models.CASCADE, related_name='progress_entries')
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    # Tracks actual time on page (not just a completion checkbox) so it can serve
+    # as minimum-time-on-page evidence for compliance-style content.
+    time_spent_seconds = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['page__order']
+        unique_together = ('enrollment', 'page')
+
+    def __str__(self):
+        return f'{self.enrollment} - {self.page}'

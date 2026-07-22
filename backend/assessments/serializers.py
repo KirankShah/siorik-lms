@@ -31,7 +31,7 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 
 class QuizSummarySerializer(serializers.ModelSerializer):
-    """Lightweight quiz representation for nesting under a course, without questions."""
+    """Lightweight quiz representation for nesting under a page, without questions."""
 
     class Meta:
         model = Quiz
@@ -45,7 +45,7 @@ class QuizSerializer(serializers.ModelSerializer):
         model = Quiz
         fields = [
             'id',
-            'course',
+            'page',
             'title',
             'pass_percentage',
             'time_limit_minutes',
@@ -66,7 +66,7 @@ class QuizWriteSerializer(serializers.ModelSerializer):
         model = Quiz
         fields = [
             'id',
-            'course',
+            'page',
             'title',
             'pass_percentage',
             'time_limit_minutes',

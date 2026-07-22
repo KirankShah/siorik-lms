@@ -6,13 +6,14 @@ from django.db import models
 from django.db.models import Sum
 from django.utils import timezone
 
-from courses.models import Course
+from accounts.validators import validate_image_size
+from courses.models import Page
 
 MAX_QUESTION_TEXT_LENGTH = 5_000
 
 
 class Quiz(models.Model):
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='quizzes')
+    page = models.ForeignKey(Page, on_delete=models.CASCADE, related_name='quizzes')
     title = models.CharField(max_length=255)
     pass_percentage = models.PositiveIntegerField(
         default=70,
@@ -27,17 +28,23 @@ class Quiz(models.Model):
     randomize_questions = models.BooleanField(default=False)
 
     class Meta:
-        ordering = ['course', 'title']
+        ordering = ['page', 'title']
 
     def __str__(self):
-        return f'{self.course.title} - {self.title}'
+        return f'{self.page.title} - {self.title}'
 
 
 class Question(models.Model):
     class QuestionType(models.TextChoices):
         SINGLE_CHOICE = 'SINGLE_CHOICE', 'Single choice'
         MULTIPLE_CHOICE = 'MULTIPLE_CHOICE', 'Multiple choice'
+        MULTIPLE_ANSWER = 'MULTIPLE_ANSWER', 'Multiple answer'
         TRUE_FALSE = 'TRUE_FALSE', 'True/False'
+        FILL_BLANK = 'FILL_BLANK', 'Fill in the blank'
+        MATCHING = 'MATCHING', 'Matching'
+        ORDERING = 'ORDERING', 'Ordering'
+        SHORT_ANSWER = 'SHORT_ANSWER', 'Short answer'
+        ESSAY = 'ESSAY', 'Essay'
 
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
     question_text = models.TextField(validators=[MaxLengthValidator(MAX_QUESTION_TEXT_LENGTH)])
@@ -48,6 +55,12 @@ class Question(models.Model):
     )
     order = models.PositiveIntegerField(default=0)
     points = models.PositiveIntegerField(default=1)
+    image = models.ImageField(upload_to='question_images/', blank=True, null=True, validators=[validate_image_size])
+    video_url = models.URLField(blank=True, null=True)
+    explanation = models.TextField(blank=True, help_text='Rich text shown to the learner after answering.')
+    marks = models.PositiveIntegerField(default=1)
+    feedback_correct = models.TextField(blank=True)
+    feedback_incorrect = models.TextField(blank=True)
 
     class Meta:
         ordering = ['order']
