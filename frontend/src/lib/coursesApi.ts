@@ -70,6 +70,10 @@ export function updateCourse(slug: string, input: Partial<CourseInput>): Promise
   return apiFetch<CourseDetail>(`/courses/${slug}/`, { method: 'PATCH', body })
 }
 
+export function deleteCourse(slug: string): Promise<void> {
+  return apiFetch<void>(`/courses/${slug}/`, { method: 'DELETE' })
+}
+
 // --- Admin: PLATFORM_ADMIN course access grants ---
 
 export function grantCourseAccess(courseSlug: string, organizationId: number): Promise<CourseAccessGrant> {

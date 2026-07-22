@@ -9,12 +9,12 @@ export function ProgressBar({ percent, label }: ProgressBarProps) {
   return (
     <div>
       {label && (
-        <div className="mb-1 flex justify-between text-xs text-slate-500">
+        <div className="mb-1 flex justify-between text-xs text-neutral-500">
           <span>{label}</span>
           <span>{clamped}%</span>
         </div>
       )}
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
         <div
           className="h-full rounded-full bg-emerald-500 transition-all"
           style={{ width: `${clamped}%` }}

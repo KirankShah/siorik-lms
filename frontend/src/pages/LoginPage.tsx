@@ -1,12 +1,19 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import siorikLogoIcon from '../img/siorik_logo_icon.png'
+import siorikLogoWatermark from '../img/siorik_logo_320.png'
 import { ApiError } from '../lib/apiClient'
 import { useAuth } from '../context/AuthContext'
+import { Badge } from '../components/ui/Badge'
+import { Button } from '../components/ui/Button'
+import { Input } from '../components/ui/Input'
 
 interface LocationState {
   from?: { pathname: string }
 }
+
+const SCOPE_PILLS = ['Compliance', 'Credit', 'Operations', 'Leadership']
 
 export function LoginPage() {
   const { user, login } = useAuth()
@@ -43,56 +50,80 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold text-slate-900">Sign in</h1>
-        <p className="mt-1 text-sm text-slate-500">Bank LMS</p>
+    <div className="flex min-h-screen bg-white">
+      {/* Left panel — hidden below the tablet breakpoint */}
+      <div className="relative hidden w-[45%] shrink-0 overflow-hidden bg-gradient-to-br from-brand-navy to-brand-navy-light md:flex md:flex-col md:px-12 md:py-14">
+        {/* Oversized, low-opacity watermark of the logo mark, bleeding off the
+            panel's bottom-right corner so it reads as background texture. */}
+        <img
+          src={siorikLogoWatermark}
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-40 -bottom-40 h-[36rem] w-[36rem] object-contain opacity-[0.07] select-none"
+        />
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-              Email
-            </label>
-            <input
+        <div className="relative z-10 flex flex-col">
+          <div className="flex items-center gap-3">
+            <img src={siorikLogoIcon} alt="Siorik Consultancy" className="h-11 w-11 shrink-0 object-contain" />
+            <span className="text-xs font-semibold tracking-[0.2em] text-white/90 uppercase">Siorik Consultancy</span>
+          </div>
+
+          <h1 className="mt-10 max-w-md text-3xl font-semibold text-white md:text-[2.25rem] md:leading-[1.15]">
+            Compounding Interest, for Your People.
+          </h1>
+
+          <p className="mt-4 max-w-sm text-base text-white/75">
+            Strong institutions are built on strong people — this platform helps you build both.
+          </p>
+
+          <div className="mt-6 flex flex-wrap gap-2">
+            {SCOPE_PILLS.map((scope) => (
+              <Badge key={scope} variant="dark">
+                {scope}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Right panel — the login form */}
+      <div className="flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm">
+          <h2 className="text-xl font-semibold text-neutral-900">Sign in</h2>
+          <p className="mt-1 text-sm text-neutral-500">Access your learning dashboard</p>
+
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <Input
               id="email"
+              label="Email"
               type="email"
               autoComplete="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
             />
-          </div>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-              Password
-            </label>
-            <input
+            <Input
               id="password"
+              label="Password"
               type="password"
               autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
             />
-          </div>
 
-          {error && (
-            <p role="alert" className="text-sm text-red-600">
-              {error}
-            </p>
-          )}
+            {error && (
+              <p role="alert" className="text-sm text-red-600">
+                {error}
+              </p>
+            )}
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSubmitting ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
+            <Button type="submit" disabled={isSubmitting} className="w-full">
+              {isSubmitting ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   )

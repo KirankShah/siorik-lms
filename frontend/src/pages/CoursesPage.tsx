@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ProgressBar } from '../components/ProgressBar'
+import { Button } from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
 import { enrollInCourse, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
 import type { CourseListItem, Enrollment } from '../types/courses'
 
@@ -48,28 +50,25 @@ export function CoursesPage() {
   }
 
   if (!courses) {
-    return <p className="text-sm text-slate-500">Loading courses…</p>
+    return <p className="text-sm text-neutral-500">Loading courses…</p>
   }
 
   return (
     <div>
-      <h1 className="text-lg font-semibold text-slate-900">Courses</h1>
+      <h1 className="text-lg font-semibold text-neutral-900">Courses</h1>
 
       {courses.length === 0 ? (
-        <p className="mt-4 text-sm text-slate-500">No courses are available yet.</p>
+        <p className="mt-4 text-sm text-neutral-500">No courses are available yet.</p>
       ) : (
         <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {courses.map((course) => {
             const enrollment = enrollmentByCourse.get(course.id)
             return (
-              <div
-                key={course.id}
-                className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md"
-              >
+              <Card key={course.id} className="flex flex-col overflow-hidden p-0 transition hover:shadow-md">
                 <button
                   type="button"
                   onClick={() => navigate(`/courses/${course.slug}`)}
-                  className="aspect-video w-full bg-slate-100 text-left"
+                  className="aspect-video w-full bg-neutral-100 text-left"
                 >
                   {course.cover_image ? (
                     <img
@@ -78,7 +77,7 @@ export function CoursesPage() {
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-200 to-slate-100 text-slate-400">
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-navy to-brand-navy-light text-white/40">
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
                         viewBox="0 0 24 24"
@@ -101,11 +100,11 @@ export function CoursesPage() {
                   <button
                     type="button"
                     onClick={() => navigate(`/courses/${course.slug}`)}
-                    className="text-left text-sm font-semibold text-slate-900 hover:underline"
+                    className="text-left text-sm font-semibold text-neutral-900 hover:underline"
                   >
                     {course.title}
                   </button>
-                  <p className="mt-1 line-clamp-2 flex-1 text-xs text-slate-500">
+                  <p className="mt-1 line-clamp-2 flex-1 text-xs text-neutral-500">
                     {course.description || 'No description provided.'}
                   </p>
 
@@ -113,27 +112,24 @@ export function CoursesPage() {
                     {enrollment ? (
                       <div className="space-y-2">
                         <ProgressBar percent={enrollment.progress_percent} label="Your progress" />
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/courses/${course.slug}`)}
-                          className="w-full rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
-                        >
+                        <Button onClick={() => navigate(`/courses/${course.slug}`)} size="sm" className="w-full">
                           Continue
-                        </button>
+                        </Button>
                       </div>
                     ) : (
-                      <button
-                        type="button"
+                      <Button
+                        variant="outline"
+                        size="sm"
                         disabled={enrollingCourseId === course.id}
                         onClick={() => handleEnroll(course)}
-                        className="w-full rounded-md border border-slate-900 px-3 py-2 text-xs font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        className="w-full"
                       >
                         {enrollingCourseId === course.id ? 'Enrolling…' : 'Enroll'}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
-              </div>
+              </Card>
             )
           })}
         </div>

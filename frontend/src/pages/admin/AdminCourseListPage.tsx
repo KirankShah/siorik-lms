@@ -1,17 +1,36 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchCourses } from '../../lib/coursesApi'
+import { deleteCourse, fetchCourses } from '../../lib/coursesApi'
 import type { CourseListItem } from '../../types/courses'
 
 export function AdminCourseListPage() {
   const [courses, setCourses] = useState<CourseListItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deletingSlug, setDeletingSlug] = useState<string | null>(null)
 
-  useEffect(() => {
+  function loadCourses() {
     fetchCourses()
       .then(setCourses)
       .catch(() => setError('Could not load courses.'))
-  }, [])
+  }
+
+  useEffect(loadCourses, [])
+
+  async function handleDelete(course: CourseListItem) {
+    if (!window.confirm(`Delete "${course.title}"? This removes all its modules, lessons, and pages. This cannot be undone.`)) {
+      return
+    }
+    setDeletingSlug(course.slug)
+    setError(null)
+    try {
+      await deleteCourse(course.slug)
+      loadCourses()
+    } catch {
+      setError('Could not delete this course.')
+    } finally {
+      setDeletingSlug(null)
+    }
+  }
 
   return (
     <div>
@@ -53,9 +72,19 @@ export function AdminCourseListPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Link to={`/admin/courses/${course.slug}/edit`} className="text-slate-900 underline">
-                      Edit
-                    </Link>
+                    <div className="flex items-center justify-end gap-3">
+                      <Link to={`/admin/courses/${course.slug}/edit`} className="text-slate-900 underline">
+                        Edit
+                      </Link>
+                      <button
+                        type="button"
+                        disabled={deletingSlug === course.slug}
+                        onClick={() => void handleDelete(course)}
+                        className="text-red-600 underline disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {deletingSlug === course.slug ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
