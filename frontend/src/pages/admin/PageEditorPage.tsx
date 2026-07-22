@@ -1,9 +1,5 @@
-import { Suspense, lazy } from 'react'
 import { Link, useParams } from 'react-router-dom'
-
-// BlockNote adds a sizable chunk to the bundle — load it only when an
-// instructor actually opens a page editor, not on every app load.
-const PageEditor = lazy(() => import('../../components/admin/PageEditor').then((m) => ({ default: m.PageEditor })))
+import { PageAuthoringSurface } from '../../components/admin/PageAuthoringSurface'
 
 export function PageEditorPage() {
   const { pageId } = useParams<{ pageId: string }>()
@@ -18,9 +14,7 @@ export function PageEditorPage() {
         ← Back to courses
       </Link>
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <Suspense fallback={<p className="text-sm text-slate-500">Loading editor…</p>}>
-          <PageEditor pageId={Number(pageId)} />
-        </Suspense>
+        <PageAuthoringSurface pageId={Number(pageId)} />
       </div>
     </div>
   )

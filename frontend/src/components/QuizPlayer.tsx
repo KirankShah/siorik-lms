@@ -15,9 +15,10 @@ function formatTime(totalSeconds: number): string {
 interface QuizPlayerProps {
   quizSummary: QuizSummary
   courseId: number
+  onSubmitted?: () => void
 }
 
-export function QuizPlayer({ quizSummary, courseId }: QuizPlayerProps) {
+export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerProps) {
   const [stage, setStage] = useState<Stage>('intro')
   const [quiz, setQuiz] = useState<QuizDetail | null>(null)
   const [answers, setAnswers] = useState<Record<number, Set<number>>>({})
@@ -39,6 +40,7 @@ export function QuizPlayer({ quizSummary, courseId }: QuizPlayerProps) {
         const attempt = await submitQuizAttempt(currentQuiz.id, payload)
         setResult(attempt)
         setStage('results')
+        onSubmitted?.()
       } catch (err) {
         if (err instanceof ApiError && err.status === 400) {
           const detail = (err.body as { detail?: string })?.detail
@@ -49,7 +51,7 @@ export function QuizPlayer({ quizSummary, courseId }: QuizPlayerProps) {
         setStage('in_progress')
       }
     },
-    [],
+    [onSubmitted],
   )
 
   // Countdown timer — auto-submits when it reaches zero.

@@ -1,5 +1,4 @@
 import type { Organization } from './auth'
-import type { QuizSummary } from './quiz'
 
 export type LessonType = 'VIDEO' | 'SLIDES' | 'DOCUMENT' | 'TEXT'
 
@@ -70,11 +69,18 @@ export interface CourseDetail extends CourseListItem {
   created_by: number | null
   updated_at: string
   modules: Module[]
-  quizzes: QuizSummary[]
   access_grants: CourseAccessGrant[]
 }
 
 export type EnrollmentStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'
+
+export interface PageProgress {
+  id: number
+  page: number
+  started_at: string | null
+  completed_at: string | null
+  time_spent_seconds: number
+}
 
 export interface Enrollment {
   id: number
@@ -85,4 +91,5 @@ export interface Enrollment {
   status: EnrollmentStatus
   progress_percent: number
   completed_lesson_ids: number[]
+  page_progress: PageProgress[]
 }

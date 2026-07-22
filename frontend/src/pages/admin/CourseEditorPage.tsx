@@ -3,7 +3,6 @@ import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { ModuleEditor } from '../../components/admin/ModuleEditor'
-import { QuizList } from '../../components/admin/QuizList'
 import { useAuth } from '../../context/AuthContext'
 import { fetchOrganizations } from '../../lib/accountsApi'
 import { createCourse, createModule, fetchCourseDetail, updateCourse } from '../../lib/coursesApi'
@@ -247,13 +246,6 @@ export function CourseEditorPage() {
               </button>
             )}
           </div>
-
-          <QuizList
-            courseId={course.id}
-            courseSlug={course.slug}
-            quizzes={course.quizzes}
-            onChanged={() => loadCourse(course.slug)}
-          />
 
           {isPlatformAdmin && course.content_owner === 'PLATFORM' && (
             <AccessGrantsPanel

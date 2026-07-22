@@ -3,6 +3,7 @@ import random
 from rest_framework import serializers
 
 from accounts.models import User
+from accounts.serializers import UserSerializer
 
 from .models import Choice, Question, Quiz, QuizAnswer, QuizAttempt
 
@@ -12,13 +13,20 @@ PRIVILEGED_ROLES = (User.Role.INSTRUCTOR, User.Role.ORG_ADMIN, User.Role.PLATFOR
 class ChoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Choice
-        fields = ['id', 'choice_text', 'is_correct']
+        fields = ['id', 'choice_text', 'is_correct', 'order', 'match_text']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get('request')
         if request is None or request.user.role not in PRIVILEGED_ROLES:
+            # is_correct and match_text both directly reveal the answer key
+            # (for MATCHING, match_text *is* the correct pairing).
             data.pop('is_correct', None)
+            data.pop('match_text', None)
+            # For ORDERING, `order` *is* the answer key (the correct sequence)
+            # rather than just a display hint like it is for other types.
+            if instance.question.question_type == Question.QuestionType.ORDERING:
+                data.pop('order', None)
         return data
 
 
@@ -27,7 +35,31 @@ class QuestionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'question_text', 'question_type', 'order', 'points', 'choices']
+        fields = [
+            'id',
+            'question_text',
+            'question_type',
+            'order',
+            'points',
+            'image',
+            'video_url',
+            'explanation',
+            'marks',
+            'feedback_correct',
+            'feedback_incorrect',
+            'choices',
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request is None or request.user.role not in PRIVILEGED_ROLES:
+            # These all give away the answer (or reveal it before the learner
+            # has submitted), same reasoning as Choice.is_correct above.
+            data.pop('explanation', None)
+            data.pop('feedback_correct', None)
+            data.pop('feedback_incorrect', None)
+        return data
 
 
 class QuizSummarySerializer(serializers.ModelSerializer):
@@ -78,13 +110,26 @@ class QuizWriteSerializer(serializers.ModelSerializer):
 class QuestionWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
-        fields = ['id', 'quiz', 'question_text', 'question_type', 'order', 'points']
+        fields = [
+            'id',
+            'quiz',
+            'question_text',
+            'question_type',
+            'order',
+            'points',
+            'image',
+            'video_url',
+            'explanation',
+            'marks',
+            'feedback_correct',
+            'feedback_incorrect',
+        ]
 
 
 class ChoiceWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Choice
-        fields = ['id', 'question', 'choice_text', 'is_correct']
+        fields = ['id', 'question', 'choice_text', 'is_correct', 'order', 'match_text']
 
 
 class QuizAnswerInputSerializer(serializers.Serializer):
@@ -140,3 +185,37 @@ class QuizAttemptSerializer(serializers.ModelSerializer):
             'attempt_number',
             'answers',
         ]
+
+
+class GradingQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['id', 'question_text', 'question_type', 'marks']
+
+
+class QuizAnswerGradingSerializer(serializers.ModelSerializer):
+    """Instructor grading view for manually-graded SHORT_ANSWER/ESSAY answers."""
+
+    question = GradingQuestionSerializer(read_only=True)
+    user = UserSerializer(source='attempt.user', read_only=True)
+    quiz_title = serializers.CharField(source='attempt.quiz.title', read_only=True)
+
+    class Meta:
+        model = QuizAnswer
+        fields = [
+            'id',
+            'question',
+            'user',
+            'quiz_title',
+            'text_response',
+            'marks_awarded',
+            'grader_feedback',
+            'graded_at',
+        ]
+        read_only_fields = ['id', 'question', 'user', 'quiz_title', 'text_response', 'graded_at']
+
+    def validate_marks_awarded(self, value):
+        question = self.instance.question
+        if value is not None and value > question.marks:
+            raise serializers.ValidationError(f'Cannot award more than the question\'s {question.marks} marks.')
+        return value

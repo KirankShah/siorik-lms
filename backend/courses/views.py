@@ -23,7 +23,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 
-from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module, Page
+from .models import Course, CourseAccess, Enrollment, Lesson, LessonProgress, Module, Page, PageProgress
 from .permissions import editable_courses_for_user, visible_courses_for_user
 from .serializers import (
     CourseAccessSerializer,
@@ -33,6 +33,7 @@ from .serializers import (
     EnrollmentSerializer,
     LessonWriteSerializer,
     ModuleWriteSerializer,
+    PageProgressSerializer,
     PageSerializer,
     PageSummarySerializer,
 )
@@ -307,6 +308,52 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         total_lessons = Lesson.objects.filter(module__course_id=enrollment.course_id).count()
         completed_lessons = enrollment.lesson_progress.count()
         enrollment.progress_percent = round((completed_lessons / total_lessons) * 100) if total_lessons else 0
+
+        if enrollment.progress_percent >= 100:
+            if enrollment.status != Enrollment.Status.COMPLETED:
+                enrollment.completed_at = timezone.now()
+            enrollment.status = Enrollment.Status.COMPLETED
+        elif enrollment.status == Enrollment.Status.NOT_STARTED:
+            enrollment.status = Enrollment.Status.IN_PROGRESS
+
+        enrollment.save()
+        log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
+        return Response(EnrollmentSerializer(enrollment).data)
+
+    @action(detail=True, methods=['post'], url_path='page-progress')
+    def page_progress(self, request, pk=None):
+        """
+        Records time spent on a Page and, once the learner has satisfied its
+        minimum dwell time (enforced client-side against Page.estimated_minutes)
+        and moved on, marks it complete — replaces the old per-Lesson
+        complete-lesson flow now that Pages are the unit of progress.
+        """
+        enrollment = self.get_object()
+        page = get_object_or_404(Page, pk=request.data.get('page'), lesson__module__course_id=enrollment.course_id)
+
+        progress, created = PageProgress.objects.get_or_create(
+            enrollment=enrollment,
+            page=page,
+            defaults={'started_at': timezone.now()},
+        )
+        if not created and progress.started_at is None:
+            progress.started_at = timezone.now()
+
+        try:
+            delta = int(request.data.get('time_spent_seconds', 0) or 0)
+        except (TypeError, ValueError):
+            delta = 0
+        if delta > 0:
+            progress.time_spent_seconds += delta
+
+        if request.data.get('completed') and progress.completed_at is None:
+            progress.completed_at = timezone.now()
+
+        progress.save()
+
+        total_pages = Page.objects.filter(lesson__module__course_id=enrollment.course_id).count()
+        completed_pages = enrollment.page_progress.filter(completed_at__isnull=False).count()
+        enrollment.progress_percent = round((completed_pages / total_pages) * 100) if total_pages else 0
 
         if enrollment.progress_percent >= 100:
             if enrollment.status != Enrollment.Status.COMPLETED:

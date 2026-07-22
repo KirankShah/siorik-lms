@@ -9,8 +9,8 @@ import { AdminSectionLayout } from './pages/admin/AdminSectionLayout'
 import { BulkEnrollPage } from './pages/admin/BulkEnrollPage'
 import { CourseContentBuilderPage } from './pages/admin/CourseContentBuilderPage'
 import { CourseEditorPage } from './pages/admin/CourseEditorPage'
+import { GradingPage } from './pages/admin/GradingPage'
 import { PageEditorPage } from './pages/admin/PageEditorPage'
-import { QuizEditorPage } from './pages/admin/QuizEditorPage'
 import { ReportsPage } from './pages/admin/ReportsPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
@@ -35,8 +35,8 @@ function App() {
               <Route path="courses/new" element={<CourseEditorPage />} />
               <Route path="courses/:slug/edit" element={<CourseEditorPage />} />
               <Route path="courses/:slug/content" element={<CourseContentBuilderPage />} />
-              <Route path="courses/:slug/quizzes/:quizId" element={<QuizEditorPage />} />
               <Route path="pages/:pageId" element={<PageEditorPage />} />
+              <Route path="grading" element={<GradingPage />} />
               <Route path="reports" element={<ReportsPage />} />
               <Route path="bulk-enroll" element={<BulkEnrollPage />} />
             </Route>

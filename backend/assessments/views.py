@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -13,6 +14,7 @@ from .models import Choice, Question, Quiz, QuizAnswer, QuizAttempt
 from .serializers import (
     ChoiceWriteSerializer,
     QuestionWriteSerializer,
+    QuizAnswerGradingSerializer,
     QuizAttemptSerializer,
     QuizSerializer,
     QuizSubmitSerializer,
@@ -23,6 +25,7 @@ WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
 
 class QuizViewSet(
+    mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
@@ -39,12 +42,17 @@ class QuizViewSet(
 
     def get_queryset(self):
         if self.action in ('retrieve', 'submit'):
-            return super().get_queryset().filter(
+            queryset = super().get_queryset().filter(
                 page__lesson__module__course__in=visible_courses_for_user(self.request.user)
             )
-        return super().get_queryset().filter(
-            page__lesson__module__course__in=editable_courses_for_user(self.request.user)
-        )
+        else:
+            queryset = super().get_queryset().filter(
+                page__lesson__module__course__in=editable_courses_for_user(self.request.user)
+            )
+        page_id = self.request.query_params.get('page')
+        if page_id:
+            queryset = queryset.filter(page_id=page_id)
+        return queryset
 
     def get_serializer_class(self):
         if self.action in WRITE_ACTIONS:
@@ -125,3 +133,28 @@ class ChoiceViewSet(viewsets.ModelViewSet):
         if not editable_courses_for_user(self.request.user).filter(pk=course_id).exists():
             raise ValidationError({'question': 'You do not have permission to modify this question.'})
         serializer.save()
+
+
+class QuizAnswerGradingViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Instructor grading queue for SHORT_ANSWER/ESSAY answers — list + grade only."""
+
+    serializer_class = QuizAnswerGradingSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    http_method_names = ['get', 'patch', 'head', 'options']
+
+    def get_queryset(self):
+        queryset = QuizAnswer.objects.filter(
+            question__question_type__in=[Question.QuestionType.SHORT_ANSWER, Question.QuestionType.ESSAY],
+            question__quiz__page__lesson__module__course__in=editable_courses_for_user(self.request.user),
+        ).select_related('question', 'attempt', 'attempt__user', 'attempt__quiz')
+        if self.request.query_params.get('ungraded') == 'true':
+            queryset = queryset.filter(marks_awarded__isnull=True)
+        return queryset
+
+    def perform_update(self, serializer):
+        serializer.save(graded_at=timezone.now())

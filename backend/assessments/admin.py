@@ -54,6 +54,6 @@ class QuizAttemptAdmin(admin.ModelAdmin):
 
 @admin.register(QuizAnswer)
 class QuizAnswerAdmin(admin.ModelAdmin):
-    list_display = ('attempt', 'question', 'is_correct')
+    list_display = ('attempt', 'question', 'is_correct', 'marks_awarded', 'graded_at')
     list_filter = ('is_correct', 'question__quiz')
     search_fields = ('attempt__user__email', 'question__question_text')

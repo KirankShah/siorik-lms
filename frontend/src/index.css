@@ -3,3 +3,24 @@
 body {
   margin: 0;
 }
+
+/* "Download as PDF" on a Content page — print (or "Save as PDF") only the
+   element marked .print-target, hiding the rest of the app chrome. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-target,
+  .print-target * {
+    visibility: visible;
+  }
+  .print-target {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

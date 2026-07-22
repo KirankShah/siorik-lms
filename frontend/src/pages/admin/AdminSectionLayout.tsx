@@ -12,6 +12,9 @@ export function AdminSectionLayout() {
         <NavLink to="/admin/courses" className={subNavLinkClass} end={false}>
           Courses
         </NavLink>
+        <NavLink to="/admin/grading" className={subNavLinkClass}>
+          Grading
+        </NavLink>
         <NavLink to="/admin/reports" className={subNavLinkClass}>
           Reports
         </NavLink>

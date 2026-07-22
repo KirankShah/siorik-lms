@@ -71,12 +71,27 @@ class Question(models.Model):
 
 
 class Choice(models.Model):
+    """
+    A single "answer option" row, reused across several question types with
+    different meaning per type rather than one table per type:
+
+    - SINGLE_CHOICE / MULTIPLE_CHOICE / MULTIPLE_ANSWER / TRUE_FALSE:
+      choice_text is the option label, is_correct flags correct option(s).
+    - FILL_BLANK: choice_text is one accepted answer; is_correct is always True.
+    - MATCHING: choice_text is the left-hand item, match_text is the correct
+      right-hand pair.
+    - ORDERING: choice_text is the item label, order is its correct position.
+    - SHORT_ANSWER / ESSAY: no Choice rows — manually graded free text.
+    """
+
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='choices')
     choice_text = models.CharField(max_length=500)
     is_correct = models.BooleanField(default=False)
+    order = models.PositiveIntegerField(default=0)
+    match_text = models.CharField(max_length=500, blank=True, default='')
 
     class Meta:
-        ordering = ['id']
+        ordering = ['order', 'id']
 
     def __str__(self):
         return self.choice_text
@@ -125,7 +140,14 @@ class QuizAnswer(models.Model):
     attempt = models.ForeignKey(QuizAttempt, on_delete=models.CASCADE, related_name='answers')
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='answers')
     selected_choices = models.ManyToManyField(Choice, blank=True, related_name='selected_in_answers')
+    # Free-text response for FILL_BLANK/SHORT_ANSWER/ESSAY questions.
+    text_response = models.TextField(blank=True, default='')
     is_correct = models.BooleanField(default=False)
+    # Manual grading, for SHORT_ANSWER/ESSAY — mirrors AssignmentSubmission's
+    # marks_awarded/grader_feedback/graded_at in the assignments app.
+    marks_awarded = models.PositiveIntegerField(null=True, blank=True)
+    grader_feedback = models.TextField(blank=True, default='')
+    graded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['question__order']

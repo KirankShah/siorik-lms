@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
 
-from .models import Course, CourseAccess, Enrollment, Lesson, Module, Page
+from .models import Course, CourseAccess, Enrollment, Lesson, Module, Page, PageProgress
 
 
 class PageSummarySerializer(serializers.ModelSerializer):
@@ -165,8 +165,15 @@ class PageSerializer(serializers.ModelSerializer):
         return instance
 
 
+class PageProgressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PageProgress
+        fields = ['id', 'page', 'started_at', 'completed_at', 'time_spent_seconds']
+
+
 class EnrollmentSerializer(serializers.ModelSerializer):
     completed_lesson_ids = serializers.SerializerMethodField()
+    page_progress = PageProgressSerializer(many=True, read_only=True)
 
     class Meta:
         model = Enrollment
@@ -179,8 +186,9 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'status',
             'progress_percent',
             'completed_lesson_ids',
+            'page_progress',
         ]
-        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids']
+        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids', 'page_progress']
 
     def get_completed_lesson_ids(self, enrollment):
         return list(enrollment.lesson_progress.values_list('lesson_id', flat=True))

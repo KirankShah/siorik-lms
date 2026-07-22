@@ -26,6 +26,18 @@ export function completeLesson(enrollmentId: number, lessonId: number): Promise<
   })
 }
 
+// time_spent_seconds is a delta added to the page's running total, not an
+// absolute value — see courses.views.EnrollmentViewSet.page_progress.
+export function savePageProgress(
+  enrollmentId: number,
+  input: { page: number; time_spent_seconds?: number; completed?: boolean },
+): Promise<Enrollment> {
+  return apiFetch<Enrollment>(`/enrollments/${enrollmentId}/page-progress/`, {
+    method: 'POST',
+    body: input,
+  })
+}
+
 function buildFormData<T extends object>(payload: T): FormData {
   const formData = new FormData()
   for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
