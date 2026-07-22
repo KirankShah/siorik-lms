@@ -136,6 +136,31 @@ function PageEditorSurface({ page }: { page: PageDetail }) {
         <div className="flex items-center gap-4">
           <SaveIndicator state={saveState} />
 
+          {/*
+            BlockNote already ships block-level undo/redo (ProseMirror's
+            history plugin, on by default — Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z
+            already work without any wiring). These buttons just surface that
+            existing editor.undo()/redo() rather than reimplementing history.
+          */}
+          <div className="flex items-center gap-1 rounded-md border border-slate-200 p-0.5">
+            <button
+              type="button"
+              onClick={() => editor.undo()}
+              title="Undo (Ctrl+Z)"
+              className="rounded px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100"
+            >
+              ↶ Undo
+            </button>
+            <button
+              type="button"
+              onClick={() => editor.redo()}
+              title="Redo (Ctrl+Shift+Z)"
+              className="rounded px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100"
+            >
+              ↷ Redo
+            </button>
+          </div>
+
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input type="checkbox" checked={showPreview} onChange={(e) => setShowPreview(e.target.checked)} />
             Live preview

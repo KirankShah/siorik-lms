@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
 import { AdminSectionLayout } from './pages/admin/AdminSectionLayout'
 import { BulkEnrollPage } from './pages/admin/BulkEnrollPage'
+import { CourseContentBuilderPage } from './pages/admin/CourseContentBuilderPage'
 import { CourseEditorPage } from './pages/admin/CourseEditorPage'
 import { PageEditorPage } from './pages/admin/PageEditorPage'
 import { QuizEditorPage } from './pages/admin/QuizEditorPage'
@@ -33,6 +34,7 @@ function App() {
               <Route path="courses" element={<AdminCourseListPage />} />
               <Route path="courses/new" element={<CourseEditorPage />} />
               <Route path="courses/:slug/edit" element={<CourseEditorPage />} />
+              <Route path="courses/:slug/content" element={<CourseContentBuilderPage />} />
               <Route path="courses/:slug/quizzes/:quizId" element={<QuizEditorPage />} />
               <Route path="pages/:pageId" element={<PageEditorPage />} />
               <Route path="reports" element={<ReportsPage />} />

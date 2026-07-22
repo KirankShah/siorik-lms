@@ -4,6 +4,7 @@ import uuid
 from pathlib import PurePosixPath
 
 from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models import Max
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -33,8 +34,15 @@ from .serializers import (
     LessonWriteSerializer,
     ModuleWriteSerializer,
     PageSerializer,
+    PageSummarySerializer,
 )
 from .validators import MAX_LESSON_FILE_SIZE_BYTES
+
+# Order values are bumped into this range as a first pass during a reorder,
+# so that reassigning final 1..N values never collides with an order another
+# page in the same lesson still holds — Page has a unique_together on
+# (lesson, order), enforced at the DB level.
+REORDER_TEMP_OFFSET = 10_000
 
 WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
@@ -192,6 +200,31 @@ class PageViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(edited_by=self.request.user)
+
+    @action(detail=False, methods=['post'])
+    def reorder(self, request):
+        """Persist a drag-and-drop reorder of all pages within one lesson."""
+        lesson_id = request.data.get('lesson')
+        page_ids = request.data.get('page_ids')
+        if not lesson_id or not isinstance(page_ids, list) or not page_ids:
+            return Response({'detail': 'lesson and page_ids are required.'}, status=400)
+
+        lesson = get_object_or_404(Lesson, pk=lesson_id)
+        if not editable_courses_for_user(request.user).filter(pk=lesson.module.course_id).exists():
+            raise ValidationError({'lesson': 'You do not have permission to modify this lesson.'})
+
+        existing_ids = set(Page.objects.filter(lesson=lesson).values_list('id', flat=True))
+        if set(page_ids) != existing_ids or len(page_ids) != len(existing_ids):
+            return Response({'detail': "page_ids must exactly match this lesson's pages."}, status=400)
+
+        with transaction.atomic():
+            for offset, page_id in enumerate(page_ids):
+                Page.objects.filter(pk=page_id).update(order=REORDER_TEMP_OFFSET + offset)
+            for index, page_id in enumerate(page_ids, start=1):
+                Page.objects.filter(pk=page_id).update(order=index)
+
+        pages = Page.objects.filter(lesson=lesson).order_by('order')
+        return Response(PageSummarySerializer(pages, many=True).data)
 
 
 class MediaUploadView(APIView):

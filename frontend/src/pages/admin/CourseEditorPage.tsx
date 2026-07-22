@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { ModuleEditor } from '../../components/admin/ModuleEditor'
 import { QuizList } from '../../components/admin/QuizList'
@@ -207,7 +207,15 @@ export function CourseEditorPage() {
       {course && (
         <>
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-900">Curriculum</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">Curriculum</h2>
+              <Link to={`/admin/courses/${course.slug}/content`} className="text-sm font-medium text-slate-900 hover:underline">
+                Open Content Builder →
+              </Link>
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Manage modules and lessons here. Add, edit, and reorder each lesson's pages in the Content Builder.
+            </p>
             <div className="mt-4 space-y-4">
               {course.modules.map((module) => (
                 <ModuleEditor key={module.id} module={module} onChanged={() => loadCourse(course.slug)} />
