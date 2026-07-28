@@ -1,0 +1,255 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
+from rest_framework import serializers
+
+from accounts.serializers import OrganizationSerializer
+
+from .models import Course, CourseAccess, Element, Enrollment, Lesson, Module, Slide, SlideProgress
+
+
+class SlideSummarySerializer(serializers.ModelSerializer):
+    """Lightweight slide representation for nesting under a lesson, without its elements."""
+
+    class Meta:
+        model = Slide
+        fields = ['id', 'title', 'order', 'slide_type', 'estimated_minutes']
+
+
+class LessonSerializer(serializers.ModelSerializer):
+    slides = SlideSummarySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Lesson
+        fields = [
+            'id',
+            'title',
+            'lesson_type',
+            'content_file',
+            'content_url',
+            'order',
+            'estimated_minutes',
+            'slides',
+        ]
+
+
+class ModuleSerializer(serializers.ModelSerializer):
+    lessons = LessonSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Module
+        fields = ['id', 'title', 'order', 'lessons']
+
+
+class CourseListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Course
+        fields = [
+            'id',
+            'title',
+            'slug',
+            'description',
+            'organization',
+            'content_owner',
+            'cover_image',
+            'is_published',
+            'completion_deadline_days',
+            'created_at',
+            'updated_at',
+        ]
+
+
+class CourseAccessSerializer(serializers.ModelSerializer):
+    organization = OrganizationSerializer(read_only=True)
+
+    class Meta:
+        model = CourseAccess
+        fields = ['id', 'organization', 'granted_at']
+
+
+class CourseDetailSerializer(serializers.ModelSerializer):
+    modules = ModuleSerializer(many=True, read_only=True)
+    access_grants = CourseAccessSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Course
+        fields = [
+            'id',
+            'title',
+            'slug',
+            'description',
+            'organization',
+            'content_owner',
+            'cover_image',
+            'is_published',
+            'certificate_pass_threshold',
+            'certificate_expiry_months',
+            'completion_deadline_days',
+            'created_by',
+            'created_at',
+            'updated_at',
+            'modules',
+            'access_grants',
+        ]
+
+
+class CourseWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Course
+        fields = [
+            'id',
+            'title',
+            'slug',
+            'description',
+            'organization',
+            'content_owner',
+            'cover_image',
+            'is_published',
+            'certificate_pass_threshold',
+            'certificate_expiry_months',
+            'completion_deadline_days',
+        ]
+
+
+class ModuleWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Module
+        fields = ['id', 'course', 'title', 'order']
+
+
+class ModuleOrderSerializer(serializers.ModelSerializer):
+    """Lightweight response for a module reorder — just the id/order pairs that changed."""
+
+    class Meta:
+        model = Module
+        fields = ['id', 'order']
+
+
+class LessonOrderSerializer(serializers.ModelSerializer):
+    """Lightweight response for a lesson reorder/move — includes module so the frontend can reconcile cross-module moves."""
+
+    class Meta:
+        model = Lesson
+        fields = ['id', 'order', 'module']
+
+
+class LessonWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = [
+            'id',
+            'module',
+            'title',
+            'lesson_type',
+            'content_file',
+            'content_url',
+            'order',
+            'estimated_minutes',
+        ]
+
+    def validate(self, attrs):
+        # Lesson.clean() enforces file-extension-vs-lesson_type, but ModelSerializer
+        # doesn't call it automatically — run it explicitly against a merged instance.
+        instance = self.instance or Lesson()
+        for field, value in attrs.items():
+            setattr(instance, field, value)
+        try:
+            instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict if hasattr(exc, 'message_dict') else exc.messages)
+        return attrs
+
+
+class SlideSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Slide
+        fields = [
+            'id',
+            'lesson',
+            'title',
+            'order',
+            'slide_type',
+            'estimated_minutes',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ElementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Element
+        fields = [
+            'id',
+            'slide',
+            'order',
+            'element_type',
+            'rich_text',
+            'file',
+            'video_url',
+            'video_file',
+            'embed_url',
+            'caption',
+            'align',
+        ]
+
+    # Element.save()/delete() write a SlideRevision snapshot on every change —
+    # thread the requesting user through so it's attributed correctly.
+    def create(self, validated_data):
+        edited_by = validated_data.pop('edited_by', None)
+        instance = Element(**validated_data)
+        instance.save(edited_by=edited_by)
+        return instance
+
+    def update(self, instance, validated_data):
+        edited_by = validated_data.pop('edited_by', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save(edited_by=edited_by)
+        return instance
+
+
+class SlideProgressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SlideProgress
+        fields = ['id', 'slide', 'started_at', 'completed_at', 'time_spent_seconds']
+
+
+class EnrollmentSerializer(serializers.ModelSerializer):
+    completed_lesson_ids = serializers.SerializerMethodField()
+    slide_progress = SlideProgressSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = [
+            'id',
+            'user',
+            'course',
+            'enrolled_at',
+            'completed_at',
+            'status',
+            'progress_percent',
+            'completed_lesson_ids',
+            'slide_progress',
+        ]
+        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress']
+
+    def get_completed_lesson_ids(self, enrollment):
+        return list(enrollment.lesson_progress.values_list('lesson_id', flat=True))
+
+    def validate_course(self, course):
+        request = self.context['request']
+        if Enrollment.objects.filter(user=request.user, course=course).exists():
+            raise serializers.ValidationError('You are already enrolled in this course.')
+        return course
+
+    def create(self, validated_data):
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop('course', None)
+        new_status = validated_data.get('status')
+        if new_status == Enrollment.Status.COMPLETED and instance.status != Enrollment.Status.COMPLETED:
+            validated_data['completed_at'] = timezone.now()
+            validated_data.setdefault('progress_percent', 100)
+        return super().update(instance, validated_data)

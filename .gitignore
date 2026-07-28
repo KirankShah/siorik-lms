@@ -1,0 +1,14 @@
+# Editor / tooling local settings
+.claude/settings.local.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local scratch files / secrets — not part of the app
+backend/_token.txt
+backend/_dev_server.log
+backend/important.txt
+frontend/_richtext.json.txt
+Presentation1.pptx
+Siorik_LMS_Outline_Corrected.pptx
