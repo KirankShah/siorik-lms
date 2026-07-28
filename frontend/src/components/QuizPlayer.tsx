@@ -3,27 +3,33 @@ import { ApiError } from '../lib/apiClient'
 import { downloadCertificate, issueCertificate } from '../lib/certificatesApi'
 import { fetchQuizDetail, submitQuizAttempt } from '../lib/quizApi'
 import { CategorizeAnswer } from './CategorizeAnswer'
+import { FillBlankTextAnswer } from './FillBlankTextAnswer'
 import { HotspotAnswer } from './HotspotAnswer'
 import { MatchingAnswer } from './MatchingAnswer'
 import { OrderingAnswer } from './OrderingAnswer'
+import { WordBankAnswer } from './WordBankAnswer'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
 import type { Question, QuizAttemptResult, QuizDetail, QuizSummary } from '../types/quiz'
 
 type Stage = 'intro' | 'loading' | 'in_progress' | 'submitting' | 'results'
 
-// Choice-based types (single/multi-select, true/false, fill-blank) just need
-// a set of chosen ids. ORDERING's answer is the sequence itself. MATCHING's
-// is a target-id -> item-id assignment map (both ids are Choice ids — see
+// Choice-based types (single/multi-select, true/false) just need a set of
+// chosen ids. ORDERING's answer is the sequence itself. MATCHING's is a
+// target-id -> item-id assignment map (both ids are Choice ids — see
 // MatchingAnswer for why that's enough to grade a placement). CATEGORIZE's
 // is an item-id -> bucket-id map. HOTSPOT's is a set of HotspotRegion ids —
 // kept distinct from CHOICE's set since they're a different id space.
+// FILL_BLANK_TEXT's is a blank-index -> typed-text map, WORD_BANK's a
+// blank-index -> token-id map.
 type AnswerState =
   | { kind: 'CHOICE'; selected: Set<number> }
   | { kind: 'ORDERING'; order: number[] }
   | { kind: 'MATCHING'; assignments: Record<number, number> }
   | { kind: 'CATEGORIZE'; placements: Record<number, number> }
   | { kind: 'HOTSPOT'; selected: Set<number> }
+  | { kind: 'FILL_BLANK_TEXT'; values: Record<number, string> }
+  | { kind: 'WORD_BANK'; placements: Record<number, number> }
 
 function buildInitialAnswers(detail: QuizDetail): Record<number, AnswerState> {
   const initial: Record<number, AnswerState> = {}
@@ -36,6 +42,11 @@ function buildInitialAnswers(detail: QuizDetail): Record<number, AnswerState> {
       initial[question.id] = { kind: 'CATEGORIZE', placements: {} }
     } else if (question.question_type === 'HOTSPOT') {
       initial[question.id] = { kind: 'HOTSPOT', selected: new Set() }
+    } else if (question.question_type === 'FILL_BLANK') {
+      initial[question.id] =
+        question.fill_blank_mode === 'WORD_BANK'
+          ? { kind: 'WORD_BANK', placements: {} }
+          : { kind: 'FILL_BLANK_TEXT', values: {} }
     } else {
       initial[question.id] = { kind: 'CHOICE', selected: new Set() }
     }
@@ -47,14 +58,37 @@ interface AnswerPayload {
   selected_choices: number[]
   category_placements: { item: number; bucket: number }[]
   selected_regions: number[]
+  fill_blank_text: Record<string, string>
+  word_bank_placements: { token: number; blank_index: number }[]
 }
 
 function buildAnswerPayload(answer: AnswerState | undefined): AnswerPayload {
-  const empty = { selected_choices: [], category_placements: [], selected_regions: [] }
+  const empty = {
+    selected_choices: [],
+    category_placements: [],
+    selected_regions: [],
+    fill_blank_text: {},
+    word_bank_placements: [],
+  }
   if (!answer) return empty
   if (answer.kind === 'CHOICE') return { ...empty, selected_choices: Array.from(answer.selected) }
   if (answer.kind === 'ORDERING') return { ...empty, selected_choices: answer.order }
   if (answer.kind === 'HOTSPOT') return { ...empty, selected_regions: Array.from(answer.selected) }
+  if (answer.kind === 'FILL_BLANK_TEXT') {
+    return {
+      ...empty,
+      fill_blank_text: Object.fromEntries(Object.entries(answer.values).map(([blankIndex, text]) => [blankIndex, text])),
+    }
+  }
+  if (answer.kind === 'WORD_BANK') {
+    return {
+      ...empty,
+      word_bank_placements: Object.entries(answer.placements).map(([blankIndex, tokenId]) => ({
+        token: tokenId,
+        blank_index: Number(blankIndex),
+      })),
+    }
+  }
   if (answer.kind === 'CATEGORIZE') {
     return {
       ...empty,
@@ -180,6 +214,19 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
     setAnswers((prev) => ({ ...prev, [questionId]: { kind: 'HOTSPOT', selected } }))
   }
 
+  function setFillBlankTextValue(questionId: number, blankIndex: number, value: string) {
+    setAnswers((prev) => {
+      const current = prev[questionId]
+      const values = current?.kind === 'FILL_BLANK_TEXT' ? { ...current.values } : {}
+      values[blankIndex] = value
+      return { ...prev, [questionId]: { kind: 'FILL_BLANK_TEXT', values } }
+    })
+  }
+
+  function setWordBankAnswer(questionId: number, placements: Record<number, number>) {
+    setAnswers((prev) => ({ ...prev, [questionId]: { kind: 'WORD_BANK', placements } }))
+  }
+
   function getOrderingValue(question: Question): number[] {
     const answer = answers[question.id]
     return answer?.kind === 'ORDERING' ? answer.order : question.choices.map((c) => c.id)
@@ -198,6 +245,16 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
   function getHotspotValue(question: Question): Set<number> {
     const answer = answers[question.id]
     return answer?.kind === 'HOTSPOT' ? answer.selected : new Set()
+  }
+
+  function getFillBlankTextValues(question: Question): Record<number, string> {
+    const answer = answers[question.id]
+    return answer?.kind === 'FILL_BLANK_TEXT' ? answer.values : {}
+  }
+
+  function getWordBankValue(question: Question): Record<number, number> {
+    const answer = answers[question.id]
+    return answer?.kind === 'WORD_BANK' ? answer.placements : {}
   }
 
   async function handleDownloadCertificate() {
@@ -263,13 +320,29 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
           {quiz.questions.map((question, index) => (
             <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
               <p className="text-sm font-medium text-neutral-900">
-                {index + 1}. {question.question_text}{' '}
+                {index + 1}.{' '}
+                {question.question_type !== 'FILL_BLANK' && question.question_text}{' '}
                 <span className="font-normal text-neutral-400">
                   ({question.points} {question.points === 1 ? 'point' : 'points'})
                 </span>
               </p>
               <div className="mt-3">
-                {question.question_type === 'ORDERING' ? (
+                {question.question_type === 'FILL_BLANK' ? (
+                  question.fill_blank_mode === 'WORD_BANK' ? (
+                    <WordBankAnswer
+                      questionHtml={question.question_text}
+                      tokens={question.word_bank_tokens.map((t) => ({ id: t.id, text: t.text }))}
+                      placements={getWordBankValue(question)}
+                      onChange={(next) => setWordBankAnswer(question.id, next)}
+                    />
+                  ) : (
+                    <FillBlankTextAnswer
+                      questionHtml={question.question_text}
+                      values={getFillBlankTextValues(question)}
+                      onChange={(blankIndex, value) => setFillBlankTextValue(question.id, blankIndex, value)}
+                    />
+                  )
+                ) : question.question_type === 'ORDERING' ? (
                   <OrderingAnswer
                     items={question.choices.map((c) => ({ id: c.id, text: c.choice_text }))}
                     order={getOrderingValue(question)}
@@ -459,6 +532,51 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
                       })}
                     </div>
                   )
+                ) : question.question_type === 'FILL_BLANK' && question.fill_blank_mode === 'WORD_BANK' ? (
+                  <ul className="mt-2 space-y-1">
+                    {Object.keys(answer?.correct_word_bank_placements ?? answer?.word_bank_placements ?? {})
+                      .map(Number)
+                      .sort((a, b) => a - b)
+                      .map((blankIndex) => {
+                        const placedTokenId = answer?.word_bank_placements[String(blankIndex)]
+                        const correctTokenId = answer?.correct_word_bank_placements?.[String(blankIndex)]
+                        const isCorrect = placedTokenId !== undefined && placedTokenId === correctTokenId
+                        const placedToken = question.word_bank_tokens.find((t) => t.id === placedTokenId)
+                        const correctToken = question.word_bank_tokens.find((t) => t.id === correctTokenId)
+                        return (
+                          <li
+                            key={blankIndex}
+                            className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
+                          >
+                            Blank {blankIndex}:{' '}
+                            {placedToken ? placedToken.text : <span className="italic text-neutral-400">not placed</span>}
+                            {!isCorrect && correctToken && <span className="ml-1 text-emerald-700">(correct: {correctToken.text})</span>}
+                          </li>
+                        )
+                      })}
+                  </ul>
+                ) : question.question_type === 'FILL_BLANK' ? (
+                  <ul className="mt-2 space-y-1">
+                    {Object.keys(answer?.correct_fill_blank_text ?? answer?.fill_blank_text ?? {})
+                      .map(Number)
+                      .sort((a, b) => a - b)
+                      .map((blankIndex) => {
+                        const typed = answer?.fill_blank_text[String(blankIndex)] ?? ''
+                        const accepted = answer?.correct_fill_blank_text?.[String(blankIndex)] ?? []
+                        const isCorrect = accepted.some((a) => a.trim().toLowerCase() === typed.trim().toLowerCase())
+                        return (
+                          <li
+                            key={blankIndex}
+                            className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
+                          >
+                            Blank {blankIndex}: {typed || <span className="italic text-neutral-400">not answered</span>}
+                            {!isCorrect && accepted.length > 0 && (
+                              <span className="ml-1 text-emerald-700">(accepted: {accepted.join(', ')})</span>
+                            )}
+                          </li>
+                        )
+                      })}
+                  </ul>
                 ) : (
                   <ul className="mt-2 space-y-1">
                     {question.choices.map((choice) => {

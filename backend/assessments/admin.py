@@ -1,10 +1,25 @@
 from django.contrib import admin
 
-from .models import CategorizeItem, CategoryBucket, Choice, HotspotRegion, Question, Quiz, QuizAnswer, QuizAttempt
+from .models import (
+    CategorizeItem,
+    CategoryBucket,
+    Choice,
+    HotspotRegion,
+    Question,
+    Quiz,
+    QuizAnswer,
+    QuizAttempt,
+    WordBankToken,
+)
 
 
 class ChoiceInline(admin.TabularInline):
     model = Choice
+    extra = 0
+
+
+class WordBankTokenInline(admin.TabularInline):
+    model = WordBankToken
     extra = 0
 
 
@@ -49,7 +64,7 @@ class QuestionAdmin(admin.ModelAdmin):
     list_display = ('question_text', 'quiz', 'question_type', 'order', 'points', 'marks')
     list_filter = ('question_type', 'quiz')
     search_fields = ('question_text', 'quiz__title')
-    inlines = [ChoiceInline, CategoryBucketInline, CategorizeItemInline, HotspotRegionInline]
+    inlines = [ChoiceInline, WordBankTokenInline, CategoryBucketInline, CategorizeItemInline, HotspotRegionInline]
 
 
 @admin.register(QuizAttempt)

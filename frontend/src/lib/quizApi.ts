@@ -1,5 +1,12 @@
 import { apiFetch } from './apiClient'
-import type { QuestionType, QuizAnswerForGrading, QuizAttemptResult, QuizDetail, QuizListItem } from '../types/quiz'
+import type {
+  FillBlankMode,
+  QuestionType,
+  QuizAnswerForGrading,
+  QuizAttemptResult,
+  QuizDetail,
+  QuizListItem,
+} from '../types/quiz'
 
 export function fetchQuizDetail(quizId: number): Promise<QuizDetail> {
   return apiFetch<QuizDetail>(`/quizzes/${quizId}/`)
@@ -27,6 +34,10 @@ export interface QuizAnswerInput {
   category_placements?: { item: number; bucket: number }[]
   // HOTSPOT-only.
   selected_regions?: number[]
+  // FILL_BLANK/TEXT_INPUT-only — {blank_index: typed text}.
+  fill_blank_text?: Record<string, string>
+  // FILL_BLANK/WORD_BANK-only.
+  word_bank_placements?: { token: number; blank_index: number }[]
 }
 
 export function submitQuizAttempt(quizId: number, answers: QuizAnswerInput[]): Promise<QuizAttemptResult> {
@@ -63,6 +74,7 @@ export interface QuestionInput {
   quiz: number
   question_text: string
   question_type: QuestionType
+  fill_blank_mode?: FillBlankMode
   order: number
   points: number
   image?: File | null
@@ -102,6 +114,7 @@ export interface ChoiceInput {
   is_correct?: boolean
   order?: number
   match_text?: string
+  blank_index?: number | null
 }
 
 export function createChoice(input: ChoiceInput): Promise<{ id: number }> {
@@ -184,6 +197,25 @@ export function updateHotspotRegion(id: number, input: Partial<HotspotRegionInpu
 
 export function deleteHotspotRegion(id: number): Promise<void> {
   return apiFetch<void>(`/hotspot-regions/${id}/`, { method: 'DELETE' })
+}
+
+export interface WordBankTokenInput {
+  question: number
+  text: string
+  correct_blank_index?: number | null
+  order?: number
+}
+
+export function createWordBankToken(input: WordBankTokenInput): Promise<{ id: number }> {
+  return apiFetch('/word-bank-tokens/', { method: 'POST', body: input })
+}
+
+export function updateWordBankToken(id: number, input: Partial<WordBankTokenInput>): Promise<{ id: number }> {
+  return apiFetch(`/word-bank-tokens/${id}/`, { method: 'PATCH', body: input })
+}
+
+export function deleteWordBankToken(id: number): Promise<void> {
+  return apiFetch<void>(`/word-bank-tokens/${id}/`, { method: 'DELETE' })
 }
 
 // --- Admin: grading ---

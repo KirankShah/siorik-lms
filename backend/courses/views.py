@@ -22,6 +22,7 @@ from assessments.models import QuizAttempt
 from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
+from gamification.services import update_gamification_for_user
 
 from .models import Course, CourseAccess, Element, Enrollment, Lesson, LessonProgress, Module, Slide, SlideProgress
 from .permissions import editable_courses_for_user, visible_courses_for_user
@@ -534,6 +535,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         completed_lessons = enrollment.lesson_progress.count()
         enrollment.progress_percent = round((completed_lessons / total_lessons) * 100) if total_lessons else 0
 
+        newly_completed = enrollment.progress_percent >= 100 and enrollment.status != Enrollment.Status.COMPLETED
         if enrollment.progress_percent >= 100:
             if enrollment.status != Enrollment.Status.COMPLETED:
                 enrollment.completed_at = timezone.now()
@@ -542,6 +544,8 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.IN_PROGRESS
 
         enrollment.save()
+        if newly_completed:
+            update_gamification_for_user(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
 
@@ -579,6 +583,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         completed_slides = enrollment.slide_progress.filter(completed_at__isnull=False).count()
         enrollment.progress_percent = round((completed_slides / total_slides) * 100) if total_slides else 0
 
+        newly_completed = enrollment.progress_percent >= 100 and enrollment.status != Enrollment.Status.COMPLETED
         if enrollment.progress_percent >= 100:
             if enrollment.status != Enrollment.Status.COMPLETED:
                 enrollment.completed_at = timezone.now()
@@ -587,6 +592,8 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.IN_PROGRESS
 
         enrollment.save()
+        if newly_completed:
+            update_gamification_for_user(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
 

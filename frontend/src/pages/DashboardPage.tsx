@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Award, BookOpen, CalendarClock, ClipboardList, Users } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { BadgesWidget } from '../components/BadgesWidget'
+import { LeaderboardWidget } from '../components/LeaderboardWidget'
 import { Badge } from '../components/ui/Badge'
 import type { BadgeVariant } from '../components/ui/Badge'
 import { Banner } from '../components/ui/Banner'
@@ -11,11 +13,13 @@ import { useAuth } from '../context/AuthContext'
 import { fetchAssignments, fetchMySubmissions } from '../lib/assignmentsApi'
 import { fetchCertificates } from '../lib/certificatesApi'
 import { fetchCourseDetail, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
+import { fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
 import { fetchQuizzes } from '../lib/quizApi'
 import { isAdminRole } from '../lib/roles'
 import type { Certificate } from '../types/certificates'
 import type { Assignment } from '../types/assignment'
 import type { CourseListItem, Enrollment } from '../types/courses'
+import type { LeaderboardEntry, UserBadge } from '../types/gamification'
 import type { QuizListItem } from '../types/quiz'
 
 function isThisMonth(isoDate: string): boolean {
@@ -209,7 +213,27 @@ function LearnerDashboard() {
   const [enrollments, setEnrollments] = useState<Enrollment[] | null>(null)
   const [courses, setCourses] = useState<CourseListItem[]>([])
   const [pendingAssignments, setPendingAssignments] = useState<PendingAssignment[] | null>(null)
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[] | null>(null)
+  const [myBadges, setMyBadges] = useState<UserBadge[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    Promise.all([fetchLeaderboard(), fetchMyBadges()])
+      .then(([entries, badges]) => {
+        if (cancelled) return
+        setLeaderboard(entries)
+        setMyBadges(badges)
+      })
+      .catch(() => {
+        if (!cancelled) setError('Some dashboard data could not be loaded.')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -367,6 +391,11 @@ function LearnerDashboard() {
             </ul>
           )}
         </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <LeaderboardWidget entries={leaderboard} />
+        <BadgesWidget badges={myBadges} />
       </div>
     </div>
   )

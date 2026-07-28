@@ -48,12 +48,25 @@ class Question(models.Model):
         SHORT_ANSWER = 'SHORT_ANSWER', 'Short answer'
         ESSAY = 'ESSAY', 'Essay'
 
+    class FillBlankMode(models.TextChoices):
+        TEXT_INPUT = 'TEXT_INPUT', 'Text input'
+        WORD_BANK = 'WORD_BANK', 'Word bank'
+
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
     question_text = models.TextField(validators=[MaxLengthValidator(MAX_QUESTION_TEXT_LENGTH)])
     question_type = models.CharField(
         max_length=20,
         choices=QuestionType.choices,
         default=QuestionType.SINGLE_CHOICE,
+    )
+    # FILL_BLANK-only — ignored by every other question type. question_text
+    # may contain numbered placeholders like {{1}}, {{2}} for either mode;
+    # TEXT_INPUT renders a text box per blank, WORD_BANK a drop target per
+    # blank fed by a shuffled bank of draggable tokens (WordBankToken).
+    fill_blank_mode = models.CharField(
+        max_length=20,
+        choices=FillBlankMode.choices,
+        default=FillBlankMode.TEXT_INPUT,
     )
     order = models.PositiveIntegerField(default=0)
     points = models.PositiveIntegerField(default=1)
@@ -79,7 +92,10 @@ class Choice(models.Model):
 
     - SINGLE_CHOICE / MULTIPLE_CHOICE / MULTIPLE_ANSWER / TRUE_FALSE:
       choice_text is the option label, is_correct flags correct option(s).
-    - FILL_BLANK: choice_text is one accepted answer; is_correct is always True.
+    - FILL_BLANK (TEXT_INPUT mode only — WORD_BANK mode uses WordBankToken
+      instead): choice_text is one accepted answer, is_correct is always
+      True, blank_index says which numbered {{N}} placeholder it answers
+      (null defaults to blank 1, for questions with only one blank).
     - MATCHING: choice_text is the left-hand item, match_text is the correct
       right-hand pair.
     - ORDERING: choice_text is the item label, order is its correct position.
@@ -91,12 +107,29 @@ class Choice(models.Model):
     is_correct = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     match_text = models.CharField(max_length=500, blank=True, default='')
+    blank_index = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['order', 'id']
 
     def __str__(self):
         return self.choice_text
+
+
+class WordBankToken(models.Model):
+    """A FILL_BLANK/WORD_BANK question's draggable token."""
+
+    question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='word_bank_tokens')
+    text = models.CharField(max_length=200)
+    # Null means this token is a distractor, not the correct answer for any blank.
+    correct_blank_index = models.PositiveIntegerField(null=True, blank=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return self.text
 
 
 class CategoryBucket(models.Model):
@@ -200,12 +233,17 @@ class QuizAnswer(models.Model):
     # HOTSPOT-only — plays the same role selected_choices does for other
     # types, just against HotspotRegion instead of Choice.
     selected_regions = models.ManyToManyField(HotspotRegion, blank=True, related_name='selected_in_answers')
-    # Free-text response for FILL_BLANK/SHORT_ANSWER/ESSAY questions.
+    # Free-text response for SHORT_ANSWER/ESSAY questions (manually graded —
+    # see marks_awarded/grader_feedback/graded_at below).
     text_response = models.TextField(blank=True, default='')
     # CATEGORIZE-only: {categorize_item_id: category_bucket_id} learner
     # placements — plays the same role selected_choices does for other
     # types, just shaped as a mapping since it's item->bucket, not a set.
     category_placements = models.JSONField(blank=True, default=dict)
+    # FILL_BLANK/TEXT_INPUT-only: {blank_index: typed text}.
+    fill_blank_text = models.JSONField(blank=True, default=dict)
+    # FILL_BLANK/WORD_BANK-only: {blank_index: word_bank_token_id}.
+    word_bank_placements = models.JSONField(blank=True, default=dict)
     is_correct = models.BooleanField(default=False)
     # Manual grading, for SHORT_ANSWER/ESSAY — mirrors AssignmentSubmission's
     # marks_awarded/grader_feedback/graded_at in the assignments app.

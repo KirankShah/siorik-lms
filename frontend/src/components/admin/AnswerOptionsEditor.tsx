@@ -16,36 +16,51 @@ import {
   createCategorizeItem,
   createChoice,
   createHotspotRegion,
+  createWordBankToken,
   deleteCategoryBucket,
   deleteCategorizeItem,
   deleteChoice,
   deleteHotspotRegion,
+  deleteWordBankToken,
   updateCategoryBucket,
   updateCategorizeItem,
   updateChoice,
   updateHotspotRegion,
+  updateWordBankToken,
 } from '../../lib/quizApi'
-import type { CategoryBucket, CategorizeItem, Choice, HotspotRegion, QuestionType } from '../../types/quiz'
+import type {
+  CategoryBucket,
+  CategorizeItem,
+  Choice,
+  FillBlankMode,
+  HotspotRegion,
+  QuestionType,
+  WordBankToken,
+} from '../../types/quiz'
 
 interface AnswerOptionsEditorProps {
   questionId: number
   questionType: QuestionType
+  fillBlankMode: FillBlankMode
   choices: Choice[]
   buckets: CategoryBucket[]
   categorizeItems: CategorizeItem[]
   image: string | null
   hotspotRegions: HotspotRegion[]
+  wordBankTokens: WordBankToken[]
   onChanged: () => void
 }
 
 export function AnswerOptionsEditor({
   questionId,
   questionType,
+  fillBlankMode,
   choices,
   buckets,
   categorizeItems,
   image,
   hotspotRegions,
+  wordBankTokens,
   onChanged,
 }: AnswerOptionsEditorProps) {
   const [error, setError] = useState<string | null>(null)
@@ -88,7 +103,11 @@ export function AnswerOptionsEditor({
   }
 
   if (questionType === 'FILL_BLANK') {
-    return <FillBlankEditor questionId={questionId} choices={choices} withErrorHandling={withErrorHandling} error={error} />
+    return fillBlankMode === 'WORD_BANK' ? (
+      <WordBankEditor questionId={questionId} tokens={wordBankTokens} withErrorHandling={withErrorHandling} error={error} />
+    ) : (
+      <FillBlankTextEditor questionId={questionId} choices={choices} withErrorHandling={withErrorHandling} error={error} />
+    )
   }
 
   if (questionType === 'MATCHING') {
@@ -299,7 +318,7 @@ function TrueFalseEditor({
   )
 }
 
-function FillBlankEditor({
+function FillBlankTextEditor({
   questionId,
   choices,
   withErrorHandling,
@@ -310,9 +329,11 @@ function FillBlankEditor({
   withErrorHandling: ErrorHandler
   error: string | null
 }) {
+  const sorted = [...choices].sort((a, b) => (a.blank_index ?? 1) - (b.blank_index ?? 1) || a.order - b.order)
+
   async function handleAdd() {
     await withErrorHandling(
-      () => createChoice({ question: questionId, choice_text: '', is_correct: true, order: choices.length + 1 }),
+      () => createChoice({ question: questionId, choice_text: '', is_correct: true, blank_index: 1, order: sorted.length + 1 }),
       'Could not add accepted answer.',
     )
   }
@@ -321,16 +342,36 @@ function FillBlankEditor({
     await withErrorHandling(() => updateChoice(choice.id, { choice_text: text }), 'Could not update accepted answer.')
   }
 
+  async function handleBlankIndexChange(choice: Choice, blankIndex: number) {
+    await withErrorHandling(() => updateChoice(choice.id, { blank_index: blankIndex }), 'Could not update accepted answer.')
+  }
+
   async function handleRemove(choiceId: number) {
     await withErrorHandling(() => deleteChoice(choiceId), 'Could not remove accepted answer.')
   }
 
   return (
     <div>
-      <p className="mb-1 text-xs text-neutral-400">Accepted answers (the learner's typed answer is matched against any of these, case-insensitively):</p>
+      <p className="mb-1 text-xs text-neutral-400">
+        Accepted answers — the learner's typed answer for a blank is matched against any accepted answer marked with
+        that blank's number, case-insensitively. Add one row per accepted answer (a blank can have several synonyms):
+      </p>
       <ul className="space-y-1">
-        {choices.map((choice) => (
+        {sorted.map((choice) => (
           <li key={choice.id} className="flex items-center gap-2">
+            <span className="flex shrink-0 items-center gap-1 text-xs text-neutral-500">
+              Blank
+              <input
+                type="number"
+                min={1}
+                defaultValue={choice.blank_index ?? 1}
+                onBlur={(e) => {
+                  const value = Math.max(1, Number(e.target.value) || 1)
+                  if (value !== (choice.blank_index ?? 1)) void handleBlankIndexChange(choice, value)
+                }}
+                className="w-14 rounded border border-neutral-300 px-1.5 py-1 text-sm"
+              />
+            </span>
             <input
               defaultValue={choice.choice_text}
               onBlur={(e) => e.target.value !== choice.choice_text && void handleTextChange(choice, e.target.value)}
@@ -342,6 +383,83 @@ function FillBlankEditor({
         ))}
       </ul>
       <AddRowButton onClick={() => void handleAdd()} label="+ Add accepted answer" />
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+  )
+}
+
+function WordBankEditor({
+  questionId,
+  tokens,
+  withErrorHandling,
+  error,
+}: {
+  questionId: number
+  tokens: WordBankToken[]
+  withErrorHandling: ErrorHandler
+  error: string | null
+}) {
+  const sorted = [...tokens].sort((a, b) => a.order - b.order)
+
+  async function handleAdd() {
+    await withErrorHandling(
+      () => createWordBankToken({ question: questionId, text: '', correct_blank_index: null, order: sorted.length + 1 }),
+      'Could not add token.',
+    )
+  }
+
+  async function handleTextChange(token: WordBankToken, text: string) {
+    await withErrorHandling(() => updateWordBankToken(token.id, { text }), 'Could not update token.')
+  }
+
+  async function handleBlankIndexChange(token: WordBankToken, blankIndex: number | null) {
+    await withErrorHandling(() => updateWordBankToken(token.id, { correct_blank_index: blankIndex }), 'Could not update token.')
+  }
+
+  async function handleRemove(tokenId: number) {
+    await withErrorHandling(() => deleteWordBankToken(tokenId), 'Could not remove token.')
+  }
+
+  return (
+    <div>
+      <p className="mb-1 text-xs text-neutral-400">
+        Tokens shown to the learner in the shuffled word bank. Give each token the number of the blank it correctly
+        fills, or leave it blank to make it a distractor:
+      </p>
+      <ul className="space-y-1">
+        {sorted.map((token) => (
+          <li
+            key={token.id}
+            className={`flex items-center gap-2 rounded-md border px-2 py-1.5 ${
+              token.correct_blank_index != null ? 'border-emerald-300 bg-emerald-50' : 'border-transparent'
+            }`}
+          >
+            <input
+              defaultValue={token.text}
+              onBlur={(e) => e.target.value !== token.text && void handleTextChange(token, e.target.value)}
+              placeholder="Token text"
+              className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
+            />
+            <span className="flex shrink-0 items-center gap-1 text-xs text-neutral-500">
+              Blank
+              <input
+                type="number"
+                min={1}
+                defaultValue={token.correct_blank_index ?? ''}
+                placeholder="—"
+                onBlur={(e) => {
+                  const raw = e.target.value
+                  const value = raw === '' ? null : Math.max(1, Number(raw) || 1)
+                  if (value !== (token.correct_blank_index ?? null)) void handleBlankIndexChange(token, value)
+                }}
+                className="w-14 rounded border border-neutral-300 px-1.5 py-1 text-sm"
+              />
+            </span>
+            <RemoveButton onClick={() => void handleRemove(token.id)} />
+          </li>
+        ))}
+      </ul>
+      <AddRowButton onClick={() => void handleAdd()} label="+ Add token" />
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   )

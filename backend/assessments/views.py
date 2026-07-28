@@ -9,8 +9,19 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from core.permissions import IsAdminRole
 from courses.permissions import editable_courses_for_user, visible_courses_for_user
+from gamification.services import update_gamification_for_user
 
-from .models import CategorizeItem, CategoryBucket, Choice, HotspotRegion, Question, Quiz, QuizAnswer, QuizAttempt
+from .models import (
+    CategorizeItem,
+    CategoryBucket,
+    Choice,
+    HotspotRegion,
+    Question,
+    Quiz,
+    QuizAnswer,
+    QuizAttempt,
+    WordBankToken,
+)
 from .serializers import (
     CategorizeItemWriteSerializer,
     CategoryBucketWriteSerializer,
@@ -22,6 +33,7 @@ from .serializers import (
     QuizSerializer,
     QuizSubmitSerializer,
     QuizWriteSerializer,
+    WordBankTokenWriteSerializer,
 )
 
 WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
@@ -36,7 +48,11 @@ class QuizViewSet(
     viewsets.GenericViewSet,
 ):
     queryset = Quiz.objects.select_related('slide__lesson__module__course').prefetch_related(
-        'questions__choices', 'questions__buckets', 'questions__categorize_items', 'questions__hotspot_regions'
+        'questions__choices',
+        'questions__buckets',
+        'questions__categorize_items',
+        'questions__hotspot_regions',
+        'questions__word_bank_tokens',
     )
     throttle_scope = None  # overridden per-action to 'quiz-submit' on the submit() action below
 
@@ -96,6 +112,8 @@ class QuizViewSet(
                 question = answer_data['question']
                 selected_choices = answer_data['selected_choices']
                 category_placements = {}
+                fill_blank_text = {}
+                word_bank_placements = {}
 
                 if question.question_type == Question.QuestionType.ORDERING:
                     # Set equality (below) discards position entirely, which
@@ -130,6 +148,37 @@ class QuizViewSet(
                     )
                     selected_region_ids = {region.id for region in answer_data['selected_regions']}
                     is_correct = selected_region_ids == correct_region_ids
+                elif question.question_type == Question.QuestionType.FILL_BLANK:
+                    if question.fill_blank_mode == Question.FillBlankMode.WORD_BANK:
+                        # Each blank has exactly one correct token — an
+                        # all-or-nothing mapping comparison, same spirit as
+                        # CATEGORIZE.
+                        word_bank_placements = {
+                            placement['blank_index']: placement['token'].id
+                            for placement in answer_data['word_bank_placements']
+                        }
+                        correct_word_bank = {
+                            token.correct_blank_index: token.id
+                            for token in question.word_bank_tokens.all()
+                            if token.correct_blank_index is not None
+                        }
+                        is_correct = bool(correct_word_bank) and word_bank_placements == correct_word_bank
+                    else:
+                        # TEXT_INPUT: each blank accepts any of its own set
+                        # of accepted answers (Choice rows sharing that
+                        # blank_index), matched case-insensitively. Every
+                        # blank must match — no partial credit, same as
+                        # every other multi-part type here.
+                        accepted_by_blank = {}
+                        for choice in question.choices.all():
+                            blank_index = choice.blank_index or 1
+                            accepted_by_blank.setdefault(blank_index, set()).add(choice.choice_text.strip().casefold())
+                        submitted_text = answer_data['fill_blank_text']
+                        is_correct = bool(accepted_by_blank) and all(
+                            submitted_text.get(str(blank_index), '').strip().casefold() in accepted
+                            for blank_index, accepted in accepted_by_blank.items()
+                        )
+                        fill_blank_text = dict(submitted_text)
                 else:
                     correct_choice_ids = set(question.choices.filter(is_correct=True).values_list('id', flat=True))
                     selected_ids = {choice.id for choice in selected_choices}
@@ -152,11 +201,14 @@ class QuizViewSet(
                     question=question,
                     is_correct=is_correct,
                     category_placements=category_placements,
+                    fill_blank_text=fill_blank_text,
+                    word_bank_placements=word_bank_placements,
                 )
                 quiz_answer.selected_choices.set(selected_choices)
                 quiz_answer.selected_regions.set(answer_data['selected_regions'])
 
             attempt.calculate_score_percent()
+            update_gamification_for_user(request.user)
 
         return Response(QuizAttemptSerializer(attempt).data, status=201)
 
@@ -235,6 +287,23 @@ class HotspotRegionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return HotspotRegion.objects.filter(
+            question__quiz__slide__lesson__module__course__in=editable_courses_for_user(self.request.user)
+        )
+
+    def perform_create(self, serializer):
+        question = serializer.validated_data['question']
+        course_id = question.quiz.slide.lesson.module.course_id
+        if not editable_courses_for_user(self.request.user).filter(pk=course_id).exists():
+            raise ValidationError({'question': 'You do not have permission to modify this question.'})
+        serializer.save()
+
+
+class WordBankTokenViewSet(viewsets.ModelViewSet):
+    serializer_class = WordBankTokenWriteSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_queryset(self):
+        return WordBankToken.objects.filter(
             question__quiz__slide__lesson__module__course__in=editable_courses_for_user(self.request.user)
         )
 

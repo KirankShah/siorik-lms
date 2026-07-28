@@ -5,7 +5,17 @@ from rest_framework import serializers
 from accounts.models import User
 from accounts.serializers import UserSerializer
 
-from .models import CategorizeItem, CategoryBucket, Choice, HotspotRegion, Question, Quiz, QuizAnswer, QuizAttempt
+from .models import (
+    CategorizeItem,
+    CategoryBucket,
+    Choice,
+    HotspotRegion,
+    Question,
+    Quiz,
+    QuizAnswer,
+    QuizAttempt,
+    WordBankToken,
+)
 
 PRIVILEGED_ROLES = (User.Role.INSTRUCTOR, User.Role.ORG_ADMIN, User.Role.PLATFORM_ADMIN)
 
@@ -46,7 +56,7 @@ class HotspotRegionSerializer(serializers.ModelSerializer):
 class ChoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Choice
-        fields = ['id', 'choice_text', 'is_correct', 'order', 'match_text']
+        fields = ['id', 'choice_text', 'is_correct', 'order', 'match_text', 'blank_index']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -60,6 +70,27 @@ class ChoiceSerializer(serializers.ModelSerializer):
             # rather than just a display hint like it is for other types.
             if instance.question.question_type == Question.QuestionType.ORDERING:
                 data.pop('order', None)
+            # FILL_BLANK/TEXT_INPUT choices *are* the accepted answers — the
+            # learner gets a blank text box, not this list, so there's
+            # nothing here they need (or should) see before submitting.
+            if instance.question.question_type == Question.QuestionType.FILL_BLANK:
+                data.pop('choice_text', None)
+                data.pop('blank_index', None)
+        return data
+
+
+class WordBankTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WordBankToken
+        fields = ['id', 'text', 'correct_blank_index', 'order']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request is None or request.user.role not in PRIVILEGED_ROLES:
+            # correct_blank_index *is* the answer key — reveals which blank
+            # (if any) this token belongs to.
+            data.pop('correct_blank_index', None)
         return data
 
 
@@ -69,6 +100,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     buckets = CategoryBucketSerializer(many=True, read_only=True)
     categorize_items = CategorizeItemSerializer(many=True, read_only=True)
     hotspot_regions = HotspotRegionSerializer(many=True, read_only=True)
+    word_bank_tokens = WordBankTokenSerializer(many=True, read_only=True)
 
     class Meta:
         model = Question
@@ -76,6 +108,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             'id',
             'question_text',
             'question_type',
+            'fill_blank_mode',
             'order',
             'points',
             'image',
@@ -89,6 +122,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             'buckets',
             'categorize_items',
             'hotspot_regions',
+            'word_bank_tokens',
         ]
 
     def get_match_targets(self, obj):
@@ -128,6 +162,10 @@ class QuestionSerializer(serializers.ModelSerializer):
             # correct answers together — shuffle to break that up.
             if instance.question_type == Question.QuestionType.CATEGORIZE:
                 random.shuffle(data['categorize_items'])
+            # Same reasoning for WORD_BANK tokens — authored blank-by-blank,
+            # so shuffle to avoid the bank's order hinting the answer.
+            if instance.question_type == Question.QuestionType.FILL_BLANK:
+                random.shuffle(data['word_bank_tokens'])
         return data
 
 
@@ -184,6 +222,7 @@ class QuestionWriteSerializer(serializers.ModelSerializer):
             'quiz',
             'question_text',
             'question_type',
+            'fill_blank_mode',
             'order',
             'points',
             'image',
@@ -198,7 +237,13 @@ class QuestionWriteSerializer(serializers.ModelSerializer):
 class ChoiceWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Choice
-        fields = ['id', 'question', 'choice_text', 'is_correct', 'order', 'match_text']
+        fields = ['id', 'question', 'choice_text', 'is_correct', 'order', 'match_text', 'blank_index']
+
+
+class WordBankTokenWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WordBankToken
+        fields = ['id', 'question', 'text', 'correct_blank_index', 'order']
 
 
 class CategoryBucketWriteSerializer(serializers.ModelSerializer):
@@ -224,6 +269,11 @@ class CategoryPlacementInputSerializer(serializers.Serializer):
     bucket = serializers.PrimaryKeyRelatedField(queryset=CategoryBucket.objects.all())
 
 
+class WordBankPlacementInputSerializer(serializers.Serializer):
+    token = serializers.PrimaryKeyRelatedField(queryset=WordBankToken.objects.all())
+    blank_index = serializers.IntegerField(min_value=1)
+
+
 class QuizAnswerInputSerializer(serializers.Serializer):
     question = serializers.PrimaryKeyRelatedField(queryset=Question.objects.all())
     selected_choices = serializers.PrimaryKeyRelatedField(
@@ -235,6 +285,11 @@ class QuizAnswerInputSerializer(serializers.Serializer):
     selected_regions = serializers.PrimaryKeyRelatedField(
         queryset=HotspotRegion.objects.all(), many=True, required=False, default=list
     )
+    # FILL_BLANK/TEXT_INPUT-only — {blank_index: typed text}, keys arrive as
+    # strings from JSON. See QuizAnswer.fill_blank_text.
+    fill_blank_text = serializers.DictField(child=serializers.CharField(allow_blank=True), required=False, default=dict)
+    # FILL_BLANK/WORD_BANK-only — see QuizAnswer.word_bank_placements.
+    word_bank_placements = WordBankPlacementInputSerializer(many=True, required=False, default=list)
 
     def validate(self, attrs):
         quiz = self.context['quiz']
@@ -250,6 +305,9 @@ class QuizAnswerInputSerializer(serializers.Serializer):
         for region in attrs['selected_regions']:
             if region.question_id != question.id:
                 raise serializers.ValidationError('Selected region does not belong to the given question.')
+        for placement in attrs['word_bank_placements']:
+            if placement['token'].question_id != question.id:
+                raise serializers.ValidationError('Word bank token does not belong to the given question.')
         return attrs
 
 
@@ -278,6 +336,8 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
     correct_order = serializers.SerializerMethodField()
     correct_placements = serializers.SerializerMethodField()
     correct_region_ids = serializers.SerializerMethodField()
+    correct_fill_blank_text = serializers.SerializerMethodField()
+    correct_word_bank_placements = serializers.SerializerMethodField()
     explanation = serializers.CharField(source='question.explanation', read_only=True)
     feedback_correct = serializers.CharField(source='question.feedback_correct', read_only=True)
     feedback_incorrect = serializers.CharField(source='question.feedback_incorrect', read_only=True)
@@ -290,11 +350,15 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             'selected_choices',
             'category_placements',
             'selected_regions',
+            'fill_blank_text',
+            'word_bank_placements',
             'is_correct',
             'correct_choice_ids',
             'correct_order',
             'correct_placements',
             'correct_region_ids',
+            'correct_fill_blank_text',
+            'correct_word_bank_placements',
             'explanation',
             'feedback_correct',
             'feedback_incorrect',
@@ -320,6 +384,30 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
 
     def get_correct_region_ids(self, obj):
         return list(obj.question.hotspot_regions.filter(is_correct=True).values_list('id', flat=True))
+
+    def get_correct_fill_blank_text(self, obj):
+        # Only meaningful for FILL_BLANK/TEXT_INPUT — accepted answers are
+        # never exposed pre-submit (see ChoiceSerializer), same reasoning.
+        question = obj.question
+        if question.question_type != Question.QuestionType.FILL_BLANK or question.fill_blank_mode != Question.FillBlankMode.TEXT_INPUT:
+            return None
+        accepted = {}
+        for choice in question.choices.all():
+            blank_index = choice.blank_index or 1
+            accepted.setdefault(blank_index, []).append(choice.choice_text)
+        return accepted
+
+    def get_correct_word_bank_placements(self, obj):
+        # Only meaningful for FILL_BLANK/WORD_BANK — correct_blank_index is
+        # never exposed pre-submit (see WordBankTokenSerializer).
+        question = obj.question
+        if question.question_type != Question.QuestionType.FILL_BLANK or question.fill_blank_mode != Question.FillBlankMode.WORD_BANK:
+            return None
+        return {
+            token.correct_blank_index: token.id
+            for token in question.word_bank_tokens.all()
+            if token.correct_blank_index is not None
+        }
 
 
 class QuizAttemptSerializer(serializers.ModelSerializer):

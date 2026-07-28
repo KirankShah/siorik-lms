@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'assessments',
     'assignments',
     'scenarios',
+    'gamification',
     'certificates',
     'audit',
 ]

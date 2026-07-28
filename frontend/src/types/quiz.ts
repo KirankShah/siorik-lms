@@ -11,16 +11,33 @@ export type QuestionType =
   | 'SHORT_ANSWER'
   | 'ESSAY'
 
+export type FillBlankMode = 'TEXT_INPUT' | 'WORD_BANK'
+
 // A single "answer option" row, reused across question types with different
 // meaning per type — see backend assessments.models.Choice for the full
 // breakdown. is_correct/match_text/order(on ORDERING questions) are all
-// answer-key data and are stripped from the API response for learners.
+// answer-key data and are stripped from the API response for learners; for
+// FILL_BLANK/TEXT_INPUT, choice_text/blank_index are stripped entirely (the
+// learner gets a blank text box, not this list).
 export interface Choice {
   id: number
   choice_text: string
   is_correct?: boolean
   order: number
   match_text?: string
+  // FILL_BLANK/TEXT_INPUT-only — which numbered {{N}} blank this accepted
+  // answer applies to. Null/absent defaults to blank 1.
+  blank_index?: number | null
+}
+
+// FILL_BLANK/WORD_BANK's draggable tokens — correct_blank_index is
+// answer-key data and is stripped from the API response for learners, same
+// treatment as Choice.is_correct. Null means the token is a distractor.
+export interface WordBankToken {
+  id: number
+  text: string
+  correct_blank_index?: number | null
+  order: number
 }
 
 // MATCHING's right-hand pool — one per Choice, `id` reused from the owning
@@ -67,6 +84,8 @@ export interface Question {
   id: number
   question_text: string
   question_type: QuestionType
+  // FILL_BLANK-only — ignored by every other question type.
+  fill_blank_mode?: FillBlankMode
   order: number
   points: number
   image: string | null
@@ -81,6 +100,7 @@ export interface Question {
   buckets: CategoryBucket[]
   categorize_items: CategorizeItem[]
   hotspot_regions: HotspotRegion[]
+  word_bank_tokens: WordBankToken[]
 }
 
 export interface QuizSummary {
@@ -118,6 +138,10 @@ export interface QuizAnswerResult {
   category_placements: Record<string, number>
   // Only present for HOTSPOT — the learner's submitted region ids.
   selected_regions: number[]
+  // Only present for FILL_BLANK/TEXT_INPUT — {blank_index: typed text}.
+  fill_blank_text: Record<string, string>
+  // Only present for FILL_BLANK/WORD_BANK — {blank_index: token id}.
+  word_bank_placements: Record<string, number>
   is_correct: boolean
   // Answer-key data revealed only for this specific answer, once an attempt
   // exists — see backend assessments.serializers.QuizAnswerSerializer.
@@ -128,6 +152,10 @@ export interface QuizAnswerResult {
   correct_placements: Record<string, number> | null
   // Only present for HOTSPOT — the correct region ids.
   correct_region_ids: number[]
+  // Only present for FILL_BLANK/TEXT_INPUT — {blank_index: [accepted answers]}.
+  correct_fill_blank_text: Record<string, string[]> | null
+  // Only present for FILL_BLANK/WORD_BANK — {blank_index: correct token id}.
+  correct_word_bank_placements: Record<string, number> | null
   explanation: string
   feedback_correct: string
   feedback_incorrect: string

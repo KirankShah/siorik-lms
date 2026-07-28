@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { extractBlankIndexes } from '../../lib/fillBlankMarkup'
 import { deleteQuestion, updateQuestion } from '../../lib/quizApi'
-import type { Question, QuestionType } from '../../types/quiz'
+import type { FillBlankMode, Question, QuestionType } from '../../types/quiz'
 import { AnswerOptionsEditor } from './AnswerOptionsEditor'
 import { RichTextField } from './RichTextField'
 
@@ -27,6 +28,7 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
   const [isEditing, setIsEditing] = useState(false)
   const [questionText, setQuestionText] = useState(question.question_text)
   const [questionType, setQuestionType] = useState(question.question_type)
+  const [fillBlankMode, setFillBlankMode] = useState<FillBlankMode>(question.fill_blank_mode ?? 'TEXT_INPUT')
   const [order, setOrder] = useState(question.order)
   const [points, setPoints] = useState(question.points)
   const [marks, setMarks] = useState(question.marks)
@@ -45,6 +47,7 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
       await updateQuestion(question.id, {
         question_text: questionText,
         question_type: questionType,
+        fill_blank_mode: fillBlankMode,
         order,
         points,
         marks,
@@ -102,7 +105,30 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
             <div className="mt-1">
               <RichTextField key={question.id} initialHtml={question.question_text} onChange={setQuestionText} placeholder="Question text…" />
             </div>
+            {questionType === 'FILL_BLANK' && (
+              <p className="mt-1 text-xs text-neutral-400">
+                Use numbered placeholders for blanks, e.g. "Money laundering has three stages: {'{{1}}'}, {'{{2}}'}, and{' '}
+                {'{{3}}'}."
+                {extractBlankIndexes(questionText).length > 0
+                  ? ` Detected blanks: ${extractBlankIndexes(questionText).join(', ')}.`
+                  : ' No blanks detected yet.'}
+              </p>
+            )}
           </div>
+
+          {questionType === 'FILL_BLANK' && (
+            <div>
+              <label className="block text-xs font-medium text-neutral-700">Answer mode</label>
+              <select
+                value={fillBlankMode}
+                onChange={(e) => setFillBlankMode(e.target.value as FillBlankMode)}
+                className="mt-1 w-full max-w-xs rounded border border-neutral-300 px-2 py-1 text-sm"
+              >
+                <option value="TEXT_INPUT">Text input — the learner types each blank</option>
+                <option value="WORD_BANK">Word bank — the learner drags tokens into each blank</option>
+              </select>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div>
@@ -177,11 +203,13 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
         <AnswerOptionsEditor
           questionId={question.id}
           questionType={isEditing ? questionType : question.question_type}
+          fillBlankMode={isEditing ? fillBlankMode : (question.fill_blank_mode ?? 'TEXT_INPUT')}
           choices={question.choices}
           buckets={question.buckets}
           categorizeItems={question.categorize_items}
           image={question.image}
           hotspotRegions={question.hotspot_regions}
+          wordBankTokens={question.word_bank_tokens}
           onChanged={onChanged}
         />
 
