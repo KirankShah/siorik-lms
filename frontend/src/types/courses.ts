@@ -32,6 +32,8 @@ export interface CourseListItem {
   content_owner: ContentOwner
   cover_image: string | null
   is_published: boolean
+  // Null means the pre-templates default look — see backend Course.template.
+  template: number | null
   completion_deadline_days: number | null
   created_at: string
   updated_at: string

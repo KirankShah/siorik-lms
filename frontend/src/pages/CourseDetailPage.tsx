@@ -146,6 +146,7 @@ export function CourseDetailPage() {
       key={activeEntry.slide.id}
       slide={activeEntry.slide}
       courseId={course.id}
+      courseTemplateId={course.template}
       enrollmentId={enrollment.id}
       existingProgress={enrollment.slide_progress.find((p) => p.slide === activeEntry.slide.id)}
       onProgressSynced={setEnrollment}

@@ -11,6 +11,7 @@ from .models import (
     Slide,
     SlideProgress,
     SlideRevision,
+    SlideTemplate,
 )
 
 
@@ -30,6 +31,12 @@ class SlideInline(admin.TabularInline):
     show_change_link = True
 
 
+@admin.register(SlideTemplate)
+class SlideTemplateAdmin(admin.ModelAdmin):
+    list_display = ('name', 'background_css', 'text_color', 'accent_color', 'order')
+    ordering = ('order',)
+
+
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
     list_display = (
@@ -38,10 +45,11 @@ class CourseAdmin(admin.ModelAdmin):
         'organization',
         'content_owner',
         'is_published',
+        'template',
         'created_by',
         'created_at',
     )
-    list_filter = ('content_owner', 'is_published', 'organization')
+    list_filter = ('content_owner', 'is_published', 'organization', 'template')
     search_fields = ('title', 'slug', 'description')
     prepopulated_fields = {'slug': ('title',)}
     inlines = [ModuleInline]
@@ -78,7 +86,7 @@ class ElementInline(admin.TabularInline):
 
 @admin.register(Slide)
 class SlideAdmin(admin.ModelAdmin):
-    list_display = ('display_title', 'lesson', 'slide_type', 'order', 'estimated_minutes', 'updated_at')
+    list_display = ('display_title', 'lesson', 'slide_type', 'order', 'template_override', 'estimated_minutes', 'updated_at')
     list_filter = ('slide_type', 'lesson__module__course')
     search_fields = ('title', 'lesson__title')
     inlines = [ElementInline]

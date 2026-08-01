@@ -1,5 +1,7 @@
 export type SlideType = 'CONTENT' | 'QUIZ' | 'ASSIGNMENT' | 'SCENARIO'
 
+export type Layout = 'STACKED' | 'IMAGE_LEFT' | 'IMAGE_RIGHT'
+
 export type ElementType =
   | 'TEXT'
   | 'IMAGE'
@@ -12,6 +14,17 @@ export type ElementType =
 
 export type ElementAlign = 'LEFT' | 'CENTER' | 'RIGHT'
 
+// A curated background/text/accent theme for CONTENT slides — see
+// backend SlideTemplate. Seeded via migration, not user-creatable.
+export interface SlideTemplate {
+  id: number
+  name: string
+  background_css: string
+  text_color: string
+  accent_color: string
+  order: number
+}
+
 // Nested under a Lesson (see courses.ts) without its elements — matches
 // backend SlideSummarySerializer.
 export interface SlideSummary {
@@ -19,6 +32,10 @@ export interface SlideSummary {
   title: string
   order: number
   slide_type: SlideType
+  layout: Layout
+  // Null (the common case) means this slide follows the course's current
+  // template — see Course.template in courses.ts.
+  template_override: number | null
   estimated_minutes: number
 }
 

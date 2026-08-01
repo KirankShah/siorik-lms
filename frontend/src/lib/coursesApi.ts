@@ -58,6 +58,7 @@ export interface CourseInput {
   organization: number | null
   is_published: boolean
   cover_image?: File | null
+  template?: number | null
   certificate_pass_threshold?: number
   certificate_expiry_months?: number | null
   completion_deadline_days?: number | null

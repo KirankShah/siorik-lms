@@ -11,6 +11,30 @@ from .validators import LESSON_TYPE_ALLOWED_EXTENSIONS, validate_lesson_file_siz
 MAX_DESCRIPTION_LENGTH = 10_000
 
 
+class SlideTemplate(models.Model):
+    """A curated visual theme for CONTENT slides — background/text/accent colors
+    chosen as a fixed, designed set rather than a raw color picker, so a
+    course's slides stay visually consistent instead of becoming a
+    mismatched patchwork. Seeded via migration; not user-creatable via the API.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    # A CSS `background` value — a solid color or a simple linear-gradient().
+    background_css = models.CharField(max_length=255)
+    # Paired with background_css for legibility — dark text for light
+    # backgrounds, light text for dark ones.
+    text_color = models.CharField(max_length=20)
+    # Used for headings, quote accents, and links within the slide content.
+    accent_color = models.CharField(max_length=20)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return self.name
+
+
 class Course(models.Model):
     class ContentOwner(models.TextChoices):
         PLATFORM = 'PLATFORM', 'Platform'
@@ -35,6 +59,17 @@ class Course(models.Model):
         upload_to='course_covers/', blank=True, null=True, validators=[validate_image_size]
     )
     is_published = models.BooleanField(default=False)
+    # Null means the pre-templates default look (white background, dark
+    # text) — this is the course's actual visual identity for every CONTENT
+    # slide that doesn't set its own Slide.template_override, not just a
+    # default for new slides. See Slide.template_override.
+    template = models.ForeignKey(
+        SlideTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='courses',
+    )
     # Overall course score (average of each quiz's best attempt) required — on
     # top of passing every individual quiz — before a certificate can issue.
     # See certificates.services.generate_certificate.
@@ -149,12 +184,30 @@ class Slide(models.Model):
         ASSIGNMENT = 'ASSIGNMENT', 'Assignment'
         SCENARIO = 'SCENARIO', 'Scenario'
 
+    class Layout(models.TextChoices):
+        STACKED = 'STACKED', 'Stacked'
+        IMAGE_LEFT = 'IMAGE_LEFT', 'Image left'
+        IMAGE_RIGHT = 'IMAGE_RIGHT', 'Image right'
+
     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='slides')
     # Optional — falls back to an auto-numbered "Slide N" (see display_title)
     # rather than storing a computed default that could go stale if order changes.
     title = models.CharField(max_length=255, blank=True, default='')
     order = models.PositiveIntegerField(default=0)
     slide_type = models.CharField(max_length=20, choices=SlideType.choices, default=SlideType.CONTENT)
+    # CONTENT slides only — how the frontend renderer arranges this slide's
+    # elements. Defaults to STACKED so existing slides render unchanged.
+    layout = models.CharField(max_length=20, choices=Layout.choices, default=Layout.STACKED)
+    # Null (the common case) means this slide follows whatever the course's
+    # current template is — set this only for the rare slide that should
+    # deliberately differ from the rest of the course.
+    template_override = models.ForeignKey(
+        SlideTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='slide_overrides',
+    )
     estimated_minutes = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

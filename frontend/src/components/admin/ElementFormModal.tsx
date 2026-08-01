@@ -6,9 +6,14 @@ import { RichTextField } from './RichTextField'
 import { extractEmbedUrl } from '../../lib/embedUtils'
 import { ELEMENT_TYPE_LABEL } from '../../lib/elementTypes'
 import { resolveVideoEmbed } from '../../lib/blocknote/videoProviders'
+import { isLowContrast } from '../../lib/colorContrast'
 import { createElement, updateElement } from '../../lib/slidesApi'
 import type { ElementInput } from '../../lib/slidesApi'
-import type { ElementAlign, ElementType, SlideElement } from '../../types/slides'
+import type { ElementAlign, ElementType, SlideElement, SlideTemplate } from '../../types/slides'
+
+// Pre-templates default look is a plain white card (see SlideElementsView) —
+// used as the readability check's background when no template applies.
+const DEFAULT_BACKGROUND_CSS = '#ffffff'
 
 const ALIGN_OPTIONS: { value: ElementAlign; label: string; icon: typeof AlignLeft }[] = [
   { value: 'LEFT', label: 'Left', icon: AlignLeft },
@@ -21,11 +26,23 @@ interface ElementFormModalProps {
   element: SlideElement | null
   elementType: ElementType
   nextOrder: number
+  // The slide's effective template (course template or per-slide override) —
+  // only used to warn if a chosen text/highlight color would be hard to read
+  // against it. Omitted entirely means "no template", not "unknown".
+  template?: SlideTemplate | null
   onSaved: () => void
   onClose: () => void
 }
 
-export function ElementFormModal({ slideId, element, elementType, nextOrder, onSaved, onClose }: ElementFormModalProps) {
+export function ElementFormModal({
+  slideId,
+  element,
+  elementType,
+  nextOrder,
+  template = null,
+  onSaved,
+  onClose,
+}: ElementFormModalProps) {
   const [richText, setRichText] = useState(element?.rich_text ?? '')
   const [caption, setCaption] = useState(element?.caption ?? '')
   const [align, setAlign] = useState<ElementAlign>(element?.align ?? 'CENTER')
@@ -35,6 +52,18 @@ export function ElementFormModal({ slideId, element, elementType, nextOrder, onS
   const [file, setFile] = useState<File | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [colorWarning, setColorWarning] = useState<string | null>(null)
+
+  function handleColorApplied(kind: 'color' | 'background', hex: string) {
+    const backgroundCss = template?.background_css ?? DEFAULT_BACKGROUND_CSS
+    if (!isLowContrast(hex, backgroundCss)) {
+      setColorWarning(null)
+      return
+    }
+    setColorWarning(
+      `This ${kind === 'color' ? 'text' : 'highlight'} color may be hard to read against the current slide background.`,
+    )
+  }
 
   const videoPreview = videoMode === 'url' && videoUrl ? resolveVideoEmbed(videoUrl) : null
 
@@ -101,13 +130,17 @@ export function ElementFormModal({ slideId, element, elementType, nextOrder, onS
     >
       <div className="space-y-4">
         {(elementType === 'TEXT' || elementType === 'QUOTE') && (
-          <RichTextField
-            key={element?.id ?? 'new'}
-            initialHtml={richText}
-            onChange={setRichText}
-            placeholder={elementType === 'QUOTE' ? 'Quote text…' : 'Text content…'}
-            minHeight="360px"
-          />
+          <div>
+            <RichTextField
+              key={element?.id ?? 'new'}
+              initialHtml={richText}
+              onChange={setRichText}
+              onColorApplied={handleColorApplied}
+              placeholder={elementType === 'QUOTE' ? 'Quote text…' : 'Text content…'}
+              minHeight="360px"
+            />
+            {colorWarning && <p className="mt-1.5 text-xs text-amber-600">{colorWarning}</p>}
+          </div>
         )}
 
         {elementType === 'IMAGE' && (

@@ -14,7 +14,10 @@ import { AssignmentAuthoringPanel } from './AssignmentAuthoringPanel'
 import { AssignmentSummaryPreview } from './AssignmentSummaryPreview'
 import { ElementFormModal } from './ElementFormModal'
 import { ElementTypePicker } from './ElementTypePicker'
+import { LayoutPicker } from './LayoutPicker'
+import { TemplatePicker } from './TemplatePicker'
 import { ElementPreview } from '../ElementPreview'
+import { SlideElementsView } from '../SlideElementsView'
 import { QuizAuthoringPanel } from './QuizAuthoringPanel'
 import { QuizSummaryPreview } from './QuizSummaryPreview'
 import { ScenarioAuthoringPanel } from './ScenarioAuthoringPanel'
@@ -23,7 +26,8 @@ import { Badge } from '../ui/Badge'
 import { Card } from '../ui/Card'
 import { ELEMENT_TYPE_LABEL } from '../../lib/elementTypes'
 import { deleteElement, fetchElements, reorderElements, updateSlide } from '../../lib/slidesApi'
-import type { ElementType, SlideElement, SlideSummary, SlideType } from '../../types/slides'
+import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
+import type { ElementType, Layout, SlideElement, SlideSummary, SlideTemplate, SlideType } from '../../types/slides'
 
 const SLIDE_TYPE_LABEL: Record<SlideType, string> = {
   CONTENT: 'Content',
@@ -74,14 +78,16 @@ function SortableElementRow({ element, onEdit, onDelete }: SortableElementRowPro
 interface SlideCardProps {
   slide: SlideSummary
   dragHandleProps: React.HTMLAttributes<HTMLButtonElement>
+  courseTemplateId: number | null
   onDuplicate: () => void
   onDelete: () => void
-  onRenamed: () => void
+  onUpdated: () => void
 }
 
-export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRenamed }: SlideCardProps) {
+export function SlideCard({ slide, dragHandleProps, courseTemplateId, onDuplicate, onDelete, onUpdated }: SlideCardProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [elements, setElements] = useState<SlideElement[] | null>(null)
+  const [templates, setTemplates] = useState<SlideTemplate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [isRenaming, setIsRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState(slide.title)
@@ -90,6 +96,14 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
   const [editingElement, setEditingElement] = useState<SlideElement | null>(null)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  useEffect(() => {
+    if (slide.slide_type !== 'CONTENT') return
+    fetchSlideTemplates().then(setTemplates).catch(() => {})
+  }, [slide.slide_type])
+
+  const effectiveTemplateId = slide.template_override ?? courseTemplateId
+  const effectiveTemplate = effectiveTemplateId === null ? null : (templates.find((t) => t.id === effectiveTemplateId) ?? null)
 
   function loadElements() {
     if (slide.slide_type !== 'CONTENT') return
@@ -106,10 +120,30 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
     if (titleDraft === slide.title) return
     try {
       await updateSlide(slide.id, { title: titleDraft })
-      onRenamed()
+      onUpdated()
     } catch {
       setError('Could not rename this slide.')
       setTitleDraft(slide.title)
+    }
+  }
+
+  async function handleLayoutChange(layout: Layout) {
+    if (layout === slide.layout) return
+    try {
+      await updateSlide(slide.id, { layout })
+      onUpdated()
+    } catch {
+      setError('Could not update this slide’s layout.')
+    }
+  }
+
+  async function handleTemplateOverrideChange(templateOverride: number | null) {
+    if (templateOverride === slide.template_override) return
+    try {
+      await updateSlide(slide.id, { template_override: templateOverride })
+      onUpdated()
+    } catch {
+      setError('Could not update this slide’s template.')
     }
   }
 
@@ -220,6 +254,33 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
 
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
+      {isEditing && slide.slide_type === 'CONTENT' && (
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-neutral-500">Layout</label>
+          <div className="mt-1.5">
+            <LayoutPicker value={slide.layout} onChange={(layout) => void handleLayoutChange(layout)} />
+          </div>
+        </div>
+      )}
+
+      {isEditing && slide.slide_type === 'CONTENT' && (
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-neutral-500">Template</label>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            Defaults to the course's template. Only set this to make this one slide deliberately differ.
+          </p>
+          <div className="mt-1.5">
+            <TemplatePicker
+              templates={templates}
+              value={slide.template_override}
+              onChange={(templateId) => void handleTemplateOverrideChange(templateId)}
+              allowNone
+              noneLabel="Use course template"
+            />
+          </div>
+        </div>
+      )}
+
       <div className="mt-4 space-y-3">
         {slide.slide_type === 'QUIZ' ? (
           isEditing ? (
@@ -259,11 +320,7 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
             </SortableContext>
           </DndContext>
         ) : (
-          <div className="space-y-3">
-            {elements.map((element) => (
-              <ElementPreview key={element.id} element={element} />
-            ))}
-          </div>
+          <SlideElementsView elements={elements} layout={slide.layout} template={effectiveTemplate} />
         )}
       </div>
 
@@ -294,6 +351,7 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
           element={null}
           elementType={pendingType}
           nextOrder={(elements?.length ?? 0) + 1}
+          template={effectiveTemplate}
           onSaved={() => {
             setPendingType(null)
             loadElements()
@@ -308,6 +366,7 @@ export function SlideCard({ slide, dragHandleProps, onDuplicate, onDelete, onRen
           element={editingElement}
           elementType={editingElement.element_type}
           nextOrder={editingElement.order}
+          template={effectiveTemplate}
           onSaved={() => {
             setEditingElement(null)
             loadElements()

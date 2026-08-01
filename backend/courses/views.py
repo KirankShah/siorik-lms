@@ -24,7 +24,18 @@ from audit.services import log_action
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 from gamification.services import update_gamification_for_user
 
-from .models import Course, CourseAccess, Element, Enrollment, Lesson, LessonProgress, Module, Slide, SlideProgress
+from .models import (
+    Course,
+    CourseAccess,
+    Element,
+    Enrollment,
+    Lesson,
+    LessonProgress,
+    Module,
+    Slide,
+    SlideProgress,
+    SlideTemplate,
+)
 from .permissions import editable_courses_for_user, visible_courses_for_user
 from .serializers import (
     CourseAccessSerializer,
@@ -40,6 +51,7 @@ from .serializers import (
     SlideProgressSerializer,
     SlideSerializer,
     SlideSummarySerializer,
+    SlideTemplateSerializer,
 )
 from .validators import MAX_LESSON_FILE_SIZE_BYTES
 
@@ -371,6 +383,8 @@ class SlideViewSet(viewsets.ModelViewSet):
                 title=f'{slide.title} (copy)' if slide.title else '',
                 order=Slide.objects.filter(lesson=slide.lesson).count() + 1,
                 slide_type=slide.slide_type,
+                layout=slide.layout,
+                template_override=slide.template_override,
                 estimated_minutes=slide.estimated_minutes,
             )
             for element in slide.elements.order_by('order'):
@@ -452,6 +466,17 @@ class ElementViewSet(viewsets.ModelViewSet):
 
         elements = Element.objects.filter(slide=slide).order_by('order')
         return Response(ElementSerializer(elements, many=True).data)
+
+
+class SlideTemplateViewSet(viewsets.ReadOnlyModelViewSet):
+    """The curated set of slide background templates. Read-only — presets are
+    managed via migration/admin, not the API — and visible to any
+    authenticated user since learners need these colors to render slides too.
+    """
+
+    queryset = SlideTemplate.objects.all()
+    serializer_class = SlideTemplateSerializer
+    permission_classes = [IsAuthenticated]
 
 
 class MediaUploadView(APIView):

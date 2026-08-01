@@ -33,6 +33,17 @@
   overflow-y: auto;
 }
 
+/* The white swatch is invisible against the picker dropdown's own white
+   background (in both the text-color and highlight-color pickers) without a
+   border — and Quill's own default (`border: 1px solid transparent` on every
+   .ql-picker-item, see quill.snow.css) is exactly as invisible, so this has
+   to be a deliberately darker/thicker border, not a token match for the
+   other swatches, to actually read as a distinct option at 16x16px. */
+.rich-text-field-quill .ql-picker.ql-color .ql-picker-item[data-value='#ffffff'],
+.rich-text-field-quill .ql-picker.ql-background .ql-picker-item[data-value='#ffffff'] {
+  border: 2px solid var(--color-neutral-400, #94a3b8) !important;
+}
+
 /* Relabel Quill's built-in "Huge" size option to match the four-tier naming
    (Small / Normal / Large / Extra Large) instructors were asked for. */
 .rich-text-field-quill .ql-picker.ql-size .ql-picker-label[data-value='huge']::before,

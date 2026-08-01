@@ -15,6 +15,7 @@ const FLUSH_EVERY_N_TICKS = 10
 interface SlidePlayerProps {
   slide: SlideSummary
   courseId: number
+  courseTemplateId: number | null
   enrollmentId: number
   existingProgress: SlideProgress | undefined
   onProgressSynced: (enrollment: Enrollment) => void
@@ -26,6 +27,7 @@ interface SlidePlayerProps {
 export function SlidePlayer({
   slide,
   courseId,
+  courseTemplateId,
   enrollmentId,
   existingProgress,
   onProgressSynced,
@@ -117,5 +119,12 @@ export function SlidePlayer({
   if (slide.slide_type === 'SCENARIO') {
     return <ScenarioSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
   }
-  return <ContentSlidePlayer slide={slide} onEnterFullscreen={onEnterFullscreen} isFullscreen={isFullscreen} />
+  return (
+    <ContentSlidePlayer
+      slide={slide}
+      courseTemplateId={courseTemplateId}
+      onEnterFullscreen={onEnterFullscreen}
+      isFullscreen={isFullscreen}
+    />
+  )
 }

@@ -1,18 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Download, Maximize } from 'lucide-react'
-import { ElementPreview } from '../ElementPreview'
+import { SlideElementsView } from '../SlideElementsView'
 import { Button } from '../ui/Button'
 import { fetchElements } from '../../lib/slidesApi'
-import type { SlideElement, SlideSummary } from '../../types/slides'
+import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
+import type { SlideElement, SlideSummary, SlideTemplate } from '../../types/slides'
 
 interface ContentSlidePlayerProps {
   slide: SlideSummary
+  // The course's current template — null if none is set. A slide only
+  // deviates from this via its own template_override.
+  courseTemplateId: number | null
   onEnterFullscreen?: () => void
   isFullscreen?: boolean
 }
 
-export function ContentSlidePlayer({ slide, onEnterFullscreen, isFullscreen = false }: ContentSlidePlayerProps) {
+export function ContentSlidePlayer({
+  slide,
+  courseTemplateId,
+  onEnterFullscreen,
+  isFullscreen = false,
+}: ContentSlidePlayerProps) {
   const [elements, setElements] = useState<SlideElement[] | null>(null)
+  const [templates, setTemplates] = useState<SlideTemplate[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -22,8 +32,17 @@ export function ContentSlidePlayer({ slide, onEnterFullscreen, isFullscreen = fa
       .catch(() => setError('Could not load this slide’s content.'))
   }, [slide.id])
 
+  const effectiveTemplateId = slide.template_override ?? courseTemplateId
+
+  useEffect(() => {
+    if (effectiveTemplateId === null) return
+    fetchSlideTemplates().then(setTemplates).catch(() => {})
+  }, [effectiveTemplateId])
+
   if (error) return <p className="text-sm text-red-600">{error}</p>
   if (!elements) return <p className="text-sm text-neutral-500">Loading…</p>
+
+  const template = effectiveTemplateId === null ? null : (templates.find((t) => t.id === effectiveTemplateId) ?? null)
 
   return (
     <div>
@@ -43,18 +62,16 @@ export function ContentSlidePlayer({ slide, onEnterFullscreen, isFullscreen = fa
       )}
 
       {/* No nested card chrome here — the outer <Card> in CourseDetailPage
-          already provides the white box/border/padding. Rendering another
-          bordered box around this content (as before) doubled the padding
-          and let the two boxes disagree on height. Text stays capped to a
-          comfortable reading width; the card itself sizes purely to
-          whatever this slide actually contains. */}
-      <div className="print-target max-w-3xl space-y-6">
-        <h1 className="text-lg font-semibold text-neutral-900">{slide.title || `Slide ${slide.order}`}</h1>
-        {elements.length === 0 ? (
-          <p className="text-sm text-neutral-400">This slide has no content yet.</p>
-        ) : (
-          elements.map((element) => <ElementPreview key={element.id} element={element} />)
-        )}
+          already provides the white box/border/padding. SlideElementsView
+          supplies its own background box only when a template is in effect,
+          so the plain (no-template) case stays exactly as before. */}
+      <div className="print-target w-full">
+        <SlideElementsView
+          elements={elements}
+          layout={slide.layout}
+          template={template}
+          title={slide.title || `Slide ${slide.order}`}
+        />
       </div>
     </div>
   )

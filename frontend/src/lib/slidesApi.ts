@@ -1,11 +1,13 @@
 import { apiFetch } from './apiClient'
-import type { ElementAlign, ElementType, Slide, SlideElement, SlideSummary, SlideType } from '../types/slides'
+import type { ElementAlign, ElementType, Layout, Slide, SlideElement, SlideSummary, SlideType } from '../types/slides'
 
 export interface SlideInput {
   lesson: number
   title?: string
   order: number
   slide_type: SlideType
+  layout?: Layout
+  template_override?: number | null
   estimated_minutes?: number
 }
 

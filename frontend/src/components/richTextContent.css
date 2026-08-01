@@ -1,0 +1,121 @@
+/* Read-only rendering for Quill-authored rich text (ElementPreview's TEXT/
+   QUOTE cases) — mirrors the subset of quill.snow.css's class-based formats
+   actually exposed by RichTextField's toolbar (align, font, size, indent).
+   Quill's own CSS scopes all of these under a `.ql-editor` ancestor, which
+   only exists inside the live authoring editor (RichTextField) — never in
+   this read-only renderer — so without an equivalent scoped to `.ql-content`
+   here, each of these formats renders correctly while editing and silently
+   reverts to its default the moment the same HTML is read back on a slide.
+   Color/background and bold/italic/underline/strike need no equivalent:
+   Quill emits those as inline styles / native <strong>/<em>/<u>/<s> tags,
+   which need no scoping to already render correctly anywhere. */
+
+.ql-content .ql-align-center {
+  text-align: center;
+}
+.ql-content .ql-align-right {
+  text-align: right;
+}
+.ql-content .ql-align-justify {
+  text-align: justify;
+}
+
+.ql-content .ql-font-serif {
+  font-family: Georgia, 'Times New Roman', serif;
+}
+.ql-content .ql-font-monospace {
+  font-family: Monaco, 'Courier New', monospace;
+}
+
+.ql-content .ql-size-small {
+  font-size: 0.75em;
+}
+.ql-content .ql-size-large {
+  font-size: 1.5em;
+}
+.ql-content .ql-size-huge {
+  font-size: 2.5em;
+}
+
+/* Values match quill.snow.css exactly: 3em per indent level, and 4.5em per
+   level specifically for <li> (list items already carry their own marker
+   padding, so they need more room per level than a plain indented block).
+   Quill's toolbar here has no direction/RTL control, so content can never
+   carry `ql-direction-rtl` alongside these — the `:not(.ql-direction-rtl)`
+   guard quill.snow.css pairs them with is dropped as unreachable. */
+.ql-content .ql-indent-1 {
+  padding-left: 3em;
+}
+.ql-content .ql-indent-2 {
+  padding-left: 6em;
+}
+.ql-content .ql-indent-3 {
+  padding-left: 9em;
+}
+.ql-content .ql-indent-4 {
+  padding-left: 12em;
+}
+.ql-content .ql-indent-5 {
+  padding-left: 15em;
+}
+.ql-content .ql-indent-6 {
+  padding-left: 18em;
+}
+.ql-content .ql-indent-7 {
+  padding-left: 21em;
+}
+.ql-content .ql-indent-8 {
+  padding-left: 24em;
+}
+.ql-content .ql-indent-9 {
+  padding-left: 27em;
+}
+
+.ql-content li.ql-indent-1 {
+  padding-left: 4.5em;
+}
+.ql-content li.ql-indent-2 {
+  padding-left: 7.5em;
+}
+.ql-content li.ql-indent-3 {
+  padding-left: 10.5em;
+}
+.ql-content li.ql-indent-4 {
+  padding-left: 13.5em;
+}
+.ql-content li.ql-indent-5 {
+  padding-left: 16.5em;
+}
+.ql-content li.ql-indent-6 {
+  padding-left: 19.5em;
+}
+.ql-content li.ql-indent-7 {
+  padding-left: 22.5em;
+}
+.ql-content li.ql-indent-8 {
+  padding-left: 25.5em;
+}
+.ql-content li.ql-indent-9 {
+  padding-left: 28.5em;
+}
+
+/* The `li.ql-indent-*` rules above are defensive, not load-bearing: indent on
+   an actual list item never produces a flat `ql-indent-N` class in
+   getSemanticHTML()'s output (confirmed against the installed quill package)
+   — it converts indent level into genuine nested <ul>/<ol> markup instead,
+   e.g. <li>Item<ul><li>Sub-item</li></ul></li>, which already renders
+   correctly with the list-disc/pl-5 rules above (they match any <ul> at any
+   depth). That conversion has its own gap: when an indented <li> has no
+   preceding same-or-lower-level sibling to nest under (the very first item
+   in a list is indented, or an item jumps more than one indent level at
+   once), Quill wraps the nested list in an empty synthetic parent <li>
+   instead of omitting it, which would otherwise render as a stray bullet
+   with nothing beside it. RichTextField.tsx's markPhantomListWrappers tags
+   that exact <li> at save time (a pure-CSS `:has(> ul:only-child)` approach
+   looks tempting but is wrong — `:only-child` ignores text nodes, so it
+   also matches legitimate `<li>Item<ul>...` nesting, which does have real
+   text — telling the two apart needs to see the raw HTML string, not just
+   the parsed element tree, which only the save-time JS pass can do). */
+.ql-content li.ql-empty-list-wrapper {
+  list-style: none;
+}

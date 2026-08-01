@@ -11,9 +11,10 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS } from '@dnd-kit/utilities'
 import { Plus } from 'lucide-react'
 import { useOutletContext } from 'react-router-dom'
+import { LayoutPicker } from '../../components/admin/LayoutPicker'
 import { SlideCard } from '../../components/admin/SlideCard'
 import { createSlide, deleteSlide, duplicateSlide, reorderSlides } from '../../lib/slidesApi'
-import type { SlideSummary, SlideType } from '../../types/slides'
+import type { Layout, SlideSummary, SlideType } from '../../types/slides'
 import type { CourseDashboardContext } from './CourseDashboardLayout'
 
 const SLIDE_TYPE_LABEL: Record<SlideType, string> = {
@@ -25,12 +26,13 @@ const SLIDE_TYPE_LABEL: Record<SlideType, string> = {
 
 interface SortableSlideCardProps {
   slide: SlideSummary
+  courseTemplateId: number | null
   onDuplicate: () => void
   onDelete: () => void
-  onRenamed: () => void
+  onUpdated: () => void
 }
 
-function SortableSlideCard({ slide, onDuplicate, onDelete, onRenamed }: SortableSlideCardProps) {
+function SortableSlideCard({ slide, courseTemplateId, onDuplicate, onDelete, onUpdated }: SortableSlideCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: slide.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
 
@@ -39,9 +41,10 @@ function SortableSlideCard({ slide, onDuplicate, onDelete, onRenamed }: Sortable
       <SlideCard
         slide={slide}
         dragHandleProps={{ ...attributes, ...listeners }}
+        courseTemplateId={courseTemplateId}
         onDuplicate={onDuplicate}
         onDelete={onDelete}
-        onRenamed={onRenamed}
+        onUpdated={onUpdated}
       />
     </div>
   )
@@ -51,13 +54,15 @@ function AddSlideForm({ lessonId, nextOrder, onAdded }: { lessonId: number; next
   const [isOpen, setIsOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [slideType, setSlideType] = useState<SlideType>('CONTENT')
+  const [layout, setLayout] = useState<Layout>('STACKED')
   const [error, setError] = useState<string | null>(null)
 
   async function handleAdd() {
     try {
-      await createSlide({ lesson: lessonId, title, slide_type: slideType, order: nextOrder })
+      await createSlide({ lesson: lessonId, title, slide_type: slideType, layout, order: nextOrder })
       setTitle('')
       setSlideType('CONTENT')
+      setLayout('STACKED')
       setIsOpen(false)
       onAdded()
     } catch {
@@ -104,6 +109,14 @@ function AddSlideForm({ lessonId, nextOrder, onAdded }: { lessonId: number; next
             ))}
           </select>
         </div>
+        {slideType === 'CONTENT' && (
+          <div>
+            <label className="block text-xs font-medium text-neutral-500">Layout</label>
+            <div className="mt-1">
+              <LayoutPicker value={layout} onChange={setLayout} />
+            </div>
+          </div>
+        )}
         <button type="button" onClick={handleAdd} className="text-sm font-medium text-brand-navy hover:underline">
           Add
         </button>
@@ -217,9 +230,10 @@ export function CourseSlidesTab() {
                 <SortableSlideCard
                   key={slide.id}
                   slide={slide}
+                  courseTemplateId={course.template}
                   onDuplicate={() => handleDuplicate(slide)}
                   onDelete={() => handleDelete(slide)}
-                  onRenamed={refreshSlides}
+                  onUpdated={refreshSlides}
                 />
               ))}
             </SortableContext>

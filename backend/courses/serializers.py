@@ -4,7 +4,23 @@ from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
 
-from .models import Course, CourseAccess, Element, Enrollment, Lesson, Module, Slide, SlideProgress
+from .models import (
+    Course,
+    CourseAccess,
+    Element,
+    Enrollment,
+    Lesson,
+    Module,
+    Slide,
+    SlideProgress,
+    SlideTemplate,
+)
+
+
+class SlideTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SlideTemplate
+        fields = ['id', 'name', 'background_css', 'text_color', 'accent_color', 'order']
 
 
 class SlideSummarySerializer(serializers.ModelSerializer):
@@ -12,7 +28,7 @@ class SlideSummarySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Slide
-        fields = ['id', 'title', 'order', 'slide_type', 'estimated_minutes']
+        fields = ['id', 'title', 'order', 'slide_type', 'layout', 'template_override', 'estimated_minutes']
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -52,6 +68,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'content_owner',
             'cover_image',
             'is_published',
+            'template',
             'completion_deadline_days',
             'created_at',
             'updated_at',
@@ -81,6 +98,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'content_owner',
             'cover_image',
             'is_published',
+            'template',
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
@@ -104,6 +122,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'content_owner',
             'cover_image',
             'is_published',
+            'template',
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
@@ -168,6 +187,8 @@ class SlideSerializer(serializers.ModelSerializer):
             'title',
             'order',
             'slide_type',
+            'layout',
+            'template_override',
             'estimated_minutes',
             'created_at',
             'updated_at',

@@ -3,15 +3,18 @@ import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { CurriculumBoard } from '../../components/admin/CurriculumBoard'
+import { TemplatePicker } from '../../components/admin/TemplatePicker'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { useAuth } from '../../context/AuthContext'
 import { fetchOrganizations } from '../../lib/accountsApi'
 import { createCourse, createModule, fetchCourseDetail, updateCourse } from '../../lib/coursesApi'
+import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
 import { slugify } from '../../lib/slugify'
 import type { Organization } from '../../types/auth'
 import type { CourseDetail } from '../../types/courses'
+import type { SlideTemplate } from '../../types/slides'
 
 export function CourseEditorPage() {
   const { slug: slugParam } = useParams<{ slug: string }>()
@@ -22,6 +25,7 @@ export function CourseEditorPage() {
 
   const [course, setCourse] = useState<CourseDetail | null>(null)
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [templates, setTemplates] = useState<SlideTemplate[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [title, setTitle] = useState('')
@@ -31,6 +35,7 @@ export function CourseEditorPage() {
   const [organizationId, setOrganizationId] = useState<number | ''>('')
   const [isPublished, setIsPublished] = useState(false)
   const [coverImage, setCoverImage] = useState<File | null>(null)
+  const [templateId, setTemplateId] = useState<number | null>(null)
   const [completionDeadlineDays, setCompletionDeadlineDays] = useState<number | ''>('')
 
   const [isSaving, setIsSaving] = useState(false)
@@ -46,6 +51,10 @@ export function CourseEditorPage() {
     }
   }, [isPlatformAdmin])
 
+  useEffect(() => {
+    fetchSlideTemplates().then(setTemplates).catch(() => {})
+  }, [])
+
   function loadCourse(slugToLoad: string) {
     fetchCourseDetail(slugToLoad)
       .then((detail) => {
@@ -55,6 +64,7 @@ export function CourseEditorPage() {
         setDescription(detail.description)
         setOrganizationId(detail.organization ?? '')
         setIsPublished(detail.is_published)
+        setTemplateId(detail.template)
         setCompletionDeadlineDays(detail.completion_deadline_days ?? '')
       })
       .catch(() => setLoadError('Could not load this course.'))
@@ -77,6 +87,7 @@ export function CourseEditorPage() {
         organization: isPlatformAdmin ? (organizationId === '' ? null : Number(organizationId)) : null,
         is_published: isPublished,
         cover_image: coverImage,
+        template: templateId,
         completion_deadline_days: completionDeadlineDays === '' ? null : Number(completionDeadlineDays),
       }
       if (isCreateMode) {
@@ -191,6 +202,23 @@ export function CourseEditorPage() {
             <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
             Published
           </label>
+
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">Slide template</label>
+            <p className="mt-1 text-xs text-neutral-400">
+              Applies to every slide in this course that doesn't have its own template override, including slides
+              added later.
+            </p>
+            <div className="mt-2">
+              <TemplatePicker
+                templates={templates}
+                value={templateId}
+                onChange={setTemplateId}
+                allowNone
+                noneLabel="Default"
+              />
+            </div>
+          </div>
 
           <Input
             id="course-deadline"
