@@ -120,7 +120,7 @@ class WordBankToken(models.Model):
     """A FILL_BLANK/WORD_BANK question's draggable token."""
 
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='word_bank_tokens')
-    text = models.CharField(max_length=200)
+    text = models.CharField(max_length=200, blank=True, default='')
     # Null means this token is a distractor, not the correct answer for any blank.
     correct_blank_index = models.PositiveIntegerField(null=True, blank=True)
     order = models.PositiveIntegerField(default=0)
@@ -136,7 +136,7 @@ class CategoryBucket(models.Model):
     """A CATEGORIZE question's drop target, e.g. 'Predicate Offence'."""
 
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='buckets')
-    label = models.CharField(max_length=255)
+    label = models.CharField(max_length=255, blank=True, default='')
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
