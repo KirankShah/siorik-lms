@@ -103,7 +103,7 @@ class Choice(models.Model):
     """
 
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='choices')
-    choice_text = models.CharField(max_length=500)
+    choice_text = models.CharField(max_length=500, blank=True, default='')
     is_correct = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     match_text = models.CharField(max_length=500, blank=True, default='')

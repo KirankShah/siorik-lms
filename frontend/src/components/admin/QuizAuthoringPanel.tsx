@@ -16,8 +16,12 @@ export function QuizAuthoringPanel({ slideId, defaultTitle }: QuizAuthoringPanel
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  function load() {
-    setIsLoading(true)
+  // showLoading is false for background refreshes triggered by edits further
+  // down the tree (e.g. adding a Choice) — those must update `quiz` in place
+  // without unmounting QuizEditor/QuestionForm, or their local edit state
+  // (unsaved question type, isEditing, etc.) would be wiped on every save.
+  function load(showLoading = true) {
+    if (showLoading) setIsLoading(true)
     fetchQuizForSlide(slideId)
       .then(setQuiz)
       .catch(() => setError('Could not load this quiz.'))
@@ -25,7 +29,7 @@ export function QuizAuthoringPanel({ slideId, defaultTitle }: QuizAuthoringPanel
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [slideId])
+  useEffect(() => load(), [slideId])
 
   async function handleCreateQuiz() {
     try {
@@ -57,7 +61,7 @@ export function QuizAuthoringPanel({ slideId, defaultTitle }: QuizAuthoringPanel
     )
   }
 
-  return <QuizEditor quiz={quiz} onChanged={load} />
+  return <QuizEditor quiz={quiz} onChanged={() => load(false)} />
 }
 
 function QuizEditor({ quiz, onChanged }: { quiz: QuizDetail; onChanged: () => void }) {
