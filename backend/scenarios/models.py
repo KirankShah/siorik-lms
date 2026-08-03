@@ -28,7 +28,7 @@ class ScenarioNode(models.Model):
 
 class ScenarioChoice(models.Model):
     node = models.ForeignKey(ScenarioNode, on_delete=models.CASCADE, related_name='choices')
-    choice_text = models.CharField(max_length=500)
+    choice_text = models.CharField(max_length=500, blank=True, default='')
     # Null means picking this choice ends the scenario.
     next_node = models.ForeignKey(
         ScenarioNode, on_delete=models.SET_NULL, null=True, blank=True, related_name='incoming_choices'

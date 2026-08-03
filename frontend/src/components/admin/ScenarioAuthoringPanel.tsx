@@ -352,6 +352,12 @@ function ChoiceEditor({
         rows={2}
         className="mt-1.5 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
       />
+      {!choice.feedback_text.trim() && (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-red-600">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" aria-hidden="true" />
+          Missing feedback
+        </p>
+      )}
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   )
