@@ -1,47 +1,31 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { injectBlankMarkup } from '../lib/fillBlankMarkup'
+import { FillBlankSentence } from './FillBlankSentence'
 
 interface FillBlankTextAnswerProps {
-  questionHtml: string
+  questionText: string
   values: Record<number, string>
   onChange: (blankIndex: number, value: string) => void
 }
 
-// Portals a text input into each {{N}} placeholder's <span> marker (see
-// injectBlankMarkup), so the blank sits inline within the question's own
-// HTML instead of in a separate list below it.
-export function FillBlankTextAnswer({ questionHtml, values, onChange }: FillBlankTextAnswerProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [targets, setTargets] = useState<Record<number, HTMLElement>>({})
-  const injectedHtml = useMemo(() => injectBlankMarkup(questionHtml), [questionHtml])
-
-  useLayoutEffect(() => {
-    if (!containerRef.current) return
-    const found: Record<number, HTMLElement> = {}
-    containerRef.current.querySelectorAll('[data-blank-index]').forEach((el) => {
-      found[Number(el.getAttribute('data-blank-index'))] = el as HTMLElement
-    })
-    setTargets(found)
-  }, [injectedHtml])
-
+// Renders the question text with a fully-controlled <input> inline at each
+// {{N}} placeholder — a first-class part of the React tree, not something
+// injected into raw HTML after the fact (no dangerouslySetInnerHTML, no
+// querySelector, no portals).
+export function FillBlankTextAnswer({ questionText, values, onChange }: FillBlankTextAnswerProps) {
   return (
-    <div>
-      <div ref={containerRef} className="text-sm leading-relaxed text-neutral-900" dangerouslySetInnerHTML={{ __html: injectedHtml }} />
-      {Object.entries(targets).map(([indexStr, el]) => {
-        const index = Number(indexStr)
-        return createPortal(
+    <div className="text-sm leading-relaxed text-neutral-900">
+      <FillBlankSentence
+        questionText={questionText}
+        renderBlank={(index) => (
           <input
             type="text"
+            maxLength={12}
             value={values[index] ?? ''}
             onChange={(e) => onChange(index, e.target.value)}
-            placeholder={`Blank ${index}`}
-            className="mx-1 inline-block w-32 rounded border border-neutral-300 px-2 py-0.5 text-sm align-middle"
-          />,
-          el,
-          `blank-${index}`,
-        )
-      })}
+            placeholder="Your answer..."
+            className="mx-1 inline-block w-[12ch] rounded border border-yellow-500 bg-yellow-200 px-2 py-0.5 text-sm align-middle text-neutral-900 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          />
+        )}
+      />
     </div>
   )
 }

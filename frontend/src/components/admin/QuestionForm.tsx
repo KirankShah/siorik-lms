@@ -3,6 +3,7 @@ import { extractBlankIndexes } from '../../lib/fillBlankMarkup'
 import { deleteQuestion, updateQuestion } from '../../lib/quizApi'
 import type { FillBlankMode, Question, QuestionType } from '../../types/quiz'
 import { AnswerOptionsEditor } from './AnswerOptionsEditor'
+import { FillBlankSentence } from '../FillBlankSentence'
 import { RichTextField } from './RichTextField'
 
 const QUESTION_TYPES: { value: QuestionType; label: string }[] = [
@@ -85,7 +86,20 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
           <p className="text-xs font-medium text-neutral-400">
             {index + 1}. {QUESTION_TYPES.find((t) => t.value === question.question_type)?.label} · {question.marks} marks
           </p>
-          <div className="mt-1 text-sm text-neutral-900" dangerouslySetInnerHTML={{ __html: question.question_text }} />
+          {question.question_type === 'FILL_BLANK' ? (
+            <p className="mt-1 text-sm text-neutral-900">
+              <FillBlankSentence
+                questionText={question.question_text}
+                renderBlank={(index) => (
+                  <span className="mx-1 rounded border border-yellow-500 bg-yellow-100 px-1.5 text-xs font-medium text-neutral-500">
+                    Blank {index}
+                  </span>
+                )}
+              />
+            </p>
+          ) : (
+            <div className="mt-1 text-sm text-neutral-900" dangerouslySetInnerHTML={{ __html: question.question_text }} />
+          )}
           {question.image && <img src={question.image} alt="" className="mt-2 max-h-32 rounded border border-neutral-200" />}
         </div>
         <div className="flex shrink-0 gap-3 text-sm">

@@ -1,6 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { createPortal } from 'react-dom'
 import {
   DndContext,
   DragOverlay,
@@ -14,7 +13,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { injectBlankMarkup } from '../lib/fillBlankMarkup'
+import { FillBlankSentence } from './FillBlankSentence'
 
 export interface WordBankTokenOption {
   id: number
@@ -22,7 +21,7 @@ export interface WordBankTokenOption {
 }
 
 interface WordBankAnswerProps {
-  questionHtml: string
+  questionText: string
   tokens: WordBankTokenOption[]
   // blankIndex -> tokenId
   placements: Record<number, number>
@@ -82,24 +81,13 @@ function BankDroppable({ children }: { children: ReactNode }) {
   )
 }
 
-// Same inline-portal technique as FillBlankTextAnswer, but each blank is a
-// dnd-kit drop target instead of a text box, fed by a shuffled bank of
-// draggable tokens below the question.
-export function WordBankAnswer({ questionHtml, tokens, placements, onChange }: WordBankAnswerProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [targets, setTargets] = useState<Record<number, HTMLElement>>({})
+// Each {{N}} placeholder in the question text renders as a dnd-kit drop
+// target directly inline in the React tree — no HTML injection, DOM
+// querying, or portals — fed by a shuffled bank of draggable tokens below
+// the question.
+export function WordBankAnswer({ questionText, tokens, placements, onChange }: WordBankAnswerProps) {
   const [activeId, setActiveId] = useState<number | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
-  const injectedHtml = useMemo(() => injectBlankMarkup(questionHtml), [questionHtml])
-
-  useLayoutEffect(() => {
-    if (!containerRef.current) return
-    const found: Record<number, HTMLElement> = {}
-    containerRef.current.querySelectorAll('[data-blank-index]').forEach((el) => {
-      found[Number(el.getAttribute('data-blank-index'))] = el as HTMLElement
-    })
-    setTargets(found)
-  }, [injectedHtml])
 
   const placedTokenIds = new Set(Object.values(placements))
   const unplaced = tokens.filter((token) => !placedTokenIds.has(token.id))
@@ -127,16 +115,12 @@ export function WordBankAnswer({ questionHtml, tokens, placements, onChange }: W
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div
-        ref={containerRef}
-        className="text-sm leading-relaxed text-neutral-900"
-        dangerouslySetInnerHTML={{ __html: injectedHtml }}
-      />
-      {Object.entries(targets).map(([indexStr, el]) => {
-        const index = Number(indexStr)
-        const placedToken = tokens.find((token) => token.id === placements[index])
-        return createPortal(<BlankDropTarget blankIndex={index} placedToken={placedToken} />, el, `blank-${index}`)
-      })}
+      <div className="text-sm leading-relaxed text-neutral-900">
+        <FillBlankSentence
+          questionText={questionText}
+          renderBlank={(index) => <BlankDropTarget blankIndex={index} placedToken={tokens.find((token) => token.id === placements[index])} />}
+        />
+      </div>
       <div>
         <p className="mb-1 text-xs font-medium text-neutral-500">Word bank</p>
         <BankDroppable>

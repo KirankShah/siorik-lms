@@ -3,6 +3,7 @@ import { ApiError } from '../lib/apiClient'
 import { downloadCertificate, issueCertificate } from '../lib/certificatesApi'
 import { fetchQuizDetail, submitQuizAttempt } from '../lib/quizApi'
 import { CategorizeAnswer } from './CategorizeAnswer'
+import { FillBlankSentence } from './FillBlankSentence'
 import { FillBlankTextAnswer } from './FillBlankTextAnswer'
 import { HotspotAnswer } from './HotspotAnswer'
 import { MatchingAnswer } from './MatchingAnswer'
@@ -330,14 +331,14 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
                 {question.question_type === 'FILL_BLANK' ? (
                   question.fill_blank_mode === 'WORD_BANK' ? (
                     <WordBankAnswer
-                      questionHtml={question.question_text}
+                      questionText={question.question_text}
                       tokens={question.word_bank_tokens.map((t) => ({ id: t.id, text: t.text }))}
                       placements={getWordBankValue(question)}
                       onChange={(next) => setWordBankAnswer(question.id, next)}
                     />
                   ) : (
                     <FillBlankTextAnswer
-                      questionHtml={question.question_text}
+                      questionText={question.question_text}
                       values={getFillBlankTextValues(question)}
                       onChange={(blankIndex, value) => setFillBlankTextValue(question.id, blankIndex, value)}
                     />
@@ -432,7 +433,9 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
             return (
               <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
                 <div className="flex items-start justify-between gap-4">
-                  <p className="text-sm font-medium text-neutral-900">{question.question_text}</p>
+                  <p className="text-sm font-medium text-neutral-900">
+                    {question.question_type !== 'FILL_BLANK' && question.question_text}
+                  </p>
                   <span
                     className={`shrink-0 text-xs font-medium ${
                       answer?.is_correct ? 'text-emerald-600' : 'text-red-600'
@@ -533,50 +536,89 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
                     </div>
                   )
                 ) : question.question_type === 'FILL_BLANK' && question.fill_blank_mode === 'WORD_BANK' ? (
-                  <ul className="mt-2 space-y-1">
-                    {Object.keys(answer?.correct_word_bank_placements ?? answer?.word_bank_placements ?? {})
-                      .map(Number)
-                      .sort((a, b) => a - b)
-                      .map((blankIndex) => {
-                        const placedTokenId = answer?.word_bank_placements[String(blankIndex)]
-                        const correctTokenId = answer?.correct_word_bank_placements?.[String(blankIndex)]
-                        const isCorrect = placedTokenId !== undefined && placedTokenId === correctTokenId
-                        const placedToken = question.word_bank_tokens.find((t) => t.id === placedTokenId)
-                        const correctToken = question.word_bank_tokens.find((t) => t.id === correctTokenId)
-                        return (
-                          <li
-                            key={blankIndex}
-                            className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
-                          >
-                            Blank {blankIndex}:{' '}
-                            {placedToken ? placedToken.text : <span className="italic text-neutral-400">not placed</span>}
-                            {!isCorrect && correctToken && <span className="ml-1 text-emerald-700">(correct: {correctToken.text})</span>}
-                          </li>
-                        )
-                      })}
-                  </ul>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm leading-relaxed text-neutral-700">
+                      <FillBlankSentence
+                        questionText={question.question_text}
+                        renderBlank={(blankIndex) => {
+                          const placedTokenId = answer?.word_bank_placements[String(blankIndex)]
+                          const correctTokenId = answer?.correct_word_bank_placements?.[String(blankIndex)]
+                          const isCorrect = placedTokenId !== undefined && placedTokenId === correctTokenId
+                          const placedToken = question.word_bank_tokens.find((t) => t.id === placedTokenId)
+                          return placedToken ? (
+                            <span className={isCorrect ? 'font-medium text-emerald-700' : 'font-medium text-red-600 line-through'}>
+                              {placedToken.text}
+                            </span>
+                          ) : (
+                            <span className="italic text-neutral-400">(blank)</span>
+                          )
+                        }}
+                      />
+                    </p>
+                    <ul className="space-y-1">
+                      {Object.keys(answer?.correct_word_bank_placements ?? answer?.word_bank_placements ?? {})
+                        .map(Number)
+                        .sort((a, b) => a - b)
+                        .map((blankIndex) => {
+                          const placedTokenId = answer?.word_bank_placements[String(blankIndex)]
+                          const correctTokenId = answer?.correct_word_bank_placements?.[String(blankIndex)]
+                          const isCorrect = placedTokenId !== undefined && placedTokenId === correctTokenId
+                          const placedToken = question.word_bank_tokens.find((t) => t.id === placedTokenId)
+                          const correctToken = question.word_bank_tokens.find((t) => t.id === correctTokenId)
+                          return (
+                            <li
+                              key={blankIndex}
+                              className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
+                            >
+                              Your answer:{' '}
+                              {placedToken ? placedToken.text : <span className="italic text-neutral-400">not placed</span>}
+                              {!isCorrect && correctToken && <span className="ml-1 text-emerald-700">(correct: {correctToken.text})</span>}
+                            </li>
+                          )
+                        })}
+                    </ul>
+                  </div>
                 ) : question.question_type === 'FILL_BLANK' ? (
-                  <ul className="mt-2 space-y-1">
-                    {Object.keys(answer?.correct_fill_blank_text ?? answer?.fill_blank_text ?? {})
-                      .map(Number)
-                      .sort((a, b) => a - b)
-                      .map((blankIndex) => {
-                        const typed = answer?.fill_blank_text[String(blankIndex)] ?? ''
-                        const accepted = answer?.correct_fill_blank_text?.[String(blankIndex)] ?? []
-                        const isCorrect = accepted.some((a) => a.trim().toLowerCase() === typed.trim().toLowerCase())
-                        return (
-                          <li
-                            key={blankIndex}
-                            className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
-                          >
-                            Blank {blankIndex}: {typed || <span className="italic text-neutral-400">not answered</span>}
-                            {!isCorrect && accepted.length > 0 && (
-                              <span className="ml-1 text-emerald-700">(accepted: {accepted.join(', ')})</span>
-                            )}
-                          </li>
-                        )
-                      })}
-                  </ul>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm leading-relaxed text-neutral-700">
+                      <FillBlankSentence
+                        questionText={question.question_text}
+                        renderBlank={(blankIndex) => {
+                          const typed = answer?.fill_blank_text[String(blankIndex)] ?? ''
+                          const accepted = answer?.correct_fill_blank_text?.[String(blankIndex)] ?? []
+                          const isCorrect = accepted.some((a) => a.trim().toLowerCase() === typed.trim().toLowerCase())
+                          return typed ? (
+                            <span className={isCorrect ? 'font-medium text-emerald-700' : 'font-medium text-red-600 line-through'}>
+                              {typed}
+                            </span>
+                          ) : (
+                            <span className="italic text-neutral-400">(blank)</span>
+                          )
+                        }}
+                      />
+                    </p>
+                    <ul className="space-y-1">
+                      {Object.keys(answer?.correct_fill_blank_text ?? answer?.fill_blank_text ?? {})
+                        .map(Number)
+                        .sort((a, b) => a - b)
+                        .map((blankIndex) => {
+                          const typed = answer?.fill_blank_text[String(blankIndex)] ?? ''
+                          const accepted = answer?.correct_fill_blank_text?.[String(blankIndex)] ?? []
+                          const isCorrect = accepted.some((a) => a.trim().toLowerCase() === typed.trim().toLowerCase())
+                          return (
+                            <li
+                              key={blankIndex}
+                              className={`text-sm ${isCorrect ? 'font-medium text-emerald-700' : 'text-neutral-700'}`}
+                            >
+                              Your answer: {typed || <span className="italic text-neutral-400">not answered</span>}
+                              {!isCorrect && accepted.length > 0 && (
+                                <span className="ml-1 text-emerald-700">(accepted: {accepted.join(', ')})</span>
+                              )}
+                            </li>
+                          )
+                        })}
+                    </ul>
+                  </div>
                 ) : (
                   <ul className="mt-2 space-y-1">
                     {question.choices.map((choice) => {
