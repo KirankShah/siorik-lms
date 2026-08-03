@@ -1004,7 +1004,12 @@ function HotspotEditor({
   }
 
   if (!image) {
-    return <p className="text-xs italic text-neutral-400">Upload an image above, then draw regions on it here.</p>
+    return (
+      <p className="text-xs italic text-neutral-400">
+        Select an image above, then click "Save question" to upload it — this section will show the image and drawing
+        canvas automatically once it's saved.
+      </p>
+    )
   }
 
   const previewBox =
