@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { extractBlankIndexes } from '../../lib/fillBlankMarkup'
+import { decodeHtmlEntitiesIfPresent } from '../../lib/htmlEntities'
 import { deleteQuestion, updateQuestion } from '../../lib/quizApi'
 import type { FillBlankMode, Question, QuestionType } from '../../types/quiz'
 import { AnswerOptionsEditor } from './AnswerOptionsEditor'
@@ -54,8 +55,8 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
         marks,
         video_url: videoUrl,
         explanation,
-        feedback_correct: feedbackCorrect,
-        feedback_incorrect: feedbackIncorrect,
+        feedback_correct: decodeHtmlEntitiesIfPresent(feedbackCorrect),
+        feedback_incorrect: decodeHtmlEntitiesIfPresent(feedbackIncorrect),
         // Only include image when a new file was actually picked — sending
         // `image: null` would clear any existing image on every save.
         ...(image ? { image } : {}),

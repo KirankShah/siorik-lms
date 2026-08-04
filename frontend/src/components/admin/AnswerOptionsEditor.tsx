@@ -11,6 +11,7 @@ import {
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical } from 'lucide-react'
+import { decodeHtmlEntitiesIfPresent } from '../../lib/htmlEntities'
 import {
   createCategoryBucket,
   createCategorizeItem,
@@ -192,7 +193,10 @@ function ChoiceListEditor({
   }
 
   async function handleTextChange(choice: Choice, text: string) {
-    await withErrorHandling(() => updateChoice(choice.id, { choice_text: text }), 'Could not update option.')
+    await withErrorHandling(
+      () => updateChoice(choice.id, { choice_text: decodeHtmlEntitiesIfPresent(text) }),
+      'Could not update option.',
+    )
   }
 
   async function handleRemove(choiceId: number) {
@@ -339,7 +343,10 @@ function FillBlankTextEditor({
   }
 
   async function handleTextChange(choice: Choice, text: string) {
-    await withErrorHandling(() => updateChoice(choice.id, { choice_text: text }), 'Could not update accepted answer.')
+    await withErrorHandling(
+      () => updateChoice(choice.id, { choice_text: decodeHtmlEntitiesIfPresent(text) }),
+      'Could not update accepted answer.',
+    )
   }
 
   async function handleBlankIndexChange(choice: Choice, blankIndex: number) {
@@ -409,7 +416,10 @@ function WordBankEditor({
   }
 
   async function handleTextChange(token: WordBankToken, text: string) {
-    await withErrorHandling(() => updateWordBankToken(token.id, { text }), 'Could not update token.')
+    await withErrorHandling(
+      () => updateWordBankToken(token.id, { text: decodeHtmlEntitiesIfPresent(text) }),
+      'Could not update token.',
+    )
   }
 
   async function handleBlankIndexChange(token: WordBankToken, blankIndex: number | null) {
@@ -538,7 +548,10 @@ function MatchingEditor({
   }
 
   async function handleChange(choice: Choice, field: 'choice_text' | 'match_text', value: string) {
-    await withErrorHandling(() => updateChoice(choice.id, { [field]: value }), 'Could not update pair.')
+    await withErrorHandling(
+      () => updateChoice(choice.id, { [field]: decodeHtmlEntitiesIfPresent(value) }),
+      'Could not update pair.',
+    )
   }
 
   async function handleRemove(choiceId: number) {
@@ -640,7 +653,10 @@ function OrderingEditor({
   }
 
   async function handleTextChange(choice: Choice, text: string) {
-    await withErrorHandling(() => updateChoice(choice.id, { choice_text: text }), 'Could not update item.')
+    await withErrorHandling(
+      () => updateChoice(choice.id, { choice_text: decodeHtmlEntitiesIfPresent(text) }),
+      'Could not update item.',
+    )
   }
 
   async function handleRemove(choiceId: number) {
@@ -812,7 +828,10 @@ function CategorizeEditor({
   }
 
   async function handleBucketChange(bucket: CategoryBucket, label: string) {
-    await withErrorHandling(() => updateCategoryBucket(bucket.id, { label }), 'Could not update bucket.')
+    await withErrorHandling(
+      () => updateCategoryBucket(bucket.id, { label: decodeHtmlEntitiesIfPresent(label) }),
+      'Could not update bucket.',
+    )
   }
 
   async function handleRemoveBucket(bucketId: number) {
@@ -847,7 +866,10 @@ function CategorizeEditor({
   }
 
   async function handleItemTextChange(item: CategorizeItem, text: string) {
-    await withErrorHandling(() => updateCategorizeItem(item.id, { item_text: text }), 'Could not update item.')
+    await withErrorHandling(
+      () => updateCategorizeItem(item.id, { item_text: decodeHtmlEntitiesIfPresent(text) }),
+      'Could not update item.',
+    )
   }
 
   async function handleItemImageChange(item: CategorizeItem, file: File) {

@@ -320,13 +320,17 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
         <div className="space-y-6">
           {quiz.questions.map((question, index) => (
             <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
-              <p className="text-sm font-medium text-neutral-900">
-                {index + 1}.{' '}
-                {question.question_type !== 'FILL_BLANK' && question.question_text}{' '}
-                <span className="font-normal text-neutral-400">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1 text-sm font-medium text-neutral-900">
+                  <span className="text-neutral-400">{index + 1}.</span>{' '}
+                  {question.question_type !== 'FILL_BLANK' && (
+                    <div className="inline-block align-top" dangerouslySetInnerHTML={{ __html: question.question_text }} />
+                  )}
+                </div>
+                <span className="shrink-0 text-sm font-normal text-neutral-400">
                   ({question.points} {question.points === 1 ? 'point' : 'points'})
                 </span>
-              </p>
+              </div>
               <div className="mt-3">
                 {question.question_type === 'FILL_BLANK' ? (
                   question.fill_blank_mode === 'WORD_BANK' ? (
@@ -433,9 +437,11 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
             return (
               <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
                 <div className="flex items-start justify-between gap-4">
-                  <p className="text-sm font-medium text-neutral-900">
-                    {question.question_type !== 'FILL_BLANK' && question.question_text}
-                  </p>
+                  <div className="min-w-0 flex-1 text-sm font-medium text-neutral-900">
+                    {question.question_type !== 'FILL_BLANK' && (
+                      <div dangerouslySetInnerHTML={{ __html: question.question_text }} />
+                    )}
+                  </div>
                   <span
                     className={`shrink-0 text-xs font-medium ${
                       answer?.is_correct ? 'text-emerald-600' : 'text-red-600'
