@@ -9,12 +9,28 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { useAuth } from '../../context/AuthContext'
 import { fetchOrganizations } from '../../lib/accountsApi'
+import { ApiError } from '../../lib/apiClient'
 import { createCourse, createModule, fetchCourseDetail, updateCourse } from '../../lib/coursesApi'
 import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
 import { slugify } from '../../lib/slugify'
 import type { Organization } from '../../types/auth'
 import type { CourseDetail } from '../../types/courses'
 import type { SlideTemplate } from '../../types/slides'
+
+function describeSaveError(err: unknown): string {
+  if (err instanceof ApiError && err.body && typeof err.body === 'object') {
+    const body = err.body as Record<string, unknown>
+    const field = Object.keys(body)[0]
+    const value = field ? body[field] : null
+    const message = Array.isArray(value) ? value[0] : typeof value === 'string' ? value : null
+    if (typeof message === 'string') {
+      return field && field !== 'non_field_errors' && field !== 'detail'
+        ? `Could not save the course: ${field} — ${message}`
+        : `Could not save the course: ${message}`
+    }
+  }
+  return 'Could not save the course. Please try again.'
+}
 
 export function CourseEditorPage() {
   const { slug: slugParam } = useParams<{ slug: string }>()
@@ -98,8 +114,8 @@ export function CourseEditorPage() {
         setCourse(updated)
         setSaveSuccess(true)
       }
-    } catch {
-      setSaveError('Could not save the course. Check the slug is unique and try again.')
+    } catch (err) {
+      setSaveError(describeSaveError(err))
     } finally {
       setIsSaving(false)
     }

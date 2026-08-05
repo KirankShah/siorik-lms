@@ -41,7 +41,7 @@ class Course(models.Model):
         ORGANIZATION = 'ORGANIZATION', 'Organization'
 
     title = models.CharField(max_length=255)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(max_length=255, unique=True)
     description = models.TextField(blank=True, validators=[MaxLengthValidator(MAX_DESCRIPTION_LENGTH)])
     organization = models.ForeignKey(
         Organization,
