@@ -28,7 +28,16 @@ class SlideSummarySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Slide
-        fields = ['id', 'title', 'order', 'slide_type', 'layout', 'template_override', 'estimated_minutes']
+        fields = [
+            'id',
+            'title',
+            'order',
+            'slide_type',
+            'layout',
+            'image_column_width',
+            'template_override',
+            'estimated_minutes',
+        ]
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -188,6 +197,7 @@ class SlideSerializer(serializers.ModelSerializer):
             'order',
             'slide_type',
             'layout',
+            'image_column_width',
             'template_override',
             'estimated_minutes',
             'created_at',

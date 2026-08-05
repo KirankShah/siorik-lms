@@ -7,13 +7,21 @@ export interface ModalProps {
   children: ReactNode
   footer?: ReactNode
   widthClassName?: string
+  maxHeightClassName?: string
 }
 
-export function Modal({ title, onClose, children, footer, widthClassName = 'max-w-lg' }: ModalProps) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+  widthClassName = 'max-w-lg',
+  maxHeightClassName = 'max-h-[85vh]',
+}: ModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className={`relative flex max-h-[85vh] w-full ${widthClassName} flex-col overflow-hidden rounded-xl bg-white shadow-xl`}>
+      <div className={`relative flex ${maxHeightClassName} w-full ${widthClassName} flex-col overflow-hidden rounded-xl bg-white shadow-xl`}>
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
           <h2 className="text-sm font-semibold text-neutral-900">{title}</h2>
           <button

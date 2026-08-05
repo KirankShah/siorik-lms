@@ -57,7 +57,16 @@ export function ScenarioPlayer({ slideId, nodes, onCompleted }: ScenarioPlayerPr
           {currentNode.prompt_image && (
             <img src={currentNode.prompt_image} alt="" className="mb-3 max-h-64 w-full rounded object-cover" />
           )}
-          <div className="text-sm text-neutral-900" dangerouslySetInnerHTML={{ __html: currentNode.prompt }} />
+          {/* w-full min-w-0 is what lets this actually shrink to its
+              container instead of growing to fit its unwrapped content —
+              overflow-wrap then allows breaking within an unbroken run
+              (e.g. Word-pasted &nbsp;-joined text) as a last resort once
+              there's nowhere left to grow. Matches ElementPreview's TEXT/
+              QUOTE rendering, the other place rich text renders read-only. */}
+          <div
+            className="w-full min-w-0 text-sm text-neutral-900 [overflow-wrap:anywhere]"
+            dangerouslySetInnerHTML={{ __html: currentNode.prompt }}
+          />
           <div className="mt-4 space-y-2">
             {currentNode.choices.map((choice) => (
               <button

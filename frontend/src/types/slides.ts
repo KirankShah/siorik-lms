@@ -2,6 +2,12 @@ export type SlideType = 'CONTENT' | 'QUIZ' | 'ASSIGNMENT' | 'SCENARIO'
 
 export type Layout = 'STACKED' | 'IMAGE_LEFT' | 'IMAGE_RIGHT'
 
+// IMAGE_LEFT/IMAGE_RIGHT only — caps how wide the docked image column can
+// grow (35% / 45% / 55% of canvas width; see SlideElementsView's
+// canvasMode). The image still auto-sizes to its own aspect ratio up to
+// that cap.
+export type ImageColumnWidth = 'COMPACT' | 'STANDARD' | 'WIDE'
+
 export type ElementType =
   | 'TEXT'
   | 'IMAGE'
@@ -33,6 +39,7 @@ export interface SlideSummary {
   order: number
   slide_type: SlideType
   layout: Layout
+  image_column_width: ImageColumnWidth
   // Null (the common case) means this slide follows the course's current
   // template — see Course.template in courses.ts.
   template_override: number | null

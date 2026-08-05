@@ -163,6 +163,7 @@ export function CourseDetailPage() {
     return (
       <FullscreenSlideOverlay
         activeEntry={activeEntry}
+        isCanvasSlide={activeEntry.slide.slide_type === 'CONTENT'}
         hasPrevious={activeIndex > 0}
         hasNext={activeIndex < entries.length - 1}
         onPrevious={() => goToOffset(-1)}

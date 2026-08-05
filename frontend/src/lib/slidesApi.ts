@@ -1,5 +1,5 @@
 import { apiFetch } from './apiClient'
-import type { ElementAlign, ElementType, Layout, Slide, SlideElement, SlideSummary, SlideType } from '../types/slides'
+import type { ElementAlign, ElementType, ImageColumnWidth, Layout, Slide, SlideElement, SlideSummary, SlideType } from '../types/slides'
 
 export interface SlideInput {
   lesson: number
@@ -7,6 +7,7 @@ export interface SlideInput {
   order: number
   slide_type: SlideType
   layout?: Layout
+  image_column_width?: ImageColumnWidth
   template_override?: number | null
   estimated_minutes?: number
 }

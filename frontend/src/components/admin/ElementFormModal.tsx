@@ -117,6 +117,13 @@ export function ElementFormModal({
     <Modal
       title={`${element ? 'Edit' : 'Add'} ${ELEMENT_TYPE_LABEL[elementType]}`}
       onClose={onClose}
+      // TEXT/QUOTE need real room: Quill's toolbar (bold/italic/underline/
+      // strike, font, size, color, background, align, lists, indent, link,
+      // clean) doesn't fit the default max-w-lg without cramming, which is
+      // what was pushing the color/highlight swatch dropdowns (including the
+      // white swatch) outside the modal's visible bounds.
+      widthClassName={elementType === 'TEXT' || elementType === 'QUOTE' ? 'max-w-3xl' : undefined}
+      maxHeightClassName={elementType === 'TEXT' || elementType === 'QUOTE' ? 'max-h-[92vh]' : undefined}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -137,7 +144,7 @@ export function ElementFormModal({
               onChange={setRichText}
               onColorApplied={handleColorApplied}
               placeholder={elementType === 'QUOTE' ? 'Quote text…' : 'Text content…'}
-              minHeight="360px"
+              minHeight="480px"
             />
             {colorWarning && <p className="mt-1.5 text-xs text-amber-600">{colorWarning}</p>}
           </div>

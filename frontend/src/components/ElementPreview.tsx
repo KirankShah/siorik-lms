@@ -68,12 +68,32 @@ interface ElementPreviewProps {
   // size with empty space around it — `align` stops making sense once the
   // image fills the column, so this takes over sizing entirely for IMAGE.
   fill?: boolean
+  // Set by SlideElementsView's fixed-canvas (student player) rendering only
+  // — never by the admin preview. `coverFill` is the docked-column media in
+  // IMAGE_LEFT/IMAGE_RIGHT, which now has a fixed, known column height (the
+  // canvas's). For VIDEO_AUDIO this fills the column edge-to-edge; for IMAGE
+  // it renders identically to `fill` below (contain, never cropped) — the
+  // column div itself (SlideElementsView) paints a background matching the
+  // slide's template/default so IMAGE's inevitable letterboxing blends in
+  // rather than showing a gap. `dominant` is a STACKED slide whose only
+  // element is a media one (e.g. a video with just a title) — it renders
+  // large and centered instead of at its normal capped size, since there's
+  // nothing else on the slide competing for space.
+  coverFill?: boolean
+  dominant?: boolean
 }
 
 // Shared read-only renderer for a Slide's elements — used by both the admin
 // Slides tab (SlideCard preview) and the learner-facing course player, so
 // content always looks identical in both places.
-export function ElementPreview({ element, textColor, accentColor, fill = false }: ElementPreviewProps) {
+export function ElementPreview({
+  element,
+  textColor,
+  accentColor,
+  fill = false,
+  coverFill = false,
+  dominant = false,
+}: ElementPreviewProps) {
   switch (element.element_type) {
     case 'TEXT':
       return (
@@ -95,20 +115,62 @@ export function ElementPreview({ element, textColor, accentColor, fill = false }
 
     case 'IMAGE':
       if (!element.file) return <p className="text-sm text-neutral-400">No image uploaded yet.</p>
-      // Docked (split-layout) images are bounded by the column's width and
-      // the row's stretched height (via SlideElementsView's flex stretch —
-      // `h-full` here is what makes that height definite, which is what lets
-      // the img's percentage-based max-h below resolve at all), but are
-      // never forced to actually fill that space. The img sizes itself with
-      // the classic replaced-element auto-fit rule (max-width/max-height
-      // 100%, width/height auto) instead of a fixed w-full/h-full box with
-      // object-fit — nothing here has an explicit size bigger than its own
-      // rendered content, and nothing in this chain paints a background of
-      // its own, so any leftover space simply shows the one background
-      // SlideElementsView already painted on the outermost wrapper, with no
-      // second gradient layer to seam against. items-center/justify-center
-      // center the (possibly smaller-than-column) image+caption group in
-      // both directions rather than pinning it to a corner.
+      if (dominant) {
+        return (
+          <figure className="flex h-full w-full flex-col items-center justify-center">
+            <img src={element.file} alt={element.caption} className="max-h-[80%] max-w-[80%] rounded-md object-contain" />
+            {element.caption && (
+              <figcaption className="mt-2 text-xs text-neutral-500" style={{ color: textColor }}>
+                {element.caption}
+              </figcaption>
+            )}
+          </figure>
+        )
+      }
+      if (coverFill) {
+        // canvasMode (student player) docked IMAGE column only. h-full +
+        // w-auto sizes the img purely from its own intrinsic aspect ratio
+        // at this column's fixed height — no forced crop, no percentage
+        // reserved width, it just renders at whatever width that ratio
+        // produces. w-fit on the figure (not w-full) is what lets that
+        // rendered width in turn become the *column's* width, in
+        // SlideElementsView — this is the "hug" half of that; max-w-full
+        // here is the "cap" half: normally a no-op (figure already hugs the
+        // img exactly), but once the column hits its own max-width cap for
+        // an unusually wide image, fit-content sizing shrinks figure to
+        // that capped width for real, and *then* this max-w-full is what's
+        // actually constraining — which, per the standard CSS
+        // replaced-element sizing algorithm, makes the browser preserve the
+        // image's ratio by shrinking its rendered height instead of its
+        // width, i.e. exactly the letterboxed contain fallback the column
+        // cap is there for. justify-start keeps the image's top edge
+        // (not center) flush with the column's top, matching the text
+        // column's first line, regardless of which of these two cases is
+        // in play. Nothing here paints a background of its own — any
+        // fallback letterbox space shows through to whatever background the
+        // column div itself is painted with (SlideElementsView matches it
+        // to the slide's template/default so it reads as a border, not a
+        // gap).
+        return (
+          <figure className="flex h-full w-fit flex-col items-center justify-start">
+            <img src={element.file} alt={element.caption} className="h-full w-auto max-w-full rounded-md" />
+            {element.caption && (
+              <figcaption className="mt-1 shrink-0 text-xs text-neutral-500" style={{ color: textColor }}>
+                {element.caption}
+              </figcaption>
+            )}
+          </figure>
+        )
+      }
+      // Admin's flexible (non-canvas) split layout: bounded by the column's
+      // width and its stretched height, but never forced to actually fill
+      // that space — the img sizes itself with the classic replaced-element
+      // auto-fit rule (max-width/max-height 100%, width/height auto)
+      // instead of a fixed w-full/h-full box with object-fit, so the whole
+      // image is always visible, never cropped, and centered rather than
+      // top-aligned (SlideCard's column isn't a fixed height the way the
+      // canvas's is, so there's no "line up with the text column's top
+      // line" concern here the way there is for coverFill above).
       return fill ? (
         <figure className="flex h-full flex-col items-center justify-center">
           <img src={element.file} alt={element.caption} className="max-h-full max-w-full h-auto w-auto rounded-md" />
@@ -131,15 +193,28 @@ export function ElementPreview({ element, textColor, accentColor, fill = false }
 
     case 'VIDEO_AUDIO': {
       const embed = element.video_url ? resolveVideoEmbed(element.video_url) : null
+      // dominant centers the (still-capped) media box in the space its
+      // parent gives it; coverFill has no such wrapper since it's meant to
+      // fill its column exactly, edge to edge, with nothing to center.
+      const outerClass = dominant ? 'flex h-full w-full items-center justify-center' : ''
+      const boxClass = coverFill ? 'h-full w-full' : dominant ? 'aspect-video w-[80%] max-h-[80%]' : 'aspect-video max-w-md'
+      const videoClass = coverFill
+        ? 'h-full w-full rounded-md object-cover'
+        : dominant
+          ? 'max-h-[80%] max-w-[80%] rounded-md'
+          : 'max-w-md rounded-md'
+
       if (embed?.kind === 'embed') {
-        return (
-          <div className="aspect-video max-w-md">
+        const node = (
+          <div className={boxClass}>
             <iframe src={embed.src} className="h-full w-full rounded-md" allowFullScreen title="Video" />
           </div>
         )
+        return outerClass ? <div className={outerClass}>{node}</div> : node
       }
       if (element.video_file) {
-        return <video controls src={element.video_file} className="max-w-md rounded-md" />
+        const node = <video controls src={element.video_file} className={videoClass} />
+        return outerClass ? <div className={outerClass}>{node}</div> : node
       }
       if (element.video_url) {
         return (

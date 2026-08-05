@@ -14,6 +14,7 @@ import { AssignmentAuthoringPanel } from './AssignmentAuthoringPanel'
 import { AssignmentSummaryPreview } from './AssignmentSummaryPreview'
 import { ElementFormModal } from './ElementFormModal'
 import { ElementTypePicker } from './ElementTypePicker'
+import { ImageWidthPicker } from './ImageWidthPicker'
 import { LayoutPicker } from './LayoutPicker'
 import { TemplatePicker } from './TemplatePicker'
 import { ElementPreview } from '../ElementPreview'
@@ -27,7 +28,15 @@ import { Card } from '../ui/Card'
 import { ELEMENT_TYPE_LABEL } from '../../lib/elementTypes'
 import { deleteElement, fetchElements, reorderElements, updateSlide } from '../../lib/slidesApi'
 import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
-import type { ElementType, Layout, SlideElement, SlideSummary, SlideTemplate, SlideType } from '../../types/slides'
+import type {
+  ElementType,
+  ImageColumnWidth,
+  Layout,
+  SlideElement,
+  SlideSummary,
+  SlideTemplate,
+  SlideType,
+} from '../../types/slides'
 
 const SLIDE_TYPE_LABEL: Record<SlideType, string> = {
   CONTENT: 'Content',
@@ -134,6 +143,16 @@ export function SlideCard({ slide, dragHandleProps, courseTemplateId, onDuplicat
       onUpdated()
     } catch {
       setError('Could not update this slide’s layout.')
+    }
+  }
+
+  async function handleImageColumnWidthChange(imageColumnWidth: ImageColumnWidth) {
+    if (imageColumnWidth === slide.image_column_width) return
+    try {
+      await updateSlide(slide.id, { image_column_width: imageColumnWidth })
+      onUpdated()
+    } catch {
+      setError('Could not update this slide’s image width.')
     }
   }
 
@@ -259,6 +278,22 @@ export function SlideCard({ slide, dragHandleProps, courseTemplateId, onDuplicat
           <label className="block text-xs font-medium text-neutral-500">Layout</label>
           <div className="mt-1.5">
             <LayoutPicker value={slide.layout} onChange={(layout) => void handleLayoutChange(layout)} />
+          </div>
+        </div>
+      )}
+
+      {isEditing && slide.slide_type === 'CONTENT' && (slide.layout === 'IMAGE_LEFT' || slide.layout === 'IMAGE_RIGHT') && (
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-neutral-500">Image width</label>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            How much of the slide the image column can use. The image still scales to its own proportions up to this
+            cap — useful for widening a dense reference image (a table, a detailed diagram) so it stays legible.
+          </p>
+          <div className="mt-1.5">
+            <ImageWidthPicker
+              value={slide.image_column_width}
+              onChange={(width) => void handleImageColumnWidthChange(width)}
+            />
           </div>
         </div>
       )}

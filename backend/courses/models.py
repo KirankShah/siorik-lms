@@ -189,6 +189,11 @@ class Slide(models.Model):
         IMAGE_LEFT = 'IMAGE_LEFT', 'Image left'
         IMAGE_RIGHT = 'IMAGE_RIGHT', 'Image right'
 
+    class ImageColumnWidth(models.TextChoices):
+        COMPACT = 'COMPACT', 'Compact'
+        STANDARD = 'STANDARD', 'Standard'
+        WIDE = 'WIDE', 'Wide'
+
     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='slides')
     # Optional — falls back to an auto-numbered "Slide N" (see display_title)
     # rather than storing a computed default that could go stale if order changes.
@@ -198,6 +203,14 @@ class Slide(models.Model):
     # CONTENT slides only — how the frontend renderer arranges this slide's
     # elements. Defaults to STACKED so existing slides render unchanged.
     layout = models.CharField(max_length=20, choices=Layout.choices, default=Layout.STACKED)
+    # IMAGE_LEFT/IMAGE_RIGHT only — caps how wide the docked image column is
+    # allowed to grow (it still auto-sizes to the image's own aspect ratio up
+    # to that cap; see SlideElementsView's canvasMode on the frontend).
+    # Standard suits most images; Wide is for text-dense reference images
+    # (tables, detailed diagrams) that need more room to stay legible.
+    image_column_width = models.CharField(
+        max_length=20, choices=ImageColumnWidth.choices, default=ImageColumnWidth.STANDARD
+    )
     # Null (the common case) means this slide follows whatever the course's
     # current template is — set this only for the rare slide that should
     # deliberately differ from the rest of the course.

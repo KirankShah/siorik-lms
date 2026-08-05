@@ -7,6 +7,14 @@ import type { FlatSlideEntry } from '../../lib/slideSequence'
 interface FullscreenSlideOverlayProps {
   activeEntry: FlatSlideEntry
   children: ReactNode
+  // CONTENT slides render their own fixed 16:9 SlideCanvas (which does its
+  // own internal centering/scrolling) — this content well must hand it a
+  // plain, definite-height box with no extra padding/Card/scroll of its
+  // own, or the canvas's 80vw/80vh sizing can't get equal padding on all
+  // sides (that was the old lopsided-fullscreen bug). Other slide types
+  // (QUIZ/ASSIGNMENT/SCENARIO) don't have a canvas and keep the original
+  // scrolling Card well untouched.
+  isCanvasSlide: boolean
   hasPrevious: boolean
   hasNext: boolean
   onPrevious: () => void
@@ -27,6 +35,7 @@ interface FullscreenSlideOverlayProps {
 export function FullscreenSlideOverlay({
   activeEntry,
   children,
+  isCanvasSlide,
   hasPrevious,
   hasNext,
   onPrevious,
@@ -56,13 +65,20 @@ export function FullscreenSlideOverlay({
         </button>
       </div>
 
-      {/* justify-center (not just mx-auto on the Card) keeps the card centered
-          even if a descendant briefly forces this container wider than the
-          viewport — items-start keeps it pinned to the top on tall content
-          rather than fighting the scroll region for vertical centering. */}
-      <div className="flex flex-1 items-start justify-center overflow-x-hidden overflow-y-auto px-6 pb-6">
-        <Card className="w-full max-w-4xl">{children}</Card>
-      </div>
+      {isCanvasSlide ? (
+        // No padding/Card/scroll here — SlideCanvas fills this box and
+        // handles its own centering and any internal scrolling itself.
+        <div className="flex-1 overflow-hidden">{children}</div>
+      ) : (
+        // justify-center (not just mx-auto on the Card) keeps the card
+        // centered even if a descendant briefly forces this container wider
+        // than the viewport — items-start keeps it pinned to the top on
+        // tall content rather than fighting the scroll region for vertical
+        // centering.
+        <div className="flex flex-1 items-start justify-center overflow-x-hidden overflow-y-auto px-6 pb-6">
+          <Card className="w-full max-w-4xl">{children}</Card>
+        </div>
+      )}
 
       <div className="shrink-0 border-t border-black/10 bg-white/60 px-6 py-4">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-2">

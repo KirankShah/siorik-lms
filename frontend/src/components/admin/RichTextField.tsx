@@ -76,6 +76,65 @@ const CONTROL_LABELS: Record<string, string> = {
   clean: 'Clear formatting',
 }
 
+// Quill's toolbar pickers (font/size/color/background/align) open a dropdown
+// (`.ql-picker-options`) that's `position: absolute` relative to the picker
+// by default — anchored inside whatever ancestor happens to clip overflow
+// (here, the Edit-element Modal's scrollable body), so a picker near the
+// modal's bottom or right edge gets its dropdown cut off, hiding options
+// (including the white swatch, the last one in the row). Re-anchoring it to
+// `position: fixed` with a rect computed against the real viewport escapes
+// that clipping entirely and lets it flip upward / clamp sideways when
+// there isn't room — a bigger modal (see ElementFormModal) makes this less
+// likely to trigger, but doesn't prevent it outright near screen edges.
+function repositionPickerDropdown(picker: HTMLElement) {
+  const options = picker.querySelector<HTMLElement>('.ql-picker-options')
+  const label = picker.querySelector<HTMLElement>('.ql-picker-label')
+  if (!options || !label) return
+
+  // quill.snow.css sizes .ql-picker-options with `min-width: 100%` — under
+  // its default `position: absolute` that 100% resolves against the small
+  // picker itself (correct, compact size), but min-width still applies
+  // under `position: fixed` too, where the containing block becomes the
+  // *viewport* instead — that's what previously blew every dropdown up to
+  // near-screen width the moment this function switched it to fixed. Clear
+  // any inline overrides left from a previous open first, so the natural
+  // width below is measured while still governed by the stylesheet's
+  // absolute/min-width:100%-of-picker sizing, not stale fixed-position
+  // values from last time.
+  options.style.position = ''
+  options.style.width = ''
+  options.style.minWidth = ''
+  options.style.margin = ''
+  options.style.top = ''
+  options.style.bottom = ''
+  options.style.left = ''
+
+  const labelRect = label.getBoundingClientRect()
+  const naturalRect = options.getBoundingClientRect()
+  const naturalWidth = naturalRect.width
+  const naturalHeight = naturalRect.height
+
+  options.style.position = 'fixed'
+  options.style.margin = '0'
+  // Lock in the size just measured — without this, min-width:100% recomputes
+  // against the viewport now that position is fixed, which is the actual
+  // regression this pins down.
+  options.style.width = `${naturalWidth}px`
+  options.style.minWidth = '0'
+
+  const opensUpward = labelRect.bottom + naturalHeight + 4 > window.innerHeight
+  if (opensUpward) {
+    options.style.top = ''
+    options.style.bottom = `${window.innerHeight - labelRect.top + 4}px`
+  } else {
+    options.style.top = `${labelRect.bottom + 4}px`
+    options.style.bottom = ''
+  }
+
+  const maxLeft = window.innerWidth - naturalWidth - 8
+  options.style.left = `${Math.max(8, Math.min(labelRect.left, maxLeft))}px`
+}
+
 function labelForControl(el: Element): string | null {
   for (const cls of Array.from(el.classList)) {
     if (!cls.startsWith('ql-')) continue
@@ -243,6 +302,29 @@ export function RichTextField({
     colorSelect?.addEventListener('change', handleColorSelectChange)
     backgroundSelect?.addEventListener('change', handleBackgroundSelectChange)
 
+    // Re-anchor a picker's dropdown against the viewport the moment it
+    // opens (Quill toggles `ql-expanded` on the picker itself) — see
+    // repositionPickerDropdown's own comment for why this is necessary
+    // rather than just a CSS fix.
+    const pickers = toolbarEl.querySelectorAll<HTMLElement>('.ql-picker')
+    let openPicker: HTMLElement | null = null
+    const pickerObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        const picker = mutation.target as HTMLElement
+        if (picker.classList.contains('ql-expanded')) {
+          openPicker = picker
+          repositionPickerDropdown(picker)
+        } else if (openPicker === picker) {
+          openPicker = null
+        }
+      }
+    })
+    pickers.forEach((picker) => pickerObserver.observe(picker, { attributes: true, attributeFilter: ['class'] }))
+    function handleViewportChange() {
+      if (openPicker) repositionPickerDropdown(openPicker)
+    }
+    window.addEventListener('resize', handleViewportChange)
+
     function handleTextChange(_delta: unknown, _oldDelta: unknown, source: string) {
       if (source !== Quill.sources.USER) return
       const html = markPhantomListWrappers(quill.getSemanticHTML())
@@ -253,6 +335,8 @@ export function RichTextField({
 
     return () => {
       quill.off('text-change', handleTextChange)
+      pickerObserver.disconnect()
+      window.removeEventListener('resize', handleViewportChange)
       host.innerHTML = ''
     }
     // Deliberately mount-only — see the "uncontrolled by design" note above.

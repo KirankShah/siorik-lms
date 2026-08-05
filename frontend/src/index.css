@@ -60,4 +60,38 @@ body {
   .no-print {
     display: none !important;
   }
+
+  /* The learner-facing fixed-canvas wrapper (SlideCanvas/SlideElementsView's
+     canvasMode) clips to a fixed 16:9 box with internal scroll regions so it
+     can render consistently on screen — none of that makes sense on paper,
+     where every scroll region needs to unfold into flowing, unclipped pages
+     instead of being cropped to whatever fit on screen. */
+  .slide-canvas {
+    aspect-ratio: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  .slide-canvas-row {
+    height: auto !important;
+    flex-direction: column !important;
+  }
+  .slide-canvas-image-col {
+    height: auto !important;
+    width: 100% !important;
+  }
+  .slide-canvas-image-col img,
+  .slide-canvas-image-col video {
+    height: auto !important;
+    object-fit: contain !important;
+  }
+  .slide-canvas-scroll {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
 }

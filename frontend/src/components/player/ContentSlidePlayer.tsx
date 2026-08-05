@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Download, Maximize } from 'lucide-react'
+import { SlideCanvas } from './SlideCanvas'
 import { SlideElementsView } from '../SlideElementsView'
 import { Button } from '../ui/Button'
 import { fetchElements } from '../../lib/slidesApi'
@@ -45,7 +46,7 @@ export function ContentSlidePlayer({
   const template = effectiveTemplateId === null ? null : (templates.find((t) => t.id === effectiveTemplateId) ?? null)
 
   return (
-    <div>
+    <div className={isFullscreen ? 'flex h-full flex-col' : ''}>
       {!isFullscreen && (
         <div className="no-print mb-4 flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={() => window.print()}>
@@ -61,17 +62,21 @@ export function ContentSlidePlayer({
         </div>
       )}
 
-      {/* No nested card chrome here — the outer <Card> in CourseDetailPage
-          already provides the white box/border/padding. SlideElementsView
-          supplies its own background box only when a template is in effect,
-          so the plain (no-template) case stays exactly as before. */}
-      <div className="print-target w-full">
-        <SlideElementsView
-          elements={elements}
-          layout={slide.layout}
-          template={template}
-          title={slide.title || `Slide ${slide.order}`}
-        />
+      {/* print-target stays on this outer div so "Download as PDF" still
+          isolates exactly this subtree — see index.css's @media print block,
+          which also resets the fixed-canvas sizing/scroll/crop below so the
+          PDF gets full flowing content instead of a clipped 16:9 snapshot. */}
+      <div className={`print-target w-full ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
+        <SlideCanvas fullscreen={isFullscreen}>
+          <SlideElementsView
+            elements={elements}
+            layout={slide.layout}
+            template={template}
+            title={slide.title || `Slide ${slide.order}`}
+            canvasMode
+            imageColumnWidth={slide.image_column_width}
+          />
+        </SlideCanvas>
       </div>
     </div>
   )

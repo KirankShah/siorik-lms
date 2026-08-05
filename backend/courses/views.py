@@ -384,6 +384,7 @@ class SlideViewSet(viewsets.ModelViewSet):
                 order=Slide.objects.filter(lesson=slide.lesson).count() + 1,
                 slide_type=slide.slide_type,
                 layout=slide.layout,
+                image_column_width=slide.image_column_width,
                 template_override=slide.template_override,
                 estimated_minutes=slide.estimated_minutes,
             )
