@@ -7,11 +7,11 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.permissions import RoleScopedQuerysetMixin
+from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 from courses.models import Course
 
-from .models import Certificate
-from .serializers import CertificateSerializer
+from .models import Certificate, CertificateTemplate
+from .serializers import CertificateSerializer, CertificateTemplateSerializer
 from .services import CertificateIssuanceError, generate_certificate
 
 
@@ -47,6 +47,18 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
             as_attachment=True,
             filename=f'{certificate.certificate_number}.pdf',
         )
+
+
+class CertificateTemplateViewSet(viewsets.ModelViewSet):
+    """
+    Admin-only CRUD for branded certificate backgrounds and their calibrated
+    text/QR positions — used by the frontend calibration tool. Not org-scoped:
+    templates are shared platform-wide branding assets, same as SlideTemplate.
+    """
+
+    permission_classes = [IsAdminRole]
+    queryset = CertificateTemplate.objects.all()
+    serializer_class = CertificateTemplateSerializer
 
 
 # Intentionally public and unauthenticated — this is the link anyone (e.g. an

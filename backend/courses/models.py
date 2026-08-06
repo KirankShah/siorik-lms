@@ -82,6 +82,15 @@ class Course(models.Model):
         blank=True,
         help_text='Months after issuance the certificate expires. Null means it never expires.',
     )
+    # Null means fall back to whichever CertificateTemplate has is_default=True.
+    # See certificates.services.generate_certificate.
+    certificate_template = models.ForeignKey(
+        'certificates.CertificateTemplate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='courses',
+    )
     completion_deadline_days = models.PositiveIntegerField(
         null=True,
         blank=True,

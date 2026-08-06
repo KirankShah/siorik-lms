@@ -21,6 +21,9 @@ export function AdminSectionLayout() {
         <NavLink to="/admin/bulk-enroll" className={subNavLinkClass}>
           Bulk Enroll
         </NavLink>
+        <NavLink to="/admin/certificate-templates" className={subNavLinkClass}>
+          Certificate Templates
+        </NavLink>
       </nav>
       <Outlet />
     </div>

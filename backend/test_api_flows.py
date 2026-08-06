@@ -4,16 +4,34 @@ End-to-end API flow tests for the LMS backend.
 Run with:
     python manage.py test test_api_flows
 """
+import io
+
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase
+from PIL import Image, ImageDraw
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import Organization, User
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from audit.models import AuditLog
-from certificates.services import generate_certificate
+from certificates.models import CertificateTemplate
+from certificates.services import MIN_AUTO_SHRINK_FONT_SIZE, CertificateIssuanceError, _fit_font, generate_certificate
 from courses.models import Course, CourseAccess, Enrollment, Lesson, Module, Slide
+
+
+def make_test_certificate_template(**overrides):
+    """Builds a minimal, valid CertificateTemplate for tests that don't rely on the seeded platform default."""
+    image_buffer = io.BytesIO()
+    Image.new('RGB', (400, 300), color='white').save(image_buffer, format='PNG')
+    defaults = dict(
+        name='Test Template',
+        background_image=SimpleUploadedFile('bg.png', image_buffer.getvalue(), content_type='image/png'),
+        is_default=False,
+    )
+    defaults.update(overrides)
+    return CertificateTemplate.objects.create(**defaults)
 
 
 class BaseAPITestCase(APITestCase):
@@ -869,3 +887,110 @@ class AuditLogTests(BaseAPITestCase):
 
         log = AuditLog.objects.get(action=AuditLog.Action.CERTIFICATE_GENERATED, object_id=str(certificate.id))
         self.assertEqual(log.user, self.learner)
+
+
+class CertificateTemplateRenderingTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+
+    def test_generate_certificate_renders_a_valid_pdf_against_seeded_default_template(self):
+        certificate = generate_certificate(self.learner, self.published_org_course)
+        pdf_bytes = certificate.pdf_file.read()
+        self.assertTrue(pdf_bytes.startswith(b'%PDF'))
+
+    def test_generate_certificate_raises_when_no_template_is_configured(self):
+        CertificateTemplate.objects.all().delete()
+        with self.assertRaises(CertificateIssuanceError):
+            generate_certificate(self.learner, self.published_org_course)
+
+    def test_course_specific_template_overrides_platform_default(self):
+        course_template = make_test_certificate_template(name='Course-specific template')
+        self.published_org_course.certificate_template = course_template
+        self.published_org_course.save()
+
+        certificate = generate_certificate(self.learner, self.published_org_course)
+        pdf_bytes = certificate.pdf_file.read()
+        self.assertTrue(pdf_bytes.startswith(b'%PDF'))
+
+    def test_saving_a_new_default_template_unsets_the_previous_one(self):
+        original_default = CertificateTemplate.objects.get(is_default=True)
+        new_default = make_test_certificate_template(name='New default', is_default=True)
+
+        original_default.refresh_from_db()
+        self.assertFalse(original_default.is_default)
+        self.assertTrue(new_default.is_default)
+        self.assertEqual(CertificateTemplate.objects.filter(is_default=True).count(), 1)
+
+    def test_long_name_and_course_title_render_without_error(self):
+        self.learner.first_name = 'Alexandria' * 5
+        self.learner.last_name = 'Featherington-Papadopoulos' * 3
+        self.learner.save()
+        self.published_org_course.title = 'Advanced Regulatory Compliance and Risk Management ' * 4
+        self.published_org_course.save()
+
+        certificate = generate_certificate(self.learner, self.published_org_course)
+        pdf_bytes = certificate.pdf_file.read()
+        self.assertTrue(pdf_bytes.startswith(b'%PDF'))
+
+
+class FontAutoShrinkTests(TestCase):
+    """Unit-level coverage of the name/course-title overflow guard in certificates.services._fit_font."""
+
+    def setUp(self):
+        self.image = Image.new('RGB', (2000, 1414), color='white')
+        self.draw = ImageDraw.Draw(self.image)
+        self.max_width_px = 2000 * 0.84
+
+    def test_short_text_keeps_the_requested_font_size(self):
+        font = _fit_font(None, 60, 'Jane Doe', self.draw, self.max_width_px)
+        self.assertEqual(font.size, 60)
+
+    def test_long_text_shrinks_down_to_the_minimum_font_size(self):
+        # A max width this narrow can never be satisfied, so the loop should bottom out at the floor.
+        font = _fit_font(None, 110, 'A very long staff name that will not fit', self.draw, max_width_px=50)
+        self.assertEqual(font.size, MIN_AUTO_SHRINK_FONT_SIZE)
+
+    def test_moderately_long_text_shrinks_below_the_initial_size(self):
+        font = _fit_font(None, 110, 'A very long staff name that will not fit ' * 3, self.draw, self.max_width_px)
+        self.assertLess(font.size, 110)
+
+    def test_shrunk_text_fits_within_the_max_width(self):
+        text = 'A Notably Long Course Title That Should Trigger Auto-Shrink Handling'
+        font = _fit_font(None, 110, text, self.draw, self.max_width_px)
+        left, _top, right, _bottom = self.draw.textbbox((0, 0), text, font=font)
+        self.assertTrue((right - left) <= self.max_width_px or font.size == MIN_AUTO_SHRINK_FONT_SIZE)
+
+
+class CertificateTemplateViewSetTests(BaseAPITestCase):
+    def test_learner_cannot_list_certificate_templates(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/certificate-templates/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_instructor_can_list_certificate_templates(self):
+        self.auth_as(self.instructor)
+        response = self.client.get('/api/certificate-templates/')
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data), 1)
+
+    def test_instructor_can_update_calibration_fields(self):
+        template = CertificateTemplate.objects.get(is_default=True)
+        self.auth_as(self.instructor)
+        response = self.client.patch(
+            f'/api/certificate-templates/{template.id}/',
+            {'staff_name_x_percent': 42.5, 'staff_name_text_align': 'LEFT'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        template.refresh_from_db()
+        self.assertEqual(template.staff_name_x_percent, 42.5)
+        self.assertEqual(template.staff_name_text_align, 'LEFT')
+
+    def test_unauthenticated_request_is_rejected(self):
+        self.client.credentials()
+        response = self.client.get('/api/certificate-templates/')
+        self.assertEqual(response.status_code, 401)
