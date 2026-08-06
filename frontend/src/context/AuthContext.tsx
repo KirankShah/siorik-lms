@@ -10,6 +10,7 @@ interface AuthContextValue {
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
   logout: () => void
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -72,6 +73,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [scheduleRefresh],
   )
 
+  // Re-fetches /auth/me/ — used after the forced password-reset flow clears
+  // must_reset_password server-side, so ProtectedRoute's redirect check sees
+  // the updated value without requiring a full page reload.
+  const refreshUser = useCallback(async () => {
+    const me = await apiFetch<User>('/auth/me/')
+    setUser(me)
+  }, [])
+
   useEffect(() => {
     setSessionExpiredHandler(() => logout())
     return () => setSessionExpiredHandler(null)
@@ -105,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

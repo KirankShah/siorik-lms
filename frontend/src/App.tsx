@@ -4,6 +4,7 @@ import { CertificatesPage } from './pages/CertificatesPage'
 import { CourseDetailPage } from './pages/CourseDetailPage'
 import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { ForcedPasswordResetPage } from './pages/ForcedPasswordResetPage'
 import { LearnerReportsPage } from './pages/LearnerReportsPage'
 import { LoginPage } from './pages/LoginPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
@@ -16,6 +17,7 @@ import { CourseDashboardLayout } from './pages/admin/CourseDashboardLayout'
 import { CourseEditorPage } from './pages/admin/CourseEditorPage'
 import { CourseShareTab } from './pages/admin/CourseShareTab'
 import { CourseSlidesTab } from './pages/admin/CourseSlidesTab'
+import { DemoUsersPage } from './pages/admin/DemoUsersPage'
 import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
@@ -31,6 +33,8 @@ function App() {
       <Route path="/login" element={<LoginPage />} />
 
       <Route element={<ProtectedRoute />}>
+        <Route path="/reset-password" element={<ForcedPasswordResetPage />} />
+
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/courses" element={<CoursesPage />} />
@@ -48,6 +52,7 @@ function App() {
               <Route path="reports" element={<ReportsPage />} />
               <Route path="bulk-enroll" element={<BulkEnrollPage />} />
               <Route path="certificate-templates" element={<CertificateTemplatesPage />} />
+              <Route path="demo-users" element={<DemoUsersPage />} />
             </Route>
             <Route path="/admin/learners" element={<LearnersPage />} />
 

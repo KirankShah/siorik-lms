@@ -9,6 +9,8 @@ class AuditLog(models.Model):
         CERTIFICATE_GENERATED = 'CERTIFICATE_GENERATED', 'Certificate generated'
         ENROLLMENT_CREATED = 'ENROLLMENT_CREATED', 'Enrollment created'
         ENROLLMENT_UPDATED = 'ENROLLMENT_UPDATED', 'Enrollment updated'
+        DEMO_USER_CREATED = 'DEMO_USER_CREATED', 'Demo user created'
+        PASSWORD_RESET_COMPLETED = 'PASSWORD_RESET_COMPLETED', 'Password reset completed'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -1,4 +1,4 @@
-import type { AuthTokens } from '../types/auth'
+import type { AuthTokens, User } from '../types/auth'
 import { clearTokens, getAccessToken, getRefreshToken, setAccessToken } from './tokenStorage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
@@ -122,5 +122,12 @@ export function login(email: string, password: string): Promise<AuthTokens> {
     method: 'POST',
     body: { email, password },
     skipAuth: true,
+  })
+}
+
+export function setPassword(currentPassword: string, newPassword: string): Promise<User> {
+  return apiFetch<User>('/auth/set-password/', {
+    method: 'POST',
+    body: { current_password: currentPassword, new_password: newPassword },
   })
 }

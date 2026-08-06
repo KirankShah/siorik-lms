@@ -24,6 +24,9 @@ export function AdminSectionLayout() {
         <NavLink to="/admin/certificate-templates" className={subNavLinkClass}>
           Certificate Templates
         </NavLink>
+        <NavLink to="/admin/demo-users" className={subNavLinkClass}>
+          Demo Users
+        </NavLink>
       </nav>
       <Outlet />
     </div>

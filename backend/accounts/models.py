@@ -64,6 +64,13 @@ class User(AbstractUser):
         related_name='users',
     )
     phone_number = models.CharField(max_length=20, blank=True, null=True, validators=[validate_phone_number])
+    # Provisioned via the admin "demo users" tool (accounts.services.provision_demo_user)
+    # rather than self-registration — a marker, not a separate user type/table.
+    is_demo = models.BooleanField(default=False)
+    # Set on any account created with a system-generated temporary password;
+    # cleared by SetPasswordView once the user picks their own. Frontend's
+    # ProtectedRoute redirects to /reset-password for as long as this is True.
+    must_reset_password = models.BooleanField(default=False)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

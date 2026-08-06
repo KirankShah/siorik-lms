@@ -5,7 +5,9 @@ Run with:
     python manage.py test test_api_flows
 """
 import io
+from unittest.mock import patch
 
+from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -14,6 +16,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import Organization, User
+from accounts.services import DemoUserProvisioningError, provision_demo_user
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from audit.models import AuditLog
 from certificates.models import CertificateTemplate
@@ -994,3 +997,164 @@ class CertificateTemplateViewSetTests(BaseAPITestCase):
         self.client.credentials()
         response = self.client.get('/api/certificate-templates/')
         self.assertEqual(response.status_code, 401)
+
+
+class DemoUserProvisioningServiceTests(TestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-demo')
+
+    def test_creates_demo_learner_with_must_reset_password_and_sends_invite(self):
+        user = provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
+
+        self.assertEqual(user.role, User.Role.LEARNER)
+        self.assertTrue(user.is_demo)
+        self.assertTrue(user.must_reset_password)
+        self.assertEqual(user.first_name, 'Dana')
+        self.assertEqual(user.last_name, 'Demo')
+        self.assertEqual(user.organization, self.org)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(user.email, mail.outbox[0].to)
+        self.assertIn('temporary password', mail.outbox[0].body.lower())
+
+    def test_duplicate_email_is_rejected_case_insensitively(self):
+        provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
+        with self.assertRaises(DemoUserProvisioningError):
+            provision_demo_user(name='Dana Two', email='DANA@example.com', organization=self.org)
+
+    def test_missing_name_is_rejected(self):
+        with self.assertRaises(DemoUserProvisioningError):
+            provision_demo_user(name='  ', email='dana@example.com', organization=self.org)
+
+    def test_email_send_failure_rolls_back_the_account(self):
+        with patch('accounts.services.send_mail', side_effect=Exception('smtp down')):
+            with self.assertRaises(DemoUserProvisioningError):
+                provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
+
+        # The whole operation is atomic — a failed invite must not leave a
+        # stranded account with a password nobody received.
+        self.assertFalse(User.objects.filter(email='dana@example.com').exists())
+
+
+class DemoUserApiTests(BaseAPITestCase):
+    def test_learner_cannot_create_demo_user(self):
+        self.auth_as(self.learner)
+        response = self.client.post(
+            '/api/demo-users/', {'name': 'Dana Demo', 'email': 'dana@example.com', 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_admin_can_create_demo_user(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/demo-users/', {'name': 'Dana Demo', 'email': 'dana@example.com', 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            User.objects.filter(email='dana@example.com', is_demo=True, must_reset_password=True).exists()
+        )
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_duplicate_email_returns_400_not_500(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/demo-users/', {'name': 'Dana Demo', 'email': self.learner.email, 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_bulk_upload_reports_per_row_success_and_failure(self):
+        csv_content = (
+            'name,email,organization\n'
+            f'Alice Alpha,alice@example.com,{self.org.name}\n'
+            f'Bob Beta,bob@example.com,{self.org.name}\n'
+            f'Bob Duplicate,bob@example.com,{self.org.name}\n'
+            'Missing Org,noorg@example.com,Nonexistent Org\n'
+            'OnlyTwoColumns,twocols@example.com\n'
+        )
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], ['alice@example.com', 'bob@example.com'])
+
+        failures_by_email = {f['email']: f['reason'] for f in response.data['failed']}
+        self.assertIn('Duplicate email', failures_by_email['bob@example.com'])
+        self.assertIn('not found', failures_by_email['noorg@example.com'])
+        self.assertIn('Malformed row', failures_by_email['twocols@example.com'])
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_bulk_upload_reports_existing_user_as_failure_not_500(self):
+        csv_content = f'name,email,organization\nExisting User,{self.learner.email},{self.org.name}\n'
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertEqual(len(response.data['failed']), 1)
+        self.assertIn('already exists', response.data['failed'][0]['reason'])
+
+    def test_bulk_upload_requires_a_file(self):
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {}, format='multipart')
+        self.assertEqual(response.status_code, 400)
+
+    def test_learner_cannot_bulk_upload(self):
+        upload = SimpleUploadedFile('demo_users.csv', b'name,email,organization\n', content_type='text/csv')
+        self.auth_as(self.learner)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 403)
+
+
+class SetPasswordApiTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.temp_password = 'Temp-Pass-9x7Q'
+        self.demo_user = User.objects.create_user(
+            email='dana@example.com', password=self.temp_password,
+            role=User.Role.LEARNER, organization=self.org,
+            first_name='Dana', last_name='Demo',
+            is_demo=True, must_reset_password=True,
+        )
+
+    def test_correct_current_password_clears_must_reset_flag(self):
+        self.auth_as(self.demo_user)
+        response = self.client.post('/api/auth/set-password/', {
+            'current_password': self.temp_password,
+            'new_password': 'BrandNewPassw0rd!',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['must_reset_password'])
+
+        self.demo_user.refresh_from_db()
+        self.assertFalse(self.demo_user.must_reset_password)
+        self.assertTrue(self.demo_user.check_password('BrandNewPassw0rd!'))
+
+    def test_wrong_current_password_is_rejected(self):
+        self.auth_as(self.demo_user)
+        response = self.client.post('/api/auth/set-password/', {
+            'current_password': 'not-the-temp-password',
+            'new_password': 'BrandNewPassw0rd!',
+        })
+        self.assertEqual(response.status_code, 400)
+
+        self.demo_user.refresh_from_db()
+        self.assertTrue(self.demo_user.must_reset_password)
+
+    def test_weak_new_password_is_rejected_by_validators(self):
+        self.auth_as(self.demo_user)
+        response = self.client.post('/api/auth/set-password/', {
+            'current_password': self.temp_password,
+            'new_password': '123',
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_me_endpoint_reflects_must_reset_password(self):
+        self.auth_as(self.demo_user)
+        response = self.client.get('/api/auth/me/')
+        self.assertTrue(response.data['must_reset_password'])
+        self.assertTrue(response.data['is_demo'])

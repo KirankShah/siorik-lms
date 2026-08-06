@@ -17,6 +17,8 @@ export interface User {
   organization: Organization | null
   phone_number: string | null
   is_active: boolean
+  is_demo: boolean
+  must_reset_password: boolean
 }
 
 export interface AuthTokens {

@@ -87,6 +87,26 @@ AUTH_USER_MODEL = 'accounts.User'
 # Base URL used to build the certificate verification link encoded in the QR code.
 CERTIFICATE_VERIFICATION_BASE_URL = os.environ.get('CERTIFICATE_VERIFICATION_BASE_URL', 'http://localhost:8000')
 
+# Base URL of the React app, used to build the login link sent in demo-user
+# invite emails (accounts.services.send_demo_user_invite_email) — the backend
+# has no other way to know the frontend's origin.
+FRONTEND_BASE_URL = os.environ.get('FRONTEND_BASE_URL', 'http://localhost:5173')
+
+# SMTP credentials read entirely from the environment — never hardcoded. Only
+# ever set EMAIL_HOST_PASSWORD via .env (gitignored) locally or the host's
+# environment-variable UI in production.
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', '')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+# Mutually exclusive per Django's own check — SSL (typically port 465) is only
+# used if explicitly requested; TLS (typically port 587) is the default.
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False') == 'True'
+_email_use_tls_env = os.environ.get('EMAIL_USE_TLS')
+EMAIL_USE_TLS = (_email_use_tls_env == 'True') if _email_use_tls_env is not None else not EMAIL_USE_SSL
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'webmaster@localhost')
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
