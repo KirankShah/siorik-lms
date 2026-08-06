@@ -12,3 +12,6 @@ venv/
 *.sqlite3
 media/
 staticfiles/
+
+# Passenger restart-trigger dir (backend/scripts/deploy.sh), server-side only
+tmp/

@@ -10,29 +10,37 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
-import os
 from datetime import timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
+import environ
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
+env = environ.Env()
+# No-ops if the file is missing — production (cPanel's Setup Python App)
+# doesn't ship a .env file; it sets real process environment variables via
+# its own UI instead, and env.* below reads those exactly the same way.
+environ.Env.read_env(BASE_DIR / '.env')
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-+^gh7!0eaq!brkfea7-poa*(jckjk#(l%@w)a8d-iki!6e0@c$')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+DEBUG = env.bool('DEBUG', default=False)
+
+_INSECURE_DEFAULT_SECRET_KEY = 'django-insecure-+^gh7!0eaq!brkfea7-poa*(jckjk#(l%@w)a8d-iki!6e0@c$'
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = env('SECRET_KEY', default=_INSECURE_DEFAULT_SECRET_KEY)
+if not DEBUG and SECRET_KEY == _INSECURE_DEFAULT_SECRET_KEY:
+    # Fails loudly instead of silently deploying with a publicly-known key.
+    raise ImproperlyConfigured(
+        'SECRET_KEY is still the insecure development default but DEBUG=False. '
+        'Set a real SECRET_KEY via the environment before running in production.'
+    )
 
 # Comma-separated in production, e.g. ALLOWED_HOSTS=api.example.com,www.example.com
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
 
 # Application definition
@@ -60,6 +68,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Serves collected static files (Django admin/DRF browsable API CSS+JS)
+    # directly from the WSGI app — required on cPanel/Passenger, where there's
+    # no separate static-file web server config for the Python app's own
+    # STATIC_ROOT. Must stay immediately after SecurityMiddleware per
+    # WhiteNoise's own docs. Harmless in local dev too (unused there since
+    # runserver serves static files itself while DEBUG=True).
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -74,7 +89,7 @@ MIDDLEWARE = [
 # CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 # Falls back to the local Vite dev ports when unset.
 CORS_ALLOW_ALL_ORIGINS = False
-_cors_env_origins = [o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
+_cors_env_origins = env.list('CORS_ALLOWED_ORIGINS', default=[])
 CORS_ALLOWED_ORIGINS = _cors_env_origins or ['http://localhost:5173', 'http://localhost:5174']
 
 # Required by Django for cross-origin POSTs (e.g. the Django admin, browsable
@@ -85,7 +100,9 @@ CSRF_TRUSTED_ORIGINS = _cors_env_origins
 AUTH_USER_MODEL = 'accounts.User'
 
 # Base URL used to build the certificate verification link encoded in the QR code.
-CERTIFICATE_VERIFICATION_BASE_URL = os.environ.get('CERTIFICATE_VERIFICATION_BASE_URL', 'http://localhost:8000')
+# This is the Django backend's own origin (verify/<token>/ is a backend route,
+# not a frontend one) — e.g. https://api.enterprise.learnwithsiorik.com in prod.
+CERTIFICATE_VERIFICATION_BASE_URL = env('CERTIFICATE_VERIFICATION_BASE_URL', default='http://localhost:8000')
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -146,11 +163,11 @@ WSGI_APPLICATION = 'core.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_USER'),
-        'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+        'NAME': env('DB_NAME', default=''),
+        'USER': env('DB_USER', default=''),
+        'PASSWORD': env('DB_PASSWORD', default=''),
+        'HOST': env('DB_HOST', default='localhost'),
+        'PORT': env('DB_PORT', default='5432'),
     }
 }
 
@@ -190,6 +207,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
 STATIC_URL = 'static/'
+# Destination for `manage.py collectstatic` — required in production (WhiteNoise
+# serves from here); irrelevant in local dev since runserver serves static
+# files directly from each app's static/ dir without needing this collected.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
@@ -204,16 +225,18 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Set USE_S3=True in .env to switch uploads to AWS S3 via django-storages.
-# AWS credentials/bucket are read from env vars but are not configured yet —
-# leave USE_S3=False for local development, which uses the filesystem above.
-USE_S3 = os.environ.get('USE_S3', 'False') == 'True'
+# Strongly recommended in production on cPanel/Passenger: this app's own
+# urls.py (see core/urls.py) only ever serves MEDIA_URL through Django when
+# DEBUG=True — with DEBUG=False and USE_S3=False, uploaded files would 404
+# unless the host is separately configured to serve MEDIA_ROOT via Apache.
+USE_S3 = env.bool('USE_S3', default=False)
 
 if USE_S3:
-    AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
-    AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
-    AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', '')
-    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'us-east-1')
-    AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
+    AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID', default='')
+    AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY', default='')
+    AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='')
+    AWS_S3_REGION_NAME = env('AWS_S3_REGION_NAME', default='us-east-1')
+    AWS_S3_CUSTOM_DOMAIN = env('AWS_S3_CUSTOM_DOMAIN', default='')
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
     AWS_QUERYSTRING_AUTH = False
@@ -223,7 +246,7 @@ if USE_S3:
             'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
 else:
@@ -232,9 +255,23 @@ else:
             'BACKEND': 'django.core.files.storage.FileSystemStorage',
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
+
+if DEBUG:
+    # ManifestStaticFilesStorage requires collectstatic to have already run
+    # (it hashes filenames against a manifest) — that hasn't happened yet on a
+    # fresh local checkout, so local dev keeps Django's plain static storage;
+    # runserver serves static files directly regardless of this setting.
+    STORAGES['staticfiles']['BACKEND'] = 'django.contrib.staticfiles.storage.StaticFilesStorage'
+
+# Django's defaults (2.5MB) are below the app's own 5MB cover/question-image
+# validators (accounts.validators.MAX_IMAGE_SIZE_BYTES) — raised so a legitimate
+# upload never gets rejected by this generic body-size guard before it reaches
+# that friendlier, field-specific validation.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 # Production security hardening (HTTPS-only cookies, HSTS, SSL redirect).
@@ -257,3 +294,27 @@ if not DEBUG:
     # Trust the X-Forwarded-Proto header from the load balancer/reverse proxy
     # when determining whether the original request was HTTPS.
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Passenger captures each app's stdout/stderr into its own log file (path set
+# in cPanel's Setup Python App UI) — a plain console handler is enough for
+# that to show up there without needing a hardcoded file path on this end.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO' if DEBUG else 'WARNING',
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}

@@ -1,0 +1,12 @@
+# Serves this static build's actual files/directories directly; anything else
+# (client-side routes like /dashboard, /courses/123) falls through to
+# index.html so React Router can handle it. Required because Apache has no
+# concept of the SPA's routes on its own.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
