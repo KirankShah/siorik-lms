@@ -27,6 +27,7 @@ from gamification.services import update_gamification_for_user
 from .models import (
     Course,
     CourseAccess,
+    DemoLessonAccess,
     Element,
     Enrollment,
     Lesson,
@@ -36,12 +37,13 @@ from .models import (
     SlideProgress,
     SlideTemplate,
 )
-from .permissions import editable_courses_for_user, visible_courses_for_user
+from .permissions import editable_courses_for_user, exclude_demo_locked, is_lesson_locked_for_demo_user, visible_courses_for_user
 from .serializers import (
     CourseAccessSerializer,
     CourseDetailSerializer,
     CourseListSerializer,
     CourseWriteSerializer,
+    DemoLessonAccessSerializer,
     ElementSerializer,
     EnrollmentSerializer,
     LessonOrderSerializer,
@@ -79,12 +81,14 @@ class CourseViewSet(viewsets.ModelViewSet):
     lookup_field = 'slug'
 
     ACCESS_GRANT_ACTIONS = ('access_grants', 'revoke_access')
+    DEMO_ACCESS_ACTIONS = ('demo_lesson_access', 'revoke_demo_lesson_access')
 
     def get_permissions(self):
         if (
             self.action in WRITE_ACTIONS
             or self.action in ('bulk_enroll', 'invite')
             or self.action in self.ACCESS_GRANT_ACTIONS
+            or self.action in self.DEMO_ACCESS_ACTIONS
         ):
             return [IsAuthenticated(), IsAdminRole()]
         return [IsAuthenticated()]
@@ -143,6 +147,27 @@ class CourseViewSet(viewsets.ModelViewSet):
         deleted, _ = CourseAccess.objects.filter(course=course, organization_id=request.data.get('organization')).delete()
         if not deleted:
             return Response({'detail': 'No matching access grant.'}, status=404)
+        return Response(status=204)
+
+    @action(detail=True, methods=['get', 'post'], url_path='demo-lesson-access')
+    def demo_lesson_access(self, request, slug=None):
+        """List (GET) or grant (POST, body: {lesson: <id>}) a lesson's visibility to demo users."""
+        course = self.get_object()
+
+        if request.method == 'GET':
+            grants = course.demo_lesson_access.select_related('lesson')
+            return Response(DemoLessonAccessSerializer(grants, many=True).data)
+
+        lesson = get_object_or_404(Lesson, pk=request.data.get('lesson'), module__course=course)
+        grant, created = DemoLessonAccess.objects.get_or_create(course=course, lesson=lesson)
+        return Response(DemoLessonAccessSerializer(grant).data, status=201 if created else 200)
+
+    @action(detail=True, methods=['delete'], url_path='demo-lesson-access/revoke')
+    def revoke_demo_lesson_access(self, request, slug=None):
+        course = self.get_object()
+        deleted, _ = DemoLessonAccess.objects.filter(course=course, lesson_id=request.data.get('lesson')).delete()
+        if not deleted:
+            return Response({'detail': 'No matching demo lesson access grant.'}, status=404)
         return Response(status=204)
 
     @action(detail=True, methods=['post'], url_path='bulk-enroll')
@@ -422,6 +447,8 @@ class ElementViewSet(viewsets.ModelViewSet):
         else:
             courses = visible_courses_for_user(self.request.user)
         queryset = Element.objects.filter(slide__lesson__module__course__in=courses)
+        if self.action not in WRITE_ACTIONS and self.action != 'reorder':
+            queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
         slide_id = self.request.query_params.get('slide')
         if slide_id:
             queryset = queryset.filter(slide_id=slide_id)
@@ -550,6 +577,8 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
     def complete_lesson(self, request, pk=None):
         enrollment = self.get_object()
         lesson = get_object_or_404(Lesson, pk=request.data.get('lesson'), module__course_id=enrollment.course_id)
+        if is_lesson_locked_for_demo_user(request.user, lesson):
+            raise ValidationError({'lesson': 'This lesson is not available in your demo access.'})
 
         LessonProgress.objects.get_or_create(
             enrollment=enrollment,
@@ -584,6 +613,8 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         """
         enrollment = self.get_object()
         slide = get_object_or_404(Slide, pk=request.data.get('slide'), lesson__module__course_id=enrollment.course_id)
+        if is_lesson_locked_for_demo_user(request.user, slide.lesson):
+            raise ValidationError({'slide': 'This slide is not available in your demo access.'})
 
         progress, created = SlideProgress.objects.get_or_create(
             enrollment=enrollment,

@@ -11,6 +11,10 @@ export interface Lesson {
   content_url: string
   order: number
   estimated_minutes: number
+  // True only for a demo user (accounts.User.is_demo) opening a lesson their
+  // course's DemoLessonAccess grants don't cover — always false otherwise.
+  // slides is [] whenever this is true; see backend LessonSerializer.
+  is_locked: boolean
   slides: SlideSummary[]
 }
 
@@ -49,8 +53,16 @@ export interface CourseDetail extends CourseListItem {
   created_by: number | null
   certificate_pass_threshold: number
   certificate_expiry_months: number | null
+  is_demo_available: boolean
   modules: Module[]
   access_grants: CourseAccessGrant[]
+}
+
+export interface DemoLessonAccessGrant {
+  id: number
+  course: number
+  lesson: number
+  created_at: string
 }
 
 export type EnrollmentStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'

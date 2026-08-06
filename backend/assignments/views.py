@@ -4,7 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
 from core.permissions import ADMIN_ROLES, IsAdminRole
-from courses.permissions import editable_courses_for_user, visible_courses_for_user
+from courses.permissions import editable_courses_for_user, exclude_demo_locked, is_lesson_locked_for_demo_user, visible_courses_for_user
 
 from .models import Assignment, AssignmentSubmission
 from .serializers import AssignmentSerializer, AssignmentSubmissionCreateSerializer, AssignmentSubmissionSerializer
@@ -30,6 +30,8 @@ class AssignmentViewSet(viewsets.ModelViewSet):
         else:
             courses = visible_courses_for_user(self.request.user)
         queryset = Assignment.objects.filter(slide__lesson__module__course__in=courses)
+        if self.action not in WRITE_ACTIONS:
+            queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
         slide_id = self.request.query_params.get('slide')
         if slide_id:
             queryset = queryset.filter(slide_id=slide_id)
@@ -91,6 +93,8 @@ class AssignmentSubmissionViewSet(
         course = assignment.slide.lesson.module.course
         if not visible_courses_for_user(self.request.user).filter(pk=course.pk).exists():
             raise ValidationError({'assignment': 'This assignment is not available to you.'})
+        if is_lesson_locked_for_demo_user(self.request.user, assignment.slide.lesson):
+            raise ValidationError({'assignment': 'This assignment is not available in your demo access.'})
         serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):

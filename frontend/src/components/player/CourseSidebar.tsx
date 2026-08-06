@@ -101,6 +101,16 @@ export function CourseSidebar({ course, entries, enrollment, activeSlideId, reac
                     const lessonCompleted = sortedSlides.filter((s) => completedSlideIds.has(s.id)).length
                     const lessonOpen = openLessonIds.has(lesson.id)
 
+                    if (lesson.is_locked) {
+                      return (
+                        <div key={lesson.id} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left">
+                          <Lock className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                          <span className="flex-1 text-xs font-medium text-neutral-400">{lesson.title}</span>
+                          <span className="shrink-0 text-[11px] text-neutral-300">Not in demo</span>
+                        </div>
+                      )
+                    }
+
                     return (
                       <div key={lesson.id}>
                         <button

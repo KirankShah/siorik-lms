@@ -14,6 +14,7 @@ import { CertificateTemplatesPage } from './pages/admin/CertificateTemplatesPage
 import { CourseAnalyzeTab } from './pages/admin/CourseAnalyzeTab'
 import { CourseCertificationTab } from './pages/admin/CourseCertificationTab'
 import { CourseDashboardLayout } from './pages/admin/CourseDashboardLayout'
+import { CourseDemoAccessTab } from './pages/admin/CourseDemoAccessTab'
 import { CourseEditorPage } from './pages/admin/CourseEditorPage'
 import { CourseShareTab } from './pages/admin/CourseShareTab'
 import { CourseSlidesTab } from './pages/admin/CourseSlidesTab'
@@ -61,6 +62,7 @@ function App() {
               <Route path="slides" element={<CourseSlidesTab />} />
               <Route path="settings" element={<CourseEditorPage />} />
               <Route path="certification" element={<CourseCertificationTab />} />
+              <Route path="demo-access" element={<CourseDemoAccessTab />} />
               <Route path="share" element={<CourseShareTab />} />
               <Route path="analyze" element={<CourseAnalyzeTab />} />
             </Route>

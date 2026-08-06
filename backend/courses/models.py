@@ -96,6 +96,10 @@ class Course(models.Model):
         blank=True,
         help_text='Days after enrollment the course should be completed by. Null means no deadline.',
     )
+    # Gates whether DemoLessonAccess is even consulted for this course — a demo
+    # user is only lesson-restricted when this is True. False (the default)
+    # means demo users see this course exactly like any other learner.
+    is_demo_available = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -184,6 +188,32 @@ class Lesson(models.Model):
 
     def __str__(self):
         return f'{self.module.title} - {self.title}'
+
+
+class DemoLessonAccess(models.Model):
+    """
+    Marks one Lesson within an is_demo_available Course as visible to demo
+    users (accounts.User.is_demo=True). Every other lesson in that course
+    renders locked for them — see courses.permissions.is_lesson_locked_for_demo_user
+    and the enforcement built on top of it in courses/assessments/assignments/
+    scenarios views. Non-demo users are entirely unaffected by this model.
+    """
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='demo_lesson_access')
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='demo_access_entries')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['lesson__order']
+        unique_together = ('course', 'lesson')
+
+    def clean(self):
+        super().clean()
+        if self.lesson_id and self.course_id and self.lesson.module.course_id != self.course_id:
+            raise ValidationError({'lesson': 'This lesson does not belong to the specified course.'})
+
+    def __str__(self):
+        return f'{self.course.title} -> {self.lesson.title}'
 
 
 class Slide(models.Model):

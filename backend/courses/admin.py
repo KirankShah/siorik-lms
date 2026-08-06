@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     Course,
     CourseAccess,
+    DemoLessonAccess,
     Element,
     Enrollment,
     Lesson,
@@ -45,11 +46,12 @@ class CourseAdmin(admin.ModelAdmin):
         'organization',
         'content_owner',
         'is_published',
+        'is_demo_available',
         'template',
         'created_by',
         'created_at',
     )
-    list_filter = ('content_owner', 'is_published', 'organization', 'template')
+    list_filter = ('content_owner', 'is_published', 'is_demo_available', 'organization', 'template')
     search_fields = ('title', 'slug', 'description')
     prepopulated_fields = {'slug': ('title',)}
     inlines = [ModuleInline]
@@ -60,6 +62,13 @@ class CourseAccessAdmin(admin.ModelAdmin):
     list_display = ('course', 'organization', 'granted_at')
     list_filter = ('organization',)
     search_fields = ('course__title', 'organization__name')
+
+
+@admin.register(DemoLessonAccess)
+class DemoLessonAccessAdmin(admin.ModelAdmin):
+    list_display = ('course', 'lesson', 'created_at')
+    list_filter = ('course',)
+    search_fields = ('course__title', 'lesson__title')
 
 
 @admin.register(Module)

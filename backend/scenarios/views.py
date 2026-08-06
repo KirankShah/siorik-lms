@@ -5,7 +5,7 @@ from rest_framework.response import Response
 
 from core.permissions import ADMIN_ROLES, IsAdminRole
 from courses.models import Enrollment
-from courses.permissions import editable_courses_for_user, visible_courses_for_user
+from courses.permissions import editable_courses_for_user, exclude_demo_locked, is_lesson_locked_for_demo_user, visible_courses_for_user
 
 from .models import MAX_NODES_PER_SLIDE, ScenarioAttempt, ScenarioChoice, ScenarioNode
 from .serializers import (
@@ -39,6 +39,8 @@ class ScenarioNodeViewSet(viewsets.ModelViewSet):
         else:
             courses = visible_courses_for_user(self.request.user)
         queryset = ScenarioNode.objects.filter(slide__lesson__module__course__in=courses).prefetch_related('choices')
+        if self.action not in WRITE_ACTIONS:
+            queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
         slide_id = self.request.query_params.get('slide')
         if slide_id:
             queryset = queryset.filter(slide_id=slide_id)
@@ -113,6 +115,8 @@ class ScenarioAttemptViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, vie
         course = slide.lesson.module.course
         if not visible_courses_for_user(request.user).filter(pk=course.pk).exists():
             raise ValidationError({'slide': 'This scenario is not available to you.'})
+        if is_lesson_locked_for_demo_user(request.user, slide.lesson):
+            raise ValidationError({'slide': 'This scenario is not available in your demo access.'})
         try:
             enrollment = Enrollment.objects.get(user=request.user, course=course)
         except Enrollment.DoesNotExist:

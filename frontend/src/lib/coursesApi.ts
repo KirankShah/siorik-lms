@@ -1,6 +1,13 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
 import type { BulkEnrollResult, ReportRow } from '../types/admin'
-import type { CourseAccessGrant, CourseDetail, CourseListItem, Enrollment, LessonType } from '../types/courses'
+import type {
+  CourseAccessGrant,
+  CourseDetail,
+  CourseListItem,
+  DemoLessonAccessGrant,
+  Enrollment,
+  LessonType,
+} from '../types/courses'
 
 export function fetchCourses(): Promise<CourseListItem[]> {
   return apiFetch<CourseListItem[]>('/courses/')
@@ -62,6 +69,7 @@ export interface CourseInput {
   certificate_pass_threshold?: number
   certificate_expiry_months?: number | null
   completion_deadline_days?: number | null
+  is_demo_available?: boolean
 }
 
 export function createCourse(input: CourseInput): Promise<CourseDetail> {
@@ -91,6 +99,26 @@ export function revokeCourseAccess(courseSlug: string, organizationId: number): 
   return apiFetch<void>(`/courses/${courseSlug}/access-grants/revoke/`, {
     method: 'DELETE',
     body: { organization: organizationId },
+  })
+}
+
+// --- Admin: demo lesson access ---
+
+export function fetchDemoLessonAccess(courseSlug: string): Promise<DemoLessonAccessGrant[]> {
+  return apiFetch<DemoLessonAccessGrant[]>(`/courses/${courseSlug}/demo-lesson-access/`)
+}
+
+export function grantDemoLessonAccess(courseSlug: string, lessonId: number): Promise<DemoLessonAccessGrant> {
+  return apiFetch<DemoLessonAccessGrant>(`/courses/${courseSlug}/demo-lesson-access/`, {
+    method: 'POST',
+    body: { lesson: lessonId },
+  })
+}
+
+export function revokeDemoLessonAccess(courseSlug: string, lessonId: number): Promise<void> {
+  return apiFetch<void>(`/courses/${courseSlug}/demo-lesson-access/revoke/`, {
+    method: 'DELETE',
+    body: { lesson: lessonId },
   })
 }
 

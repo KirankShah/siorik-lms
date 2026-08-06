@@ -8,6 +8,7 @@ const TABS = [
   { to: 'slides', label: 'Slides' },
   { to: 'settings', label: 'Settings' },
   { to: 'certification', label: 'Certification' },
+  { to: 'demo-access', label: 'Demo Access' },
   { to: 'share', label: 'Share' },
   { to: 'analyze', label: 'Analyze' },
 ]

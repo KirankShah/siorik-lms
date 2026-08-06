@@ -18,10 +18,12 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.models import Organization, User
 from accounts.services import DemoUserProvisioningError, provision_demo_user
 from assessments.models import Choice, Question, Quiz, QuizAttempt
+from assignments.models import Assignment
 from audit.models import AuditLog
 from certificates.models import CertificateTemplate
 from certificates.services import MIN_AUTO_SHRINK_FONT_SIZE, CertificateIssuanceError, _fit_font, generate_certificate
-from courses.models import Course, CourseAccess, Enrollment, Lesson, Module, Slide
+from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide
+from scenarios.models import ScenarioChoice, ScenarioNode
 
 
 def make_test_certificate_template(**overrides):
@@ -1158,3 +1160,179 @@ class SetPasswordApiTests(BaseAPITestCase):
         response = self.client.get('/api/auth/me/')
         self.assertTrue(response.data['must_reset_password'])
         self.assertTrue(response.data['is_demo'])
+
+
+class DemoLessonAccessTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.demo_learner = User.objects.create_user(
+            email='demo@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org,
+            is_demo=True,
+        )
+        Enrollment.objects.create(
+            user=self.demo_learner, course=self.published_org_course, status=Enrollment.Status.IN_PROGRESS
+        )
+        Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course, status=Enrollment.Status.IN_PROGRESS
+        )
+
+        self.published_org_course.is_demo_available = True
+        self.published_org_course.save()
+        # lesson1 is granted; lesson2 is intentionally left locked.
+        DemoLessonAccess.objects.create(course=self.published_org_course, lesson=self.lesson1)
+
+    # --- Course detail tree ---
+
+    def _lessons_by_id(self, response):
+        return {lesson['id']: lesson for module in response.data['modules'] for lesson in module['lessons']}
+
+    def test_demo_user_sees_locked_lesson_with_no_slides(self):
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        lessons = self._lessons_by_id(response)
+        self.assertFalse(lessons[self.lesson1.id]['is_locked'])
+        self.assertTrue(lessons[self.lesson2.id]['is_locked'])
+        self.assertEqual(lessons[self.lesson2.id]['slides'], [])
+
+    def test_non_demo_user_sees_every_lesson_unlocked(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        lessons = self._lessons_by_id(response)
+        self.assertFalse(lessons[self.lesson1.id]['is_locked'])
+        self.assertFalse(lessons[self.lesson2.id]['is_locked'])
+        self.assertGreater(len(lessons[self.lesson1.id]['slides']), 0)
+
+    def test_demo_user_unaffected_when_course_is_not_demo_available(self):
+        self.published_org_course.is_demo_available = False
+        self.published_org_course.save()
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        lessons = self._lessons_by_id(response)
+        self.assertFalse(lessons[self.lesson2.id]['is_locked'])
+
+    # --- Enrollment progress-writing endpoints ---
+
+    def test_demo_user_cannot_complete_locked_lesson(self):
+        enrollment = Enrollment.objects.get(user=self.demo_learner, course=self.published_org_course)
+        self.auth_as(self.demo_learner)
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson2.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(enrollment.lesson_progress.filter(lesson=self.lesson2).exists())
+
+    def test_demo_user_can_complete_granted_lesson(self):
+        enrollment = Enrollment.objects.get(user=self.demo_learner, course=self.published_org_course)
+        self.auth_as(self.demo_learner)
+        response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
+        self.assertEqual(response.status_code, 200)
+
+    def test_demo_user_cannot_write_slide_progress_on_locked_lesson(self):
+        locked_slide = Slide.objects.create(lesson=self.lesson2, order=1, slide_type=Slide.SlideType.CONTENT)
+        enrollment = Enrollment.objects.get(user=self.demo_learner, course=self.published_org_course)
+        self.auth_as(self.demo_learner)
+        response = self.client.post(
+            f'/api/enrollments/{enrollment.id}/slide-progress/', {'slide': locked_slide.id, 'completed': True}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_demo_user_can_write_slide_progress_on_any_lesson(self):
+        open_slide = Slide.objects.create(lesson=self.lesson2, order=1, slide_type=Slide.SlideType.CONTENT)
+        enrollment = Enrollment.objects.get(user=self.learner, course=self.published_org_course)
+        self.auth_as(self.learner)
+        response = self.client.post(
+            f'/api/enrollments/{enrollment.id}/slide-progress/', {'slide': open_slide.id, 'completed': True}
+        )
+        self.assertEqual(response.status_code, 200)
+
+    # --- CONTENT (Element) read path ---
+
+    def test_demo_user_cannot_fetch_elements_of_locked_lesson(self):
+        locked_slide = Slide.objects.create(lesson=self.lesson2, order=1, slide_type=Slide.SlideType.CONTENT)
+        Element.objects.create(slide=locked_slide, order=1, element_type=Element.ElementType.TEXT, rich_text='secret')
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/elements/?slide={locked_slide.id}')
+        self.assertEqual(response.data, [])
+
+    def test_demo_user_can_fetch_elements_of_granted_lesson(self):
+        granted_slide = Slide.objects.create(lesson=self.lesson1, order=2, slide_type=Slide.SlideType.CONTENT)
+        Element.objects.create(slide=granted_slide, order=1, element_type=Element.ElementType.TEXT, rich_text='hello')
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/elements/?slide={granted_slide.id}')
+        self.assertEqual(len(response.data), 1)
+
+    # --- QUIZ read path ---
+
+    def test_demo_user_cannot_fetch_quiz_of_locked_lesson(self):
+        locked_slide = Slide.objects.create(lesson=self.lesson2, order=2, slide_type=Slide.SlideType.QUIZ)
+        locked_quiz = Quiz.objects.create(slide=locked_slide, title='Locked quiz', pass_percentage=50)
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/quizzes/{locked_quiz.id}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_demo_user_can_fetch_quiz_of_granted_lesson(self):
+        # self.quiz's slide (self.quiz_slide) is on lesson1, which is granted.
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/quizzes/{self.quiz.id}/')
+        self.assertEqual(response.status_code, 200)
+
+    # --- ASSIGNMENT submission write path ---
+
+    def test_demo_user_cannot_submit_assignment_on_locked_lesson(self):
+        locked_slide = Slide.objects.create(lesson=self.lesson2, order=3, slide_type=Slide.SlideType.ASSIGNMENT)
+        assignment = Assignment.objects.create(slide=locked_slide, instructions='Do the thing')
+        self.auth_as(self.demo_learner)
+        response = self.client.post(
+            '/api/assignment-submissions/', {'assignment': assignment.id, 'text_response': 'my answer'}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- SCENARIO attempt write path ---
+
+    def test_demo_user_cannot_submit_scenario_attempt_on_locked_lesson(self):
+        locked_slide = Slide.objects.create(lesson=self.lesson2, order=4, slide_type=Slide.SlideType.SCENARIO)
+        start_node = ScenarioNode.objects.create(slide=locked_slide, node_key='start', is_start=True)
+        ending_choice = ScenarioChoice.objects.create(node=start_node, choice_text='End it', next_node=None)
+
+        self.auth_as(self.demo_learner)
+        response = self.client.post(
+            '/api/scenario-attempts/', {'slide': locked_slide.id, 'path_taken': [ending_choice.id]}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Admin demo-lesson-access management endpoints ---
+
+    def test_admin_can_grant_and_revoke_demo_lesson_access(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/demo-lesson-access/', {'lesson': self.lesson2.id}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            DemoLessonAccess.objects.filter(course=self.published_org_course, lesson=self.lesson2).exists()
+        )
+
+        response = self.client.delete(
+            f'/api/courses/{self.published_org_course.slug}/demo-lesson-access/revoke/',
+            {'lesson': self.lesson2.id},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(
+            DemoLessonAccess.objects.filter(course=self.published_org_course, lesson=self.lesson2).exists()
+        )
+
+    def test_learner_cannot_manage_demo_lesson_access(self):
+        self.auth_as(self.learner)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/demo-lesson-access/', {'lesson': self.lesson2.id}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_demo_lesson_access_grant_rejects_lesson_from_another_course(self):
+        other_module = Module.objects.create(course=self.other_org_course, title='Other', order=1)
+        foreign_lesson = Lesson.objects.create(module=other_module, title='Foreign', order=1)
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/demo-lesson-access/', {'lesson': foreign_lesson.id}
+        )
+        self.assertEqual(response.status_code, 404)

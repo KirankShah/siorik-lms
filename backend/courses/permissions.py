@@ -1,6 +1,6 @@
 from django.db.models import Q
 
-from .models import Course
+from .models import Course, DemoLessonAccess
 
 
 def _org_scoped_courses(user):
@@ -59,3 +59,47 @@ def editable_courses_for_user(user):
         return Course.objects.filter(content_owner=Course.ContentOwner.ORGANIZATION, organization_id=user.organization_id)
 
     return Course.objects.none()
+
+
+def is_lesson_locked_for_demo_user(user, lesson):
+    """
+    True only for a demo user (accounts.User.is_demo=True) opening a lesson
+    that isn't explicitly granted via DemoLessonAccess within an
+    is_demo_available course. Non-demo users, and any user on a course that
+    isn't demo-restricted, are never locked out here — this function is
+    purely additive on top of the normal visible_courses_for_user check,
+    never a replacement for it.
+    """
+    if not getattr(user, 'is_demo', False):
+        return False
+    course = lesson.module.course
+    if not course.is_demo_available:
+        return False
+    return not DemoLessonAccess.objects.filter(course=course, lesson=lesson).exists()
+
+
+def exclude_demo_locked(queryset, user, lesson_path):
+    """
+    Further restricts an already visible_courses_for_user-scoped queryset of
+    slide-owned rows (Element, Quiz, Assignment, ScenarioNode, ...), removing
+    any row whose lesson is demo-locked for this user — see
+    is_lesson_locked_for_demo_user. `lesson_path` is the queryset's ORM path
+    to the owning Lesson, e.g. 'slide__lesson' for a model with a direct
+    `slide` FK. No-op (returns the queryset unchanged) for non-demo users,
+    which is the overwhelming majority of requests.
+    """
+    if not getattr(user, 'is_demo', False):
+        return queryset
+
+    restricted_course_ids = set(Course.objects.filter(is_demo_available=True).values_list('id', flat=True))
+    if not restricted_course_ids:
+        return queryset
+
+    allowed_lesson_ids = set(
+        DemoLessonAccess.objects.filter(course_id__in=restricted_course_ids).values_list('lesson_id', flat=True)
+    )
+    course_lookup = f'{lesson_path}__module__course_id__in'
+    lesson_lookup = f'{lesson_path}_id__in'
+    return queryset.exclude(
+        Q(**{course_lookup: restricted_course_ids}) & ~Q(**{lesson_lookup: allowed_lesson_ids})
+    )

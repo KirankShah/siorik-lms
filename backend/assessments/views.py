@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.permissions import IsAdminRole
-from courses.permissions import editable_courses_for_user, visible_courses_for_user
+from courses.permissions import editable_courses_for_user, exclude_demo_locked, visible_courses_for_user
 from gamification.services import update_gamification_for_user
 
 from .models import (
@@ -71,6 +71,7 @@ class QuizViewSet(
             queryset = super().get_queryset().filter(
                 slide__lesson__module__course__in=visible_courses_for_user(self.request.user)
             )
+            queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
         else:
             queryset = super().get_queryset().filter(
                 slide__lesson__module__course__in=editable_courses_for_user(self.request.user)

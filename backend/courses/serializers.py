@@ -7,6 +7,7 @@ from accounts.serializers import OrganizationSerializer
 from .models import (
     Course,
     CourseAccess,
+    DemoLessonAccess,
     Element,
     Enrollment,
     Lesson,
@@ -15,6 +16,7 @@ from .models import (
     SlideProgress,
     SlideTemplate,
 )
+from .permissions import is_lesson_locked_for_demo_user
 
 
 class SlideTemplateSerializer(serializers.ModelSerializer):
@@ -41,7 +43,14 @@ class SlideSummarySerializer(serializers.ModelSerializer):
 
 
 class LessonSerializer(serializers.ModelSerializer):
-    slides = SlideSummarySerializer(many=True, read_only=True)
+    # Not a plain nested serializer field — get_slides below needs to check
+    # is_locked first and return [] without touching the DB for the common
+    # (non-demo-restricted) case.
+    slides = serializers.SerializerMethodField()
+    # True only for a demo user opening a lesson their course's
+    # DemoLessonAccess grants don't cover — see is_lesson_locked_for_demo_user.
+    # Always False for every other user, including on non-demo courses.
+    is_locked = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -53,8 +62,30 @@ class LessonSerializer(serializers.ModelSerializer):
             'content_url',
             'order',
             'estimated_minutes',
+            'is_locked',
             'slides',
         ]
+
+    def _is_locked(self, lesson):
+        request = self.context.get('request')
+        if request is None:
+            return False
+        return is_lesson_locked_for_demo_user(request.user, lesson)
+
+    def get_is_locked(self, lesson):
+        return self._is_locked(lesson)
+
+    def get_slides(self, lesson):
+        # A locked lesson's slides are withheld entirely, not just flagged —
+        # this is what keeps them out of the frontend's flattened slide
+        # sequence (lib/slideSequence.ts), so there's nothing to navigate to.
+        # The actual content-fetch endpoints (ElementViewSet, QuizViewSet,
+        # etc.) enforce the same lock independently — this is UI-shaping, not
+        # the security boundary.
+        if self._is_locked(lesson):
+            return []
+        slides = lesson.slides.order_by('order')
+        return SlideSummarySerializer(slides, many=True, context=self.context).data
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -111,6 +142,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
+            'is_demo_available',
             'created_by',
             'created_at',
             'updated_at',
@@ -135,7 +167,15 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
+            'is_demo_available',
         ]
+
+
+class DemoLessonAccessSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DemoLessonAccess
+        fields = ['id', 'course', 'lesson', 'created_at']
+        read_only_fields = ['id', 'course', 'created_at']
 
 
 class ModuleWriteSerializer(serializers.ModelSerializer):
