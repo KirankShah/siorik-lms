@@ -11,6 +11,8 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.utils import timezone
+from openpyxl import load_workbook
 from PIL import Image, ImageDraw
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -28,7 +30,7 @@ from certificates.services import (
     certificate_ineligibility_reason,
     generate_certificate,
 )
-from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide
+from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide, SlideProgress
 from courses.video_streaming import build_video_stream_token
 from scenarios.models import ScenarioChoice, ScenarioNode
 
@@ -1249,6 +1251,181 @@ class EnrollmentReportTests(BaseAPITestCase):
         content = response.content.decode()
         self.assertNotIn('\n=HYPERLINK', content)
         self.assertIn("'=HYPERLINK", content)
+
+
+class AdminAnalyticsTests(BaseAPITestCase):
+    """Phase 37: admin analytics dashboard grouped by Organization."""
+
+    def setUp(self):
+        super().setUp()
+        # Second quiz on lesson2 so final_score can diverge from any single
+        # quiz's own pass/fail, same fixture shape as
+        # CourseAverageCertificateEligibilityTests.
+        self.quiz2_slide = Slide.objects.create(
+            lesson=self.lesson2, order=99, title='Second Exam', slide_type=Slide.SlideType.QUIZ,
+        )
+        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam', pass_percentage=70)
+
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED, progress_percent=100,
+        )
+        SlideProgress.objects.create(
+            enrollment=self.enrollment, slide=self.quiz_slide, time_spent_seconds=300, completed_at=timezone.now(),
+        )
+        SlideProgress.objects.create(
+            enrollment=self.enrollment, slide=self.quiz2_slide, time_spent_seconds=120, completed_at=timezone.now(),
+        )
+        # quiz1: failed then retaken and passed; quiz2: passed on the first try.
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=False, score_percent=40)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=2, passed=True, score_percent=90)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=100)
+        # Average of best scores = (90 + 100) / 2 = 95, clears the 70% default threshold.
+
+        self.other_org_enrollment = Enrollment.objects.create(
+            user=self.other_org_learner, course=self.other_org_course, status=Enrollment.Status.IN_PROGRESS,
+            progress_percent=40,
+        )
+
+    def _row_for(self, response, user_email):
+        for org_group in response.data:
+            for row in org_group['rows']:
+                if row['user_email'] == user_email:
+                    return row
+        return None
+
+    def test_learner_forbidden(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/reports/analytics/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_org_admin_sees_only_their_own_organization_grouped(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/reports/analytics/')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['organization_name'], 'Acme Bank')
+        self.assertEqual(len(response.data[0]['rows']), 1)
+
+    def test_org_admin_organization_filter_param_is_ignored(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(f'/api/reports/analytics/?organization={self.other_org.id}')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['organization_name'], 'Acme Bank')
+
+    def test_platform_admin_sees_every_organization_grouped(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/')
+        org_names = {group['organization_name'] for group in response.data}
+        self.assertEqual(org_names, {'Acme Bank', 'Other Bank'})
+
+    def test_platform_admin_can_filter_by_organization(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(f'/api/reports/analytics/?organization={self.other_org.id}')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['organization_name'], 'Other Bank')
+
+    def test_course_filter_narrows_rows(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(f'/api/reports/analytics/?course={self.other_org_course.id}')
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['rows'][0]['user_email'], self.other_org_learner.email)
+
+    def test_row_reports_completion_pass_status_time_spent_and_final_score(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/')
+        row = self._row_for(response, self.learner.email)
+        self.assertEqual(row['progress_percent'], 100)
+        self.assertEqual(row['pass_status'], 'PASSED')
+        self.assertEqual(row['final_score'], 95.0)
+        self.assertEqual(row['time_spent_seconds'], 420)
+        self.assertEqual(row['total_quiz_attempts'], 3)
+
+    def test_row_includes_per_quiz_retake_attempts_and_scores(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/')
+        row = self._row_for(response, self.learner.email)
+        quiz1 = next(q for q in row['quizzes'] if q['quiz_id'] == self.quiz.id)
+        self.assertEqual(quiz1['attempt_count'], 2)
+        self.assertEqual([a['score_percent'] for a in quiz1['attempts']], [40.0, 90.0])
+        self.assertEqual(quiz1['best_score'], 90.0)
+
+    def test_incomplete_enrollment_reports_status_not_a_pass_fail_verdict(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/')
+        row = self._row_for(response, self.other_org_learner.email)
+        self.assertEqual(row['pass_status'], 'IN_PROGRESS')
+        self.assertIsNone(row['final_score'])
+
+    def test_average_below_threshold_reports_failed_despite_individual_pass(self):
+        self.other_org_learner.organization = self.org
+        self.other_org_learner.save()
+        failing_module = Module.objects.create(course=self.unpublished_org_course, title='Only Module', order=1)
+        failing_lesson = Lesson.objects.create(module=failing_module, title='Only Lesson', order=1, estimated_minutes=5)
+        failing_quiz_slide = Slide.objects.create(
+            lesson=failing_lesson, order=1, title='Only Exam', slide_type=Slide.SlideType.QUIZ,
+        )
+        failing_quiz = Quiz.objects.create(slide=failing_quiz_slide, title='Only Exam', pass_percentage=50)
+        QuizAttempt.objects.create(
+            user=self.other_org_learner, quiz=failing_quiz, attempt_number=1, passed=True, score_percent=60,
+        )
+        Enrollment.objects.create(
+            user=self.other_org_learner, course=self.unpublished_org_course,
+            status=Enrollment.Status.COMPLETED, progress_percent=100,
+        )
+
+        self.auth_as(self.platform_admin)
+        response = self.client.get(f'/api/reports/analytics/?course={self.unpublished_org_course.id}')
+        row = self._row_for(response, self.other_org_learner.email)
+        self.assertEqual(row['pass_status'], 'FAILED')
+        self.assertEqual(row['final_score'], 60.0)
+
+    def test_xlsx_export_matches_on_screen_data(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/?export=xlsx')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+
+        workbook = load_workbook(io.BytesIO(response.content))
+        sheet = workbook.active
+        header_row = [cell.value for cell in sheet[1]]
+        self.assertEqual(
+            header_row,
+            [
+                'Organization', 'User Name', 'User Email', 'Course', 'Status',
+                '% Completion', 'Pass/Fail', 'Final Score', 'Time Spent',
+                'Total Quiz Attempts', 'Attempt Details',
+            ],
+        )
+
+        data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
+        learner_row = next(r for r in data_rows if r[2] == self.learner.email)
+        self.assertEqual(learner_row[0], 'Acme Bank')
+        self.assertEqual(learner_row[4], 'COMPLETED')
+        self.assertEqual(learner_row[5], 1.0)  # 100% stored as a fraction for the '0%' number format
+        self.assertEqual(learner_row[6], 'PASSED')
+        self.assertEqual(learner_row[7], 95.0)
+        self.assertEqual(learner_row[8], '7m')
+        self.assertEqual(learner_row[9], 3)
+        self.assertIn('Final Exam', learner_row[10])
+        self.assertIn('Second Exam', learner_row[10])
+
+    def test_xlsx_export_neutralizes_formula_injection(self):
+        evil_learner = User.objects.create_user(
+            email='evil-analytics@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org,
+            first_name='=HYPERLINK("http://evil.test")', last_name='X',
+        )
+        Enrollment.objects.create(user=evil_learner, course=self.published_org_course)
+
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/reports/analytics/?export=xlsx')
+        workbook = load_workbook(io.BytesIO(response.content))
+        sheet = workbook.active
+        names = [row[1] for row in sheet.iter_rows(min_row=2, values_only=True)]
+        self.assertIn("'=HYPERLINK(\"http://evil.test\") X", names)
 
 
 class RateLimitingTests(BaseAPITestCase):

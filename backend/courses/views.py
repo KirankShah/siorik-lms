@@ -5,10 +5,13 @@ from pathlib import PurePosixPath
 
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -18,9 +21,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Organization, User
-from assessments.models import QuizAttempt
+from assessments.models import Quiz, QuizAttempt
 from audit.models import AuditLog
 from audit.services import log_action
+from certificates.services import certificate_ineligibility_reason
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 from gamification.services import update_gamification_for_user
 
@@ -747,4 +751,193 @@ class EnrollmentReportView(APIView):
                 row['score_percent'] if row['score_percent'] is not None else '',
                 row['completion_date'] or '',
             ])
+        return response
+
+
+def _format_time_spent(total_seconds):
+    hours, remainder = divmod(int(total_seconds), 3600)
+    minutes = remainder // 60
+    return f'{hours}h {minutes}m' if hours else f'{minutes}m'
+
+
+def _format_quiz_attempts(quiz_breakdown):
+    parts = []
+    for quiz in quiz_breakdown:
+        if not quiz['attempts']:
+            continue
+        scores = ', '.join(f"{attempt['score_percent']:g}%" for attempt in quiz['attempts'])
+        parts.append(f"{quiz['quiz_title']}: {scores}")
+    return '; '.join(parts) if parts else 'No attempts'
+
+
+class AdminAnalyticsView(APIView):
+    """
+    Per-user, per-course analytics grouped by Organization: assigned
+    course(s), % completion, pass/fail (Phase 34's course-wide average
+    rule), aggregate time spent (Phase 13's SlideProgress.time_spent_seconds),
+    and a per-quiz retake/attempt-score breakdown. Same org-scoping rule as
+    EnrollmentReportView: PLATFORM_ADMIN may filter by any organization,
+    ORG_ADMIN/INSTRUCTOR are always hard-scoped to their own regardless of
+    the query param.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        user = request.user
+        enrollments = Enrollment.objects.select_related('user', 'user__organization', 'course')
+
+        if user.role == User.Role.PLATFORM_ADMIN:
+            org_id = request.query_params.get('organization')
+            if org_id:
+                enrollments = enrollments.filter(user__organization_id=org_id)
+        else:
+            enrollments = enrollments.filter(user__organization_id=user.organization_id)
+
+        course_id = request.query_params.get('course')
+        if course_id:
+            enrollments = enrollments.filter(course_id=course_id)
+
+        enrollments = enrollments.order_by(
+            'user__organization__name', 'user__last_name', 'user__first_name', 'course__title'
+        )
+
+        rows = [self._build_row(enrollment) for enrollment in enrollments]
+
+        if request.query_params.get('export') == 'xlsx':
+            return self._xlsx_response(rows)
+        return Response(self._group_by_organization(rows))
+
+    def _build_row(self, enrollment):
+        user = enrollment.user
+        course = enrollment.course
+
+        time_spent_seconds = SlideProgress.objects.filter(enrollment=enrollment).aggregate(
+            total=Sum('time_spent_seconds')
+        )['total'] or 0
+
+        quizzes = list(
+            Quiz.objects.filter(slide__lesson__module__course=course)
+            .order_by('slide__lesson__module__order', 'slide__lesson__order', 'slide__order')
+        )
+        attempts_by_quiz = {}
+        for attempt in QuizAttempt.objects.filter(user=user, quiz__in=quizzes).order_by('quiz_id', 'attempt_number'):
+            attempts_by_quiz.setdefault(attempt.quiz_id, []).append(attempt)
+
+        quiz_breakdown = []
+        best_scores = []
+        for quiz in quizzes:
+            quiz_attempts = attempts_by_quiz.get(quiz.id, [])
+            scores = [attempt.score_percent for attempt in quiz_attempts]
+            best = max(scores) if scores else None
+            if best is not None:
+                best_scores.append(best)
+            quiz_breakdown.append({
+                'quiz_id': quiz.id,
+                'quiz_title': quiz.title,
+                'attempt_count': len(quiz_attempts),
+                'best_score': float(best) if best is not None else None,
+                'attempts': [
+                    {
+                        'attempt_number': attempt.attempt_number,
+                        'score_percent': float(attempt.score_percent),
+                        'passed': attempt.passed,
+                    }
+                    for attempt in quiz_attempts
+                ],
+            })
+
+        final_score = sum(best_scores) / len(best_scores) if best_scores else None
+
+        if enrollment.status == Enrollment.Status.COMPLETED:
+            pass_status = 'PASSED' if certificate_ineligibility_reason(user, course) is None else 'FAILED'
+        else:
+            # Pass/fail isn't decided yet — surface the enrollment's own
+            # status (NOT_STARTED/IN_PROGRESS) rather than forcing a verdict.
+            pass_status = enrollment.status
+
+        return {
+            'organization_id': user.organization_id,
+            'organization_name': user.organization.name if user.organization else 'No Organization',
+            'user_id': user.id,
+            'user_name': user.get_full_name() or user.email,
+            'user_email': user.email,
+            'course_id': course.id,
+            'course_title': course.title,
+            'status': enrollment.status,
+            'progress_percent': enrollment.progress_percent,
+            'pass_status': pass_status,
+            'final_score': round(final_score, 1) if final_score is not None else None,
+            'time_spent_seconds': time_spent_seconds,
+            'total_quiz_attempts': sum(len(a) for a in attempts_by_quiz.values()),
+            'quizzes': quiz_breakdown,
+        }
+
+    def _group_by_organization(self, rows):
+        organizations = {}
+        order = []
+        for row in rows:
+            org_id = row['organization_id']
+            if org_id not in organizations:
+                organizations[org_id] = {
+                    'organization_id': org_id,
+                    'organization_name': row['organization_name'],
+                    'rows': [],
+                }
+                order.append(org_id)
+            organizations[org_id]['rows'].append(row)
+        return [organizations[org_id] for org_id in order]
+
+    def _xlsx_response(self, rows):
+        headers = [
+            'Organization', 'User Name', 'User Email', 'Course', 'Status',
+            '% Completion', 'Pass/Fail', 'Final Score', 'Time Spent',
+            'Total Quiz Attempts', 'Attempt Details',
+        ]
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Analytics'
+
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
+        for col_index, header in enumerate(headers, start=1):
+            cell = sheet.cell(row=1, column=col_index, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for row_index, row in enumerate(rows, start=2):
+            sheet.cell(row=row_index, column=1, value=_csv_safe(row['organization_name']))
+            sheet.cell(row=row_index, column=2, value=_csv_safe(row['user_name']))
+            sheet.cell(row=row_index, column=3, value=_csv_safe(row['user_email']))
+            sheet.cell(row=row_index, column=4, value=_csv_safe(row['course_title']))
+            sheet.cell(row=row_index, column=5, value=row['status'])
+
+            percent_cell = sheet.cell(row=row_index, column=6, value=row['progress_percent'] / 100)
+            percent_cell.number_format = '0%'
+
+            sheet.cell(row=row_index, column=7, value=row['pass_status'])
+
+            score_cell = sheet.cell(
+                row=row_index, column=8, value=row['final_score'] if row['final_score'] is not None else 'N/A'
+            )
+            if row['final_score'] is not None:
+                score_cell.number_format = '0.0"%"'
+
+            sheet.cell(row=row_index, column=9, value=_format_time_spent(row['time_spent_seconds']))
+            sheet.cell(row=row_index, column=10, value=row['total_quiz_attempts'])
+            sheet.cell(row=row_index, column=11, value=_csv_safe(_format_quiz_attempts(row['quizzes'])))
+
+        for col_index, header in enumerate(headers, start=1):
+            sheet.column_dimensions[get_column_letter(col_index)].width = max(14, len(header) + 4)
+        sheet.column_dimensions[get_column_letter(len(headers))].width = 50
+        sheet.freeze_panes = 'A2'
+
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = 'attachment; filename="admin_analytics.xlsx"'
         return response

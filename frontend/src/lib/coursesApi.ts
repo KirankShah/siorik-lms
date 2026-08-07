@@ -1,5 +1,5 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
-import type { BulkEnrollResult, ReportRow } from '../types/admin'
+import type { AnalyticsOrganizationGroup, BulkEnrollResult, ReportRow } from '../types/admin'
 import type {
   CourseAccessGrant,
   CourseDetail,
@@ -251,6 +251,38 @@ export async function downloadEnrollmentReportCsv(filters: ReportFilters): Promi
   const link = document.createElement('a')
   link.href = objectUrl
   link.download = 'enrollment_report.csv'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+// --- Admin: analytics dashboard ---
+
+export interface AnalyticsFilters {
+  organization?: number
+  course?: number
+}
+
+function analyticsQueryString(filters: AnalyticsFilters): string {
+  const params = new URLSearchParams()
+  if (filters.organization) params.set('organization', String(filters.organization))
+  if (filters.course) params.set('course', String(filters.course))
+  return params.toString()
+}
+
+export function fetchAdminAnalytics(filters: AnalyticsFilters): Promise<AnalyticsOrganizationGroup[]> {
+  const query = analyticsQueryString(filters)
+  return apiFetch<AnalyticsOrganizationGroup[]>(`/reports/analytics/${query ? `?${query}` : ''}`)
+}
+
+export async function downloadAdminAnalyticsXlsx(filters: AnalyticsFilters): Promise<void> {
+  const query = analyticsQueryString(filters)
+  const blob = await apiFetchBlob(`/reports/analytics/?${query ? `${query}&` : ''}export=xlsx`)
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = 'admin_analytics.xlsx'
   document.body.appendChild(link)
   link.click()
   link.remove()

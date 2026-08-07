@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .video_streaming import stream_element_video
 from .views import (
+    AdminAnalyticsView,
     CourseViewSet,
     ElementViewSet,
     EnrollmentReportView,
@@ -25,6 +26,7 @@ router.register('slide-templates', SlideTemplateViewSet, basename='slide-templat
 
 urlpatterns = router.urls + [
     path('reports/enrollments/', EnrollmentReportView.as_view(), name='enrollment-report'),
+    path('reports/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
     path('media/upload/', MediaUploadView.as_view(), name='media-upload'),
     path('elements/<int:pk>/video/', stream_element_video, name='element-video-stream'),
 ]

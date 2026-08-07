@@ -9,6 +9,7 @@ import { LearnerReportsPage } from './pages/LearnerReportsPage'
 import { LoginPage } from './pages/LoginPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
 import { AdminSectionLayout } from './pages/admin/AdminSectionLayout'
+import { AnalyticsPage } from './pages/admin/AnalyticsPage'
 import { BulkEnrollPage } from './pages/admin/BulkEnrollPage'
 import { CertificateTemplatesPage } from './pages/admin/CertificateTemplatesPage'
 import { CourseAnalyzeTab } from './pages/admin/CourseAnalyzeTab'
@@ -51,6 +52,7 @@ function App() {
               <Route path="courses/new" element={<CourseEditorPage />} />
               <Route path="grading" element={<GradingPage />} />
               <Route path="reports" element={<ReportsPage />} />
+              <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="bulk-enroll" element={<BulkEnrollPage />} />
               <Route path="certificate-templates" element={<CertificateTemplatesPage />} />
               <Route path="demo-users" element={<DemoUsersPage />} />
