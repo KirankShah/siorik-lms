@@ -174,6 +174,53 @@ class CourseVisibilityTests(BaseAPITestCase):
         self.assertEqual(response.data['modules'][0]['lessons'][0]['title'], 'Welcome')
 
 
+class OrganizationAccessHardeningTests(BaseAPITestCase):
+    """
+    Explicit query/permission-layer coverage for cross-Organization access:
+    a user authenticated as a member of one Organization must never be able
+    to retrieve, list, or modify a Course (or its sub-resources) that belongs
+    to a different Organization, regardless of role.
+    """
+
+    def test_learner_direct_retrieve_of_another_orgs_course_is_denied(self):
+        self.auth_as(self.learner)  # self.org
+        response = self.client.get(f'/api/courses/{self.other_org_course.slug}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_learner_from_the_target_org_can_retrieve_the_same_course(self):
+        self.auth_as(self.other_org_learner)  # self.other_org, matches other_org_course
+        response = self.client.get(f'/api/courses/{self.other_org_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['slug'], self.other_org_course.slug)
+
+    def test_other_org_learner_cannot_retrieve_this_orgs_course(self):
+        self.auth_as(self.other_org_learner)
+        response = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_org_admin_direct_retrieve_of_another_orgs_course_is_denied(self):
+        self.auth_as(self.org_admin)  # self.org
+        response = self.client.get(f'/api/courses/{self.other_org_course.slug}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_org_admin_cannot_edit_another_orgs_course(self):
+        self.auth_as(self.org_admin)
+        response = self.client.patch(f'/api/courses/{self.other_org_course.slug}/', {'title': 'Hacked'})
+        self.assertEqual(response.status_code, 404)
+        self.other_org_course.refresh_from_db()
+        self.assertEqual(self.other_org_course.title, 'Other Org Course')
+
+    def test_other_org_course_excluded_from_list_endpoint(self):
+        self.auth_as(self.learner)
+        slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
+        self.assertNotIn(self.other_org_course.slug, slugs)
+
+    def test_platform_admin_can_still_retrieve_any_orgs_course(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(f'/api/courses/{self.other_org_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+
 class EnrollmentFlowTests(BaseAPITestCase):
     def test_learner_can_enroll_and_list_own_enrollment(self):
         self.auth_as(self.learner)
@@ -505,6 +552,23 @@ class CertificateIssueEndpointTests(BaseAPITestCase):
         second = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
         self.assertEqual(first.data['id'], second.data['id'])
 
+    def test_issue_endpoint_rejects_course_outside_requesters_organization(self):
+        # Directly construct an eligible-looking Enrollment/QuizAttempt for a
+        # learner in a different org than the course, bypassing the normal
+        # enroll-time visible_courses_for_user gate, to prove the issue
+        # endpoint itself also org-scopes the course lookup as defense in depth.
+        Enrollment.objects.create(
+            user=self.other_org_learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(
+            user=self.other_org_learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100
+        )
+
+        self.auth_as(self.other_org_learner)
+        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(response.status_code, 404)
+
 
 class OrganizationListTests(BaseAPITestCase):
     def test_platform_admin_can_list_organizations(self):
@@ -751,6 +815,66 @@ class BulkEnrollTests(BaseAPITestCase):
         self.auth_as(self.instructor)
         response = self.client.post(
             f'/api/courses/{self.other_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_bulk_enroll_rejects_user_from_a_different_organization(self):
+        csv_content = f'{self.other_org_learner.email}\n'.encode()
+        upload = SimpleUploadedFile('emails.csv', csv_content, content_type='text/csv')
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['wrong_organization'], [self.other_org_learner.email])
+        self.assertEqual(response.data['enrolled'], [])
+        self.assertFalse(
+            Enrollment.objects.filter(user=self.other_org_learner, course=self.published_org_course).exists()
+        )
+
+    def test_bulk_enroll_platform_admin_may_enroll_any_org_into_a_platform_course(self):
+        csv_content = f'{self.other_org_learner.email}\n'.encode()
+        upload = SimpleUploadedFile('emails.csv', csv_content, content_type='text/csv')
+
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            f'/api/courses/{self.platform_course.slug}/bulk-enroll/', {'file': upload}, format='multipart'
+        )
+        self.assertEqual(response.data['enrolled'], [self.other_org_learner.email])
+        self.assertTrue(Enrollment.objects.filter(user=self.other_org_learner, course=self.platform_course).exists())
+
+
+class InviteLearnerTests(BaseAPITestCase):
+    def test_invite_enrolls_existing_user_in_own_org(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/invite/', {'email': self.learner.email}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(Enrollment.objects.filter(user=self.learner, course=self.published_org_course).exists())
+
+    def test_invite_rejects_user_from_a_different_organization(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/invite/', {'email': self.other_org_learner.email}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            Enrollment.objects.filter(user=self.other_org_learner, course=self.published_org_course).exists()
+        )
+
+    def test_invite_unknown_email_returns_404(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/invite/', {'email': 'nobody@example.com'}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_invite_rejects_course_outside_org(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            f'/api/courses/{self.other_org_course.slug}/invite/', {'email': self.learner.email}
         )
         self.assertEqual(response.status_code, 404)
 

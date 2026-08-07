@@ -88,6 +88,12 @@ export function BulkEnrollPage() {
               No account found for ({result.not_found.length}): {result.not_found.join(', ')}
             </p>
           )}
+          {result.wrong_organization.length > 0 && (
+            <p className="text-sm text-red-600">
+              Not enrolled — different organization ({result.wrong_organization.length}):{' '}
+              {result.wrong_organization.join(', ')}
+            </p>
+          )}
         </Card>
       )}
     </div>

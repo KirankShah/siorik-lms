@@ -13,6 +13,10 @@ import type { BulkEnrollResult } from '../../types/admin'
 import type { Organization } from '../../types/auth'
 import type { CourseDashboardContext } from './CourseDashboardLayout'
 
+function isDetailBody(body: unknown): body is { detail: string } {
+  return typeof body === 'object' && body !== null && typeof (body as { detail?: unknown }).detail === 'string'
+}
+
 function EmailList({ label, emails }: { label: string; emails: string[] }) {
   if (emails.length === 0) return null
   return (
@@ -49,6 +53,8 @@ export function CourseShareTab() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setInviteError(`No account found for ${email}.`)
+      } else if (err instanceof ApiError && err.status === 400 && isDetailBody(err.body)) {
+        setInviteError(err.body.detail)
       } else {
         setInviteError('Could not invite this learner.')
       }
@@ -128,6 +134,7 @@ export function CourseShareTab() {
             <EmailList label="Enrolled" emails={bulkResult.enrolled} />
             <EmailList label="Already enrolled" emails={bulkResult.already_enrolled} />
             <EmailList label="Not found" emails={bulkResult.not_found} />
+            <EmailList label="Different organization" emails={bulkResult.wrong_organization} />
           </div>
         )}
       </Card>

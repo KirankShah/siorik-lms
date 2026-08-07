@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
-from courses.models import Course
+from courses.permissions import visible_courses_for_user
 
 from .models import Certificate, CertificateTemplate
 from .serializers import CertificateSerializer, CertificateTemplateSerializer
@@ -25,7 +25,7 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
     @action(detail=False, methods=['post'])
     def issue(self, request):
         """Issue (or return the existing valid) certificate for the caller on a given course."""
-        course = get_object_or_404(Course, pk=request.data.get('course'))
+        course = get_object_or_404(visible_courses_for_user(request.user), pk=request.data.get('course'))
         try:
             certificate = generate_certificate(request.user, course)
         except CertificateIssuanceError as exc:

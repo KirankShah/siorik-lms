@@ -11,4 +11,5 @@ export interface BulkEnrollResult {
   enrolled: string[]
   already_enrolled: string[]
   not_found: string[]
+  wrong_organization: string[]
 }

@@ -186,12 +186,18 @@ class CourseViewSet(viewsets.ModelViewSet):
             if candidate and '@' in candidate:
                 emails.append(candidate.lower())
 
-        enrolled, already_enrolled, not_found = [], [], []
+        enrolled, already_enrolled, not_found, wrong_organization = [], [], [], []
         for email in emails:
             try:
                 user = User.objects.get(email__iexact=email)
             except User.DoesNotExist:
                 not_found.append(email)
+                continue
+            if (
+                course.content_owner == Course.ContentOwner.ORGANIZATION
+                and user.organization_id != course.organization_id
+            ):
+                wrong_organization.append(email)
                 continue
             _, created = Enrollment.objects.get_or_create(user=user, course=course)
             (enrolled if created else already_enrolled).append(email)
@@ -200,6 +206,7 @@ class CourseViewSet(viewsets.ModelViewSet):
             'enrolled': enrolled,
             'already_enrolled': already_enrolled,
             'not_found': not_found,
+            'wrong_organization': wrong_organization,
         })
 
     @action(detail=True, methods=['post'])
@@ -214,6 +221,12 @@ class CourseViewSet(viewsets.ModelViewSet):
             user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
             return Response({'detail': f'No account found for {email}.'}, status=404)
+
+        if (
+            course.content_owner == Course.ContentOwner.ORGANIZATION
+            and user.organization_id != course.organization_id
+        ):
+            return Response({'detail': f'{email} does not belong to this course\'s organization.'}, status=400)
 
         _, created = Enrollment.objects.get_or_create(user=user, course=course)
         return Response({'email': email, 'created': created}, status=201 if created else 200)
