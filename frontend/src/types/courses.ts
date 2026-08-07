@@ -41,6 +41,12 @@ export interface CourseListItem {
   completion_deadline_days: number | null
   created_at: string
   updated_at: string
+  // True only for a demo user (accounts.User.is_demo) viewing a course
+  // outside their Organization's normal assignment — see backend
+  // courses.permissions.catalog_courses_for_user. Always false otherwise.
+  // A locked course is a teaser card only: its detail/content stays 404
+  // server-side even if the id/slug is known.
+  is_locked: boolean
 }
 
 export interface CourseAccessGrant {

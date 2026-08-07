@@ -1331,6 +1331,78 @@ class SetPasswordApiTests(BaseAPITestCase):
         self.assertTrue(response.data['is_demo'])
 
 
+class DemoUserCatalogVisibilityTests(BaseAPITestCase):
+    """
+    Phase 33: demo users see the FULL course catalog (every published course,
+    regardless of Organization), with courses outside their own org's normal
+    assignment flagged is_locked=True rather than hidden. Locked courses stay
+    a teaser card only — retrieval and enrollment are still denied
+    server-side, matching visible_courses_for_user exactly.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.demo_learner = User.objects.create_user(
+            email='demo-catalog@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org,
+            is_demo=True,
+        )
+
+    def _by_slug(self, response):
+        return {c['slug']: c for c in response.data}
+
+    def test_demo_user_sees_every_published_course_across_organizations(self):
+        self.auth_as(self.demo_learner)
+        response = self.client.get('/api/courses/')
+        slugs = self._by_slug(response)
+        self.assertIn(self.published_org_course.slug, slugs)
+        self.assertIn(self.other_org_course.slug, slugs)
+        self.assertIn(self.platform_course.slug, slugs)
+        # Drafts are still withheld entirely — is_published gates content
+        # readiness, not the demo teaser mechanism.
+        self.assertNotIn(self.unpublished_org_course.slug, slugs)
+
+    def test_own_org_course_is_unlocked_others_are_locked(self):
+        self.auth_as(self.demo_learner)
+        courses = self._by_slug(self.client.get('/api/courses/'))
+        self.assertFalse(courses[self.published_org_course.slug]['is_locked'])
+        self.assertTrue(courses[self.other_org_course.slug]['is_locked'])
+        self.assertTrue(courses[self.platform_course.slug]['is_locked'])
+
+    def test_granted_platform_course_becomes_unlocked_for_demo_user(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
+        self.auth_as(self.demo_learner)
+        courses = self._by_slug(self.client.get('/api/courses/'))
+        self.assertFalse(courses[self.platform_course.slug]['is_locked'])
+
+    def test_non_demo_learner_never_sees_is_locked_true(self):
+        self.auth_as(self.learner)
+        courses = self._by_slug(self.client.get('/api/courses/'))
+        self.assertEqual(set(courses), {self.published_org_course.slug})
+        self.assertFalse(courses[self.published_org_course.slug]['is_locked'])
+
+    def test_force_navigating_to_a_locked_course_url_is_denied(self):
+        self.auth_as(self.demo_learner)
+        response = self.client.get(f'/api/courses/{self.other_org_course.slug}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_demo_user_cannot_enroll_in_a_locked_course(self):
+        self.auth_as(self.demo_learner)
+        response = self.client.post('/api/enrollments/', {'course': self.other_org_course.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            Enrollment.objects.filter(user=self.demo_learner, course=self.other_org_course).exists()
+        )
+
+    def test_demo_user_can_retrieve_and_enroll_in_an_assigned_course(self):
+        self.auth_as(self.demo_learner)
+        retrieve = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        self.assertEqual(retrieve.status_code, 200)
+
+        enroll = self.client.post('/api/enrollments/', {'course': self.published_org_course.id})
+        self.assertEqual(enroll.status_code, 201)
+
+
 class DemoLessonAccessTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()

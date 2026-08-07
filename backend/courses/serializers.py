@@ -16,7 +16,7 @@ from .models import (
     SlideProgress,
     SlideTemplate,
 )
-from .permissions import is_lesson_locked_for_demo_user
+from .permissions import is_lesson_locked_for_demo_user, visible_courses_for_user
 
 
 class SlideTemplateSerializer(serializers.ModelSerializer):
@@ -97,6 +97,13 @@ class ModuleSerializer(serializers.ModelSerializer):
 
 
 class CourseListSerializer(serializers.ModelSerializer):
+    # True only for a demo user (accounts.User.is_demo) viewing a course
+    # outside their normal Organization assignment — see
+    # courses.permissions.catalog_courses_for_user. Always False otherwise;
+    # a locked course is still just a teaser card, since retrieving it
+    # (and everything beneath it) stays gated by visible_courses_for_user.
+    is_locked = serializers.SerializerMethodField()
+
     class Meta:
         model = Course
         fields = [
@@ -112,7 +119,18 @@ class CourseListSerializer(serializers.ModelSerializer):
             'completion_deadline_days',
             'created_at',
             'updated_at',
+            'is_locked',
         ]
+
+    def get_is_locked(self, course):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is None or not getattr(user, 'is_demo', False):
+            return False
+        assigned_ids = self.context.get('assigned_course_ids')
+        if assigned_ids is not None:
+            return course.pk not in assigned_ids
+        return not visible_courses_for_user(user).filter(pk=course.pk).exists()
 
 
 class CourseAccessSerializer(serializers.ModelSerializer):

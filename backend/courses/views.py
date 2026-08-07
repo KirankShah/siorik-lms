@@ -37,7 +37,13 @@ from .models import (
     SlideProgress,
     SlideTemplate,
 )
-from .permissions import editable_courses_for_user, exclude_demo_locked, is_lesson_locked_for_demo_user, visible_courses_for_user
+from .permissions import (
+    catalog_courses_for_user,
+    editable_courses_for_user,
+    exclude_demo_locked,
+    is_lesson_locked_for_demo_user,
+    visible_courses_for_user,
+)
 from .serializers import (
     CourseAccessSerializer,
     CourseDetailSerializer,
@@ -94,7 +100,9 @@ class CourseViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        if self.action in ('list', 'retrieve'):
+        if self.action == 'list':
+            return catalog_courses_for_user(self.request.user)
+        if self.action == 'retrieve':
             return visible_courses_for_user(self.request.user)
         return editable_courses_for_user(self.request.user)
 
@@ -104,6 +112,17 @@ class CourseViewSet(viewsets.ModelViewSet):
         if self.action in WRITE_ACTIONS:
             return CourseWriteSerializer
         return CourseDetailSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action == 'list' and getattr(self.request.user, 'is_demo', False):
+            # Precomputed once here (rather than per-row in the serializer)
+            # so CourseListSerializer.get_is_locked is a plain set-membership
+            # check instead of an N+1 query per course in the catalog.
+            context['assigned_course_ids'] = set(
+                visible_courses_for_user(self.request.user).values_list('id', flat=True)
+            )
+        return context
 
     def perform_create(self, serializer):
         user = self.request.user

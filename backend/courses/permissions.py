@@ -41,6 +41,26 @@ def visible_courses_for_user(user):
     return _org_scoped_courses(user).filter(is_published=True)
 
 
+def catalog_courses_for_user(user):
+    """
+    The queryset a course-list/catalog view should enumerate. Identical to
+    visible_courses_for_user for every ordinary user. For a demo user
+    (LEARNER, is_demo=True) this deliberately widens to every published
+    course platform-wide — including ones outside their own Organization's
+    normal assignment — so the catalog can render those as locked teaser
+    cards instead of hiding them outright.
+
+    This is catalog-listing only: retrieval of a single course, and every
+    content-fetching endpoint below it (modules/lessons/elements/quizzes/
+    etc.), all stay gated by visible_courses_for_user alone, so a locked
+    course's detail/content is never actually reachable server-side even
+    though its card is visible — force-navigating to its URL 404s.
+    """
+    if getattr(user, 'is_demo', False):
+        return Course.objects.filter(is_published=True)
+    return visible_courses_for_user(user)
+
+
 def editable_courses_for_user(user):
     """
     Courses a given user is allowed to create/edit content for:
