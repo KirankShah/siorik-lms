@@ -15,6 +15,12 @@ MAX_QUESTION_TEXT_LENGTH = 5_000
 class Quiz(models.Model):
     slide = models.ForeignKey(Slide, on_delete=models.CASCADE, related_name='quizzes')
     title = models.CharField(max_length=255)
+    # Per-quiz pass/fail indicator only (drives QuizAttempt.passed and what's
+    # shown to the learner right after submitting). Certificate eligibility
+    # is governed separately, by the course-wide average against
+    # Course.certificate_pass_threshold — see
+    # certificates.services.certificate_ineligibility_reason. A learner can
+    # fail an individual quiz here and still earn the certificate.
     pass_percentage = models.PositiveIntegerField(
         default=70,
         validators=[MinValueValidator(0), MaxValueValidator(100)],

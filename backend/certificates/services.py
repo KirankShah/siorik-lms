@@ -35,35 +35,56 @@ class CertificateIssuanceError(Exception):
     """Raised when a certificate cannot be issued for a user/course combination."""
 
 
-def generate_certificate(user, course):
+def certificate_ineligibility_reason(user, course):
     """
-    Issue (or return the existing valid) Certificate for a user who has completed a course.
+    None if `user` is currently eligible for a certificate on `course`;
+    otherwise a human-readable reason they aren't (yet). Read-only — never
+    creates a Certificate, so it's safe to call speculatively (e.g. to decide
+    whether to show a "Retake Course" action) without side effects.
 
-    Requires the user's Enrollment to be COMPLETED, every Quiz linked to the
-    course to have at least one passed QuizAttempt by the user, and the
-    average of each quiz's best score to meet course.certificate_pass_threshold.
-    Raises CertificateIssuanceError if any condition is not met.
+    Eligibility (Phase 34) is exactly two course-wide rules:
+    - The Enrollment must be COMPLETED (every slide/lesson done).
+    - The learner's AVERAGE score across all of the course's quizzes (each
+      quiz's own best attempt) must meet course.certificate_pass_threshold.
+      This is a course-wide average, not a requirement that every individual
+      quiz independently score at or above its own Quiz.pass_percentage —
+      that field remains a per-quiz pass/fail indicator shown to the learner
+      during the course, but doesn't itself gate the certificate. A quiz the
+      learner has never attempted still blocks issuance (there's no score to
+      average in), distinct from one they attempted and failed.
     """
     enrollment = Enrollment.objects.filter(user=user, course=course).first()
     if enrollment is None or enrollment.status != Enrollment.Status.COMPLETED:
-        raise CertificateIssuanceError('Enrollment must be completed before a certificate can be issued.')
+        return 'Enrollment must be completed before a certificate can be issued.'
 
     quizzes = Quiz.objects.filter(slide__lesson__module__course=course)
     best_scores = []
     for quiz in quizzes:
-        if not QuizAttempt.objects.filter(user=user, quiz=quiz, passed=True).exists():
-            raise CertificateIssuanceError(f'Quiz "{quiz.title}" has not been passed yet.')
         best = QuizAttempt.objects.filter(user=user, quiz=quiz).aggregate(best=Max('score_percent'))['best']
-        if best is not None:
-            best_scores.append(best)
+        if best is None:
+            return f'Quiz "{quiz.title}" has not been attempted yet.'
+        best_scores.append(best)
 
     if best_scores:
         average_score = sum(best_scores) / len(best_scores)
         if average_score < course.certificate_pass_threshold:
-            raise CertificateIssuanceError(
+            return (
                 f'Average score {average_score:.1f}% is below the course pass threshold of '
                 f'{course.certificate_pass_threshold}%.'
             )
+    return None
+
+
+def generate_certificate(user, course):
+    """
+    Issue (or return the existing valid) Certificate for a user who has
+    completed a course. See certificate_ineligibility_reason for the
+    eligibility rules this enforces. Raises CertificateIssuanceError if the
+    learner isn't currently eligible.
+    """
+    reason = certificate_ineligibility_reason(user, course)
+    if reason:
+        raise CertificateIssuanceError(reason)
 
     existing = Certificate.objects.filter(user=user, course=course).order_by('-issued_at').first()
     if existing and (existing.expires_at is None or existing.expires_at > timezone.now()):

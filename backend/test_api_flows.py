@@ -20,8 +20,14 @@ from accounts.services import DemoUserProvisioningError, provision_demo_user
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from assignments.models import Assignment
 from audit.models import AuditLog
-from certificates.models import CertificateTemplate
-from certificates.services import MIN_AUTO_SHRINK_FONT_SIZE, CertificateIssuanceError, _fit_font, generate_certificate
+from certificates.models import Certificate, CertificateTemplate
+from certificates.services import (
+    MIN_AUTO_SHRINK_FONT_SIZE,
+    CertificateIssuanceError,
+    _fit_font,
+    certificate_ineligibility_reason,
+    generate_certificate,
+)
 from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide
 from scenarios.models import ScenarioChoice, ScenarioNode
 
@@ -576,7 +582,7 @@ class CertificateIssueEndpointTests(BaseAPITestCase):
         self.assertIn('certificate_number', response.data)
         self.assertTrue(response.data['pdf_file'])
 
-    def test_issue_endpoint_rejects_when_quiz_not_passed(self):
+    def test_issue_endpoint_rejects_when_quiz_not_attempted(self):
         Enrollment.objects.create(
             user=self.learner, course=self.published_org_course,
             status=Enrollment.Status.COMPLETED,
@@ -584,6 +590,7 @@ class CertificateIssueEndpointTests(BaseAPITestCase):
         self.auth_as(self.learner)
         response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
         self.assertEqual(response.status_code, 400)
+        self.assertIn('has not been attempted yet', response.data['detail'])
 
     def test_issue_endpoint_is_idempotent(self):
         Enrollment.objects.create(
@@ -613,6 +620,90 @@ class CertificateIssueEndpointTests(BaseAPITestCase):
         self.auth_as(self.other_org_learner)
         response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
         self.assertEqual(response.status_code, 404)
+
+
+class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
+    """
+    Phase 34: certificate eligibility is governed by the course-wide AVERAGE
+    score across all of the course's quizzes (each quiz's own best attempt),
+    not a requirement that every individual quiz independently score above
+    its own Quiz.pass_percentage. self.quiz (pass_percentage=50) already
+    exists on lesson1 from BaseAPITestCase; a second quiz (pass_percentage=
+    70) is added on lesson2 here so the average can diverge from any single
+    quiz's individual pass/fail outcome. published_org_course.
+    certificate_pass_threshold is the default (70).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.quiz2_slide = Slide.objects.create(
+            lesson=self.lesson2, order=99, title='Second Exam', slide_type=Slide.SlideType.QUIZ,
+        )
+        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam', pass_percentage=70)
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
+        )
+
+    def test_certificate_issues_when_average_meets_threshold_despite_one_quiz_individually_failed(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=False, score_percent=40)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=100)
+        # Average = (40 + 100) / 2 = 70, meets the 70% threshold — even though
+        # self.quiz was individually failed against its own pass_percentage=50.
+
+        self.assertIsNone(certificate_ineligibility_reason(self.learner, self.published_org_course))
+
+        self.auth_as(self.learner)
+        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Certificate.objects.filter(user=self.learner, course=self.published_org_course).exists())
+
+    def test_certificate_denied_when_average_below_threshold_despite_one_quiz_individually_passed(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=False, score_percent=20)
+        # Average = (100 + 20) / 2 = 60, below the 70% threshold — even though
+        # self.quiz was individually passed against its own pass_percentage=50.
+
+        reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
+        self.assertIsNotNone(reason)
+        self.assertIn('60.0%', reason)
+
+        self.auth_as(self.learner)
+        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Certificate.objects.filter(user=self.learner, course=self.published_org_course).exists())
+
+    def test_unattempted_quiz_blocks_issuance_even_with_a_high_score_elsewhere(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        # self.quiz2 was never attempted at all.
+
+        reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
+        self.assertIsNotNone(reason)
+        self.assertIn('has not been attempted yet', reason)
+
+    def test_enrollment_serializer_exposes_ineligible_reason_only_once_completed_and_short(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=False, score_percent=20)
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/enrollments/{self.enrollment.id}/')
+        self.assertIsNotNone(response.data['certificate_ineligible_reason'])
+        self.assertIn('60.0%', response.data['certificate_ineligible_reason'])
+
+    def test_enrollment_serializer_reason_is_null_when_average_meets_threshold(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=False, score_percent=40)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=100)
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/enrollments/{self.enrollment.id}/')
+        self.assertIsNone(response.data['certificate_ineligible_reason'])
+
+    def test_enrollment_serializer_reason_is_null_while_still_in_progress(self):
+        self.enrollment.status = Enrollment.Status.IN_PROGRESS
+        self.enrollment.save()
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/enrollments/{self.enrollment.id}/')
+        self.assertIsNone(response.data['certificate_ineligible_reason'])
 
 
 class OrganizationListTests(BaseAPITestCase):

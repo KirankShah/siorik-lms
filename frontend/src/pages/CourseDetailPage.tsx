@@ -226,7 +226,21 @@ export function CourseDetailPage() {
               secondsRemaining={secondsRemaining}
             />
 
-            {allSlidesComplete && (
+            {allSlidesComplete && enrollment.certificate_ineligible_reason && (
+              <div className="no-print mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-medium text-amber-800">
+                  You've completed every slide, but haven't earned a certificate yet.
+                </p>
+                <p className="mt-1 text-xs text-amber-700">{enrollment.certificate_ineligible_reason}</p>
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={goToFirst}>
+                    Retake Course
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {allSlidesComplete && !enrollment.certificate_ineligible_reason && (
               <div className="no-print mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
                 <p className="text-sm font-medium text-emerald-800">You've completed every slide in this course.</p>
                 <div className="mt-3">

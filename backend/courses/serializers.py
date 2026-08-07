@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
+from certificates.services import certificate_ineligibility_reason
 
 from .models import (
     Course,
@@ -306,6 +307,14 @@ class SlideProgressSerializer(serializers.ModelSerializer):
 class EnrollmentSerializer(serializers.ModelSerializer):
     completed_lesson_ids = serializers.SerializerMethodField()
     slide_progress = SlideProgressSerializer(many=True, read_only=True)
+    # Null once the enrollment isn't COMPLETED yet, or once the learner is
+    # actually eligible for a certificate. Otherwise the human-readable
+    # reason they aren't (yet) — currently always the course-wide average
+    # falling short of Course.certificate_pass_threshold, once every slide is
+    # done. Read-only and side-effect-free; see
+    # certificates.services.certificate_ineligibility_reason. Drives the
+    # frontend's "Retake Course" action.
+    certificate_ineligible_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
@@ -319,11 +328,20 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'progress_percent',
             'completed_lesson_ids',
             'slide_progress',
+            'certificate_ineligible_reason',
         ]
-        read_only_fields = ['id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress']
+        read_only_fields = [
+            'id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress',
+            'certificate_ineligible_reason',
+        ]
 
     def get_completed_lesson_ids(self, enrollment):
         return list(enrollment.lesson_progress.values_list('lesson_id', flat=True))
+
+    def get_certificate_ineligible_reason(self, enrollment):
+        if enrollment.status != Enrollment.Status.COMPLETED:
+            return None
+        return certificate_ineligibility_reason(enrollment.user, enrollment.course)
 
     def validate_course(self, course):
         request = self.context['request']

@@ -359,6 +359,17 @@ function LearnerDashboard() {
                         {isOverdue ? 'Overdue — was due' : 'Due'} {deadline.toLocaleDateString()}
                       </p>
                     )}
+                    {enrollment.status === 'COMPLETED' && enrollment.certificate_ineligible_reason && course && (
+                      <div className="mt-1.5">
+                        <p className="text-xs text-amber-700">{enrollment.certificate_ineligible_reason}</p>
+                        <Link
+                          to={`/courses/${course.slug}`}
+                          className="text-xs font-medium text-brand-navy hover:underline"
+                        >
+                          Retake Course
+                        </Link>
+                      </div>
+                    )}
                   </li>
                 )
               })}

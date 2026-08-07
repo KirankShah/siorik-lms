@@ -83,4 +83,9 @@ export interface Enrollment {
   progress_percent: number
   completed_lesson_ids: number[]
   slide_progress: SlideProgress[]
+  // Null once status isn't COMPLETED yet, or once the learner is eligible
+  // for a certificate. Otherwise why they aren't (yet) — currently always
+  // the course-wide quiz average falling short of the course's pass
+  // threshold. See backend certificates.services.certificate_ineligibility_reason.
+  certificate_ineligible_reason: string | null
 }
