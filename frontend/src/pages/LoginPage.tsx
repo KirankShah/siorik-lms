@@ -1,19 +1,68 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Eye, EyeOff } from 'lucide-react'
+import loginHero from '../assets/login-hero.jpg'
 import siorikLogoIcon from '../img/siorik_logo_icon.png'
-import siorikLogoWatermark from '../img/siorik_logo_320.png'
 import { ApiError } from '../lib/apiClient'
 import { useAuth } from '../context/AuthContext'
-import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
 
 interface LocationState {
   from?: { pathname: string }
 }
 
-const SCOPE_PILLS = ['Compliance', 'Credit', 'Operations', 'Leadership']
+const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-1'
+
+function CreamField({
+  id,
+  label,
+  type,
+  autoComplete,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  type: 'email' | 'password'
+  autoComplete: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  const [show, setShow] = useState(false)
+  const isPassword = type === 'password'
+  const inputType = isPassword ? (show ? 'text' : 'password') : type
+
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-semibold text-neutral-800">
+        {label}
+      </label>
+      <div className="relative mt-1.5">
+        <input
+          id={id}
+          type={inputType}
+          autoComplete={autoComplete}
+          required
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`block w-full rounded-2xl border border-brand-gold/30 bg-[#fbf1d9] px-3.5 py-2.5 text-sm text-neutral-900 shadow-sm transition placeholder:text-neutral-400 focus:border-brand-navy focus:ring-2 focus:ring-brand-navy focus:outline-none ${isPassword ? 'pr-11' : ''}`}
+        />
+        {isPassword && (
+          <button
+            type="button"
+            onClick={() => setShow((s) => !s)}
+            aria-label={show ? 'Hide password' : 'Show password'}
+            aria-pressed={show}
+            className={`absolute inset-y-0 right-0 flex items-center rounded-r-2xl px-3 text-neutral-500 hover:text-neutral-700 ${FOCUS_RING}`}
+          >
+            {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export function LoginPage() {
   const { user, login } = useAuth()
@@ -50,68 +99,56 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-white">
-      {/* Left panel — hidden below the tablet breakpoint */}
-      <div className="relative hidden w-[45%] shrink-0 overflow-hidden bg-gradient-to-br from-brand-navy to-brand-navy-light md:flex md:flex-col md:px-12 md:py-14">
-        {/* Oversized, low-opacity watermark of the logo mark, bleeding off the
-            panel's bottom-right corner so it reads as background texture. */}
-        <img
-          src={siorikLogoWatermark}
-          alt=""
-          aria-hidden="true"
-          className="pointer-events-none absolute -right-40 -bottom-40 h-[36rem] w-[36rem] object-contain opacity-[0.07] select-none"
-        />
+    <div className="relative min-h-screen w-full overflow-x-hidden bg-brand-navy">
+      {/* Full-bleed hero background — desktop only. Below the tablet breakpoint the image can't
+          reflow sensibly, so mobile falls back to the plain brand-navy background instead.
+          w-full/h-full (not the image's intrinsic 2555px) keep this fluid at every width. */}
+      <img
+        src={loginHero}
+        alt=""
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 hidden h-full w-full object-cover md:block"
+      />
 
-        <div className="relative z-10 flex flex-col">
-          <div className="flex items-center gap-3">
-            <img src={siorikLogoIcon} alt="Siorik Consultancy" className="h-11 w-11 shrink-0 object-contain" />
-            <span className="text-xs font-semibold tracking-[0.2em] text-white/90 uppercase">Siorik Consultancy</span>
-          </div>
+      {/* Single sign-in card instance: a normal-flow, centered stack (with the compact mobile
+          logo) below md, repositioned via absolute inset-0 + flexbox at md and up. Flexbox
+          (justify-end/items-center), not a fixed right-N% offset paired with a separately fixed
+          max-width, does the right-anchoring — it reflows with the container's actual width at
+          every intermediate size instead of only being correct at the exact breakpoints it was
+          tuned for. Rendered once (not duplicated per breakpoint) so the form's field ids stay
+          unique in the DOM. */}
+      <div className="relative z-10 flex min-h-screen w-full flex-col items-center justify-center gap-8 px-6 py-10 md:absolute md:inset-0 md:min-h-0 md:flex-row md:justify-end md:px-6 md:py-6 lg:px-10 xl:px-16">
+        <img src={siorikLogoIcon} alt="Siorik Consultancy" className="h-16 w-16 object-contain md:hidden" />
 
-          <h1 className="mt-10 max-w-md text-3xl font-semibold text-white md:text-[2.25rem] md:leading-[1.15]">
-            Compounding Interest, for Your People.
-          </h1>
-
-          <p className="mt-4 max-w-sm text-base text-white/75">
-            Strong institutions are built on strong people — this platform helps you build both.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-2">
-            {SCOPE_PILLS.map((scope) => (
-              <Badge key={scope} variant="dark">
-                {scope}
-              </Badge>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right panel — the login form */}
-      <div className="flex flex-1 items-center justify-center px-4 py-12">
-        <div className="w-full max-w-sm">
-          <h2 className="text-xl font-semibold text-neutral-900">Sign in</h2>
+        <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-2xl md:bg-white/95 md:backdrop-blur-sm">
+          <h2 className="text-2xl font-bold text-brand-navy">Sign In</h2>
           <p className="mt-1 text-sm text-neutral-500">Access your learning dashboard</p>
 
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <Input
-              id="email"
-              label="Email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+          <form onSubmit={handleSubmit} className="mt-6 space-y-5">
+            <CreamField id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
 
-            <Input
+            <CreamField
               id="password"
               label="Password"
               type="password"
               autoComplete="current-password"
-              required
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
             />
+
+            <div className="flex items-center justify-between">
+              <label htmlFor="remember-me" className="flex items-center gap-2 text-sm text-neutral-600">
+                <input
+                  id="remember-me"
+                  type="checkbox"
+                  className={`h-4 w-4 rounded border-neutral-300 accent-brand-navy ${FOCUS_RING}`}
+                />
+                Remember me
+              </label>
+              <button type="button" className={`rounded text-sm font-medium text-brand-navy hover:underline ${FOCUS_RING}`}>
+                Forgot Password?
+              </button>
+            </div>
 
             {error && (
               <p role="alert" className="text-sm text-red-600">
@@ -119,9 +156,15 @@ export function LoginPage() {
               </p>
             )}
 
-            <Button type="submit" disabled={isSubmitting} className="w-full">
-              {isSubmitting ? 'Signing in…' : 'Sign in'}
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full !rounded-2xl py-2.5 transition-colors duration-[350ms] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-gold focus-visible:ring-offset-2"
+            >
+              {isSubmitting ? 'Signing in…' : 'Sign In'}
             </Button>
+
+            <p className="text-center text-xs text-neutral-400">Role-Based Access Control · Audit Logging Enabled</p>
           </form>
         </div>
       </div>
