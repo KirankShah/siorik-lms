@@ -157,6 +157,21 @@ class QuestionSerializer(serializers.ModelSerializer):
             # still give it away outright, so shuffle it too.
             if instance.question_type == Question.QuestionType.ORDERING:
                 random.shuffle(data['choices'])
+            # SINGLE_CHOICE/MULTIPLE_CHOICE/MULTIPLE_ANSWER/TRUE_FALSE choices
+            # carry no answer-key meaning in their stored `order` (unlike
+            # ORDERING) — it's just creation order, which authors tend to
+            # leave the correct option sitting first in. Left unshuffled,
+            # that's a positional bias a learner can exploit by pattern
+            # rather than reading the question. Grading is by Choice id set
+            # equality (see QuizViewSet.submit), never by array position, so
+            # shuffling here is purely cosmetic and can't affect scoring.
+            if instance.question_type in (
+                Question.QuestionType.SINGLE_CHOICE,
+                Question.QuestionType.MULTIPLE_CHOICE,
+                Question.QuestionType.MULTIPLE_ANSWER,
+                Question.QuestionType.TRUE_FALSE,
+            ):
+                random.shuffle(data['choices'])
             # CATEGORIZE items are usually authored bucket-by-bucket, so
             # their natural order would otherwise cluster each bucket's
             # correct answers together — shuffle to break that up.

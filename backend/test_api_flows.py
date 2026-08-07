@@ -523,6 +523,99 @@ class MultipleAnswerScoringTests(BaseAPITestCase):
             self.assertNotIn('is_correct', choice)
 
 
+class ChoiceDisplayOrderTests(BaseAPITestCase):
+    """
+    Phase 35: SINGLE_CHOICE/MULTIPLE_CHOICE/MULTIPLE_ANSWER/TRUE_FALSE choices
+    must not always render in their stored creation order for a learner —
+    that lets the correct answer's position (not its content) become a
+    learnable pattern. See QuestionSerializer.to_representation.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sc_question = Question.objects.create(
+            quiz=self.quiz,
+            question_text='Which is the capital of France?',
+            question_type=Question.QuestionType.SINGLE_CHOICE,
+            order=4,
+            points=1,
+        )
+        # The correct choice is deliberately created first — the exact
+        # authoring pattern that produced the positional-bias bug, so a
+        # regression here would show every fetch's choices[0] as correct.
+        self.paris = Choice.objects.create(question=self.sc_question, choice_text='Paris', is_correct=True, order=1)
+        self.berlin = Choice.objects.create(question=self.sc_question, choice_text='Berlin', is_correct=False, order=2)
+        self.madrid = Choice.objects.create(question=self.sc_question, choice_text='Madrid', is_correct=False, order=3)
+        self.rome = Choice.objects.create(question=self.sc_question, choice_text='Rome', is_correct=False, order=4)
+        self.lisbon = Choice.objects.create(question=self.sc_question, choice_text='Lisbon', is_correct=False, order=5)
+        self.oslo = Choice.objects.create(question=self.sc_question, choice_text='Oslo', is_correct=False, order=6)
+
+    def _fetch_choice_order(self):
+        response = self.client.get(f'/api/quizzes/{self.quiz.id}/')
+        sc_data = next(q for q in response.data['questions'] if q['id'] == self.sc_question.id)
+        return [choice['id'] for choice in sc_data['choices']]
+
+    def test_learner_sees_shuffled_choice_order_across_fetches(self):
+        self.auth_as(self.learner)
+        orders = [tuple(self._fetch_choice_order()) for _ in range(30)]
+        creation_order = (self.paris.id, self.berlin.id, self.madrid.id, self.rome.id, self.lisbon.id, self.oslo.id)
+
+        # Every fetch still contains exactly the same 6 choices...
+        for order in orders:
+            self.assertEqual(set(order), set(creation_order))
+        # ...but with 6 choices shuffled independently 30 times, seeing the
+        # exact same order every single time is astronomically unlikely
+        # (~1/720 per trial) unless shuffling isn't actually happening.
+        self.assertGreater(len(set(orders)), 1)
+
+    def test_correct_choices_position_varies_not_always_first(self):
+        self.auth_as(self.learner)
+        positions = [self._fetch_choice_order().index(self.paris.id) for _ in range(30)]
+        # If the bug were present, every position would be 0 (creation order,
+        # correct choice authored first).
+        self.assertGreater(len(set(positions)), 1)
+
+    def test_privileged_role_sees_stable_authored_order(self):
+        # Instructors/admins are editing, not guessing — shuffling would just
+        # make the authoring UI's own choices jump around, so it stays off
+        # for privileged roles, same as every other question type here.
+        self.auth_as(self.instructor)
+        orders = [tuple(self._fetch_choice_order()) for _ in range(5)]
+        creation_order = (self.paris.id, self.berlin.id, self.madrid.id, self.rome.id, self.lisbon.id, self.oslo.id)
+        self.assertEqual(set(orders), {creation_order})
+
+    def test_grading_is_unaffected_by_display_shuffle(self):
+        # Grading is by Choice id set-equality (assessments.views.QuizViewSet
+        # .submit), never by the shuffled array position, so this must keep
+        # passing regardless of how many times the quiz was re-fetched first.
+        self.auth_as(self.learner)
+        for _ in range(10):
+            self._fetch_choice_order()
+
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+                {'question': self.sc_question.id, 'selected_choices': [self.paris.id]},
+            ],
+        }
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+        self.assertEqual(response.status_code, 201)
+        sc_answer = next(a for a in response.data['answers'] if a['question'] == self.sc_question.id)
+        self.assertTrue(sc_answer['is_correct'])
+
+        wrong_payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+                {'question': self.sc_question.id, 'selected_choices': [self.berlin.id]},
+            ],
+        }
+        wrong_response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', wrong_payload, format='json')
+        wrong_answer = next(a for a in wrong_response.data['answers'] if a['question'] == self.sc_question.id)
+        self.assertFalse(wrong_answer['is_correct'])
+
+
 class CertificateFlowTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
