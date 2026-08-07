@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AssignmentSlidePlayer } from './AssignmentSlidePlayer'
+import { ContentProtectionBoundary } from './ContentProtectionBoundary'
 import { ContentSlidePlayer } from './ContentSlidePlayer'
 import { QuizSlidePlayer } from './QuizSlidePlayer'
 import { ScenarioSlidePlayer } from './ScenarioSlidePlayer'
@@ -110,21 +111,23 @@ export function SlidePlayer({
     void flush(true)
   }
 
+  let content
   if (slide.slide_type === 'QUIZ') {
-    return <QuizSlidePlayer slide={slide} courseId={courseId} onSubmitted={handleSubmitted} />
+    content = <QuizSlidePlayer slide={slide} courseId={courseId} onSubmitted={handleSubmitted} />
+  } else if (slide.slide_type === 'ASSIGNMENT') {
+    content = <AssignmentSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
+  } else if (slide.slide_type === 'SCENARIO') {
+    content = <ScenarioSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
+  } else {
+    content = (
+      <ContentSlidePlayer
+        slide={slide}
+        courseTemplateId={courseTemplateId}
+        onEnterFullscreen={onEnterFullscreen}
+        isFullscreen={isFullscreen}
+      />
+    )
   }
-  if (slide.slide_type === 'ASSIGNMENT') {
-    return <AssignmentSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
-  }
-  if (slide.slide_type === 'SCENARIO') {
-    return <ScenarioSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
-  }
-  return (
-    <ContentSlidePlayer
-      slide={slide}
-      courseTemplateId={courseTemplateId}
-      onEnterFullscreen={onEnterFullscreen}
-      isFullscreen={isFullscreen}
-    />
-  )
+
+  return <ContentProtectionBoundary>{content}</ContentProtectionBoundary>
 }

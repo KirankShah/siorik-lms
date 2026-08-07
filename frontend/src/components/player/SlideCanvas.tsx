@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { WatermarkOverlay } from './WatermarkOverlay'
 
 interface SlideCanvasProps {
   fullscreen: boolean
@@ -21,7 +22,7 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
       // lopsided.
       <div className="flex h-full w-full items-center justify-center overflow-hidden">
         <div
-          className="slide-canvas overflow-hidden rounded-lg border border-black/10 bg-white shadow-lg"
+          className="slide-canvas relative overflow-hidden rounded-lg border border-black/10 bg-white shadow-lg"
           style={{
             aspectRatio: '16 / 9',
             // Fit the largest 16:9 box inside 80vw x 80vh: whichever of the
@@ -33,6 +34,7 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
           }}
         >
           {children}
+          <WatermarkOverlay />
         </div>
       </div>
     )
@@ -46,10 +48,11 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
     // Height is never set directly; aspect-ratio derives it from the
     // resolved width, so the ratio stays locked at every size.
     <div
-      className="slide-canvas mx-auto overflow-hidden rounded-lg border border-neutral-200 bg-white"
+      className="slide-canvas relative mx-auto overflow-hidden rounded-lg border border-neutral-200 bg-white"
       style={{ aspectRatio: '16 / 9', width: '90%' }}
     >
       {children}
+      <WatermarkOverlay />
     </div>
   )
 }

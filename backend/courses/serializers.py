@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -18,6 +19,7 @@ from .models import (
     SlideTemplate,
 )
 from .permissions import is_lesson_locked_for_demo_user, visible_courses_for_user
+from .video_streaming import build_video_stream_token
 
 
 class SlideTemplateSerializer(serializers.ModelSerializer):
@@ -281,6 +283,23 @@ class ElementSerializer(serializers.ModelSerializer):
             'caption',
             'align',
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # An uploaded video's raw storage URL (local MEDIA_URL or, in
+        # production, an unsigned public S3 URL — see settings.USE_S3) is
+        # permanently public and directly downloadable by anyone who ever
+        # sees it. Swap it for a short-lived, per-user, per-element signed
+        # streaming URL instead — see courses.video_streaming. Requests
+        # with no `request` in context (e.g. internal snapshotting via
+        # Slide.snapshot_elements) keep the raw URL, since there's no user
+        # to scope a token to there.
+        request = self.context.get('request')
+        if instance.element_type == Element.ElementType.VIDEO_AUDIO and instance.video_file and request is not None:
+            token = build_video_stream_token(request.user.id, instance.id)
+            stream_path = reverse('element-video-stream', kwargs={'pk': instance.id})
+            data['video_file'] = request.build_absolute_uri(f'{stream_path}?token={token}')
+        return data
 
     # Element.save()/delete() write a SlideRevision snapshot on every change —
     # thread the requesting user through so it's attributed correctly.

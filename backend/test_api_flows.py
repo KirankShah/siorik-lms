@@ -29,6 +29,7 @@ from certificates.services import (
     generate_certificate,
 )
 from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide
+from courses.video_streaming import build_video_stream_token
 from scenarios.models import ScenarioChoice, ScenarioNode
 
 
@@ -919,6 +920,87 @@ class CourseAccessGrantTests(BaseAPITestCase):
         self.auth_as(self.org_admin)
         response = self.client.patch(f'/api/courses/{self.platform_course.slug}/', {'title': 'Hacked'})
         self.assertEqual(response.status_code, 404)
+
+
+class VideoStreamingTests(BaseAPITestCase):
+    """
+    Phase 36: an uploaded video Element is served through a short-lived,
+    per-user signed streaming URL (courses.video_streaming) rather than its
+    raw, permanently-public storage URL.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.video_slide = Slide.objects.create(
+            lesson=self.lesson1, order=98, title='Intro Video', slide_type=Slide.SlideType.CONTENT,
+        )
+        self.video_content = b'fake-video-bytes-0123456789'
+        self.video_element = Element.objects.create(
+            slide=self.video_slide,
+            order=1,
+            element_type=Element.ElementType.VIDEO_AUDIO,
+            video_file=SimpleUploadedFile('lesson.mp4', self.video_content, content_type='video/mp4'),
+        )
+
+    def _stream_url(self, element, user):
+        token = build_video_stream_token(user.id, element.id)
+        return f'/api/elements/{element.id}/video/?token={token}'
+
+    def test_element_serializer_returns_streaming_url_not_raw_file_url(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/elements/?slide={self.video_slide.id}')
+        video_file_url = response.data[0]['video_file']
+        self.assertIn(f'/api/elements/{self.video_element.id}/video/', video_file_url)
+        self.assertIn('token=', video_file_url)
+        self.assertNotIn('/media/element_videos/', video_file_url)
+
+    def test_stream_endpoint_serves_full_video_with_valid_token(self):
+        response = self.client.get(self._stream_url(self.video_element, self.learner))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'video/mp4')
+        self.assertEqual(b''.join(response.streaming_content), self.video_content)
+
+    def test_stream_endpoint_supports_byte_range_requests(self):
+        response = self.client.get(self._stream_url(self.video_element, self.learner), HTTP_RANGE='bytes=5-9')
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response['Content-Range'], f'bytes 5-9/{len(self.video_content)}')
+        self.assertEqual(b''.join(response.streaming_content), self.video_content[5:10])
+
+    def test_stream_endpoint_rejects_missing_or_garbage_token(self):
+        no_token = self.client.get(f'/api/elements/{self.video_element.id}/video/')
+        self.assertEqual(no_token.status_code, 403)
+
+        bad_token = self.client.get(f'/api/elements/{self.video_element.id}/video/?token=garbage')
+        self.assertEqual(bad_token.status_code, 403)
+
+    def test_stream_endpoint_rejects_token_minted_for_a_different_element(self):
+        other_element = Element.objects.create(
+            slide=self.video_slide, order=2, element_type=Element.ElementType.TEXT, rich_text='<p>x</p>',
+        )
+        token = build_video_stream_token(self.learner.id, other_element.id)
+        response = self.client.get(f'/api/elements/{self.video_element.id}/video/?token={token}')
+        self.assertEqual(response.status_code, 403)
+
+    def test_stream_endpoint_rejects_user_outside_course_organization(self):
+        response = self.client.get(self._stream_url(self.video_element, self.other_org_learner))
+        self.assertEqual(response.status_code, 404)
+
+    def test_stream_endpoint_respects_demo_lesson_lock(self):
+        demo_learner = User.objects.create_user(
+            email='demo-video@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org, is_demo=True,
+        )
+        self.published_org_course.is_demo_available = True
+        self.published_org_course.save()
+        # lesson1 (the video's lesson) is intentionally left without a
+        # DemoLessonAccess grant, so it stays locked for this demo user.
+
+        response = self.client.get(self._stream_url(self.video_element, demo_learner))
+        self.assertEqual(response.status_code, 403)
+
+        DemoLessonAccess.objects.create(course=self.published_org_course, lesson=self.lesson1)
+        granted_response = self.client.get(self._stream_url(self.video_element, demo_learner))
+        self.assertEqual(granted_response.status_code, 200)
 
 
 class ModuleLessonBuilderTests(BaseAPITestCase):

@@ -213,7 +213,23 @@ export function ElementPreview({
         return outerClass ? <div className={outerClass}>{node}</div> : node
       }
       if (element.video_file) {
-        const node = <video controls src={element.video_file} className={videoClass} />
+        // controlsList/disablePictureInPicture/onContextMenu are a deterrent
+        // only — they hide the browser's own "Download"/PiP affordances and
+        // block the right-click "Save Video As" menu, but nothing stops a
+        // determined user from grabbing the underlying src another way. The
+        // real access control is server-side: video_file is already a
+        // short-lived, per-user signed streaming URL, not a permanent public
+        // file link — see courses.video_streaming (backend).
+        const node = (
+          <video
+            controls
+            controlsList="nodownload noremoteplayback"
+            disablePictureInPicture
+            onContextMenu={(e) => e.preventDefault()}
+            src={element.video_file}
+            className={videoClass}
+          />
+        )
         return outerClass ? <div className={outerClass}>{node}</div> : node
       }
       if (element.video_url) {
