@@ -221,6 +221,51 @@ class OrganizationAccessHardeningTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class CourseCatalogAndDashboardVisibilityTests(BaseAPITestCase):
+    """
+    Phase 32 audit: every course-listing surface in the product (the course
+    catalog page, the learner/admin dashboard's "recent"/"my courses"
+    widgets) is built entirely from GET /api/courses/ (CourseViewSet, scoped
+    by visible_courses_for_user) plus GET /api/enrollments/ (scoped by
+    RoleScopedQuerysetMixin) — there is no separate catalog/search/
+    recommendation backend endpoint to audit independently. These tests
+    pin that a standard (non-demo) user's course list never contains a
+    course outside their own Organization's assignment, including the edge
+    case of a stray Enrollment row pointing at an out-of-scope course.
+    """
+
+    def test_catalog_excludes_unpublished_other_org_and_ungranted_platform_courses(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.other_org)
+        self.auth_as(self.learner)  # self.org — no grant for platform_course
+        response = self.client.get('/api/courses/')
+        slugs = {c['slug'] for c in response.data}
+        self.assertEqual(slugs, {self.published_org_course.slug})
+        self.assertNotIn(self.unpublished_org_course.slug, slugs)
+        self.assertNotIn(self.other_org_course.slug, slugs)
+        self.assertNotIn(self.platform_course.slug, slugs)
+
+    def test_dashboard_course_list_never_exposes_a_course_behind_a_stray_enrollment(self):
+        # Simulate a data-integrity edge case (e.g. a prior bug, a revoked
+        # CourseAccess grant after enrollment) rather than one reachable
+        # through the current API: an Enrollment row pointing at a course
+        # outside the enrolled user's org.
+        Enrollment.objects.create(user=self.other_org_learner, course=self.published_org_course)
+
+        self.auth_as(self.other_org_learner)
+        catalog = self.client.get('/api/courses/')
+        self.assertNotIn(self.published_org_course.slug, {c['slug'] for c in catalog.data})
+
+        enrollments = self.client.get('/api/enrollments/')
+        self.assertEqual(enrollments.data[0]['course'], self.published_org_course.id)
+        self.assertNotIn('title', enrollments.data[0])
+
+    def test_ungranted_platform_course_absent_from_catalog_for_every_organization(self):
+        for user in (self.learner, self.other_org_learner):
+            self.auth_as(user)
+            slugs = {c['slug'] for c in self.client.get('/api/courses/').data}
+            self.assertNotIn(self.platform_course.slug, slugs)
+
+
 class EnrollmentFlowTests(BaseAPITestCase):
     def test_learner_can_enroll_and_list_own_enrollment(self):
         self.auth_as(self.learner)
