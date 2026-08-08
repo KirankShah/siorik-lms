@@ -61,6 +61,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -240,6 +241,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
@@ -258,6 +260,17 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # leave USE_S3=False for local development, which uses the filesystem above.
 USE_S3 = os.environ.get('USE_S3', 'False') == 'True'
 
+# WhiteNoise's compressed+manifest storage depends on the manifest file
+# collectstatic writes into STATIC_ROOT, so it's only safe once that's
+# actually been run — production only. Under DEBUG, runserver keeps serving
+# static files itself (via django.contrib.staticfiles' finders) regardless
+# of this setting, so local dev is unaffected either way.
+_staticfiles_backend = (
+    'django.contrib.staticfiles.storage.StaticFilesStorage'
+    if DEBUG
+    else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+)
+
 if USE_S3:
     AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
     AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
@@ -273,7 +286,7 @@ if USE_S3:
             'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': _staticfiles_backend,
         },
     }
 else:
@@ -282,7 +295,7 @@ else:
             'BACKEND': 'django.core.files.storage.FileSystemStorage',
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': _staticfiles_backend,
         },
     }
 
