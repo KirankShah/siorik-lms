@@ -1,0 +1,19 @@
+# Serves this static build's actual files/directories directly; anything else
+# (client-side routes like /dashboard, /courses/123) falls through to
+# index.html so React Router can handle it. Required because Apache has no
+# concept of the SPA's routes on its own.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # If the request matches a real file or directory (JS/CSS/images/favicons
+  # under assets/, or favicon.ico etc. at the root), serve it directly —
+  # do NOT rewrite it.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Everything else doesn't correspond to a real file on disk — it's a
+  # client-side route, so serve index.html and let React Router take over.
+  RewriteRule ^ index.html [L]
+</IfModule>
