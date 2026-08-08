@@ -1,7 +1,7 @@
 import csv
 import io
 
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import RetrieveAPIView
@@ -9,13 +9,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework.viewsets import ReadOnlyModelViewSet
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from audit.models import AuditLog
 from audit.services import log_action
-from core.permissions import IsAdminRole
+from core.permissions import IsAdminRole, IsPlatformAdminRole
 
 from .models import Organization
 from .serializers import DemoUserCreateSerializer, OrganizationSerializer, SetPasswordSerializer, UserSerializer
@@ -48,12 +47,26 @@ class MeView(RetrieveAPIView):
         return self.request.user
 
 
-class OrganizationViewSet(ReadOnlyModelViewSet):
-    """Read-only org list, used by PLATFORM_ADMIN to assign courses to a specific org."""
+class OrganizationViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """
+    List/retrieve is available to any admin role (used to assign course
+    access, pick an org for demo-user provisioning, etc.) — creating a new
+    organization is a platform-level action (onboarding a new client), so
+    that's restricted to PLATFORM_ADMIN specifically; see get_permissions.
+    """
 
     queryset = Organization.objects.filter(is_active=True).order_by('name')
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsAuthenticated(), IsPlatformAdminRole()]
+        return super().get_permissions()
+
+    def perform_create(self, serializer):
+        organization = serializer.save()
+        log_action(self.request.user, AuditLog.Action.ORGANIZATION_CREATED, organization)
 
 
 CSV_EXPECTED_HEADER = ['name', 'email', 'organization', 'designation', 'phone_number']

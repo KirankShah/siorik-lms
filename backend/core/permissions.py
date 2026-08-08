@@ -2,6 +2,7 @@ from rest_framework.permissions import BasePermission
 
 ADMIN_ROLES = ('INSTRUCTOR', 'ORG_ADMIN', 'PLATFORM_ADMIN')
 ORG_ADMIN_ROLES = ('ORG_ADMIN', 'PLATFORM_ADMIN')
+PLATFORM_ADMIN_ROLES = ('PLATFORM_ADMIN',)
 
 
 class IsAdminRole(BasePermission):
@@ -16,6 +17,17 @@ class IsOrgAdminRole(BasePermission):
 
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.role in ORG_ADMIN_ROLES)
+
+
+class IsPlatformAdminRole(BasePermission):
+    """
+    Stricter still — PLATFORM_ADMIN only, excludes ORG_ADMIN too. Creating a
+    new Organization is a platform-level (onboarding a new client) action,
+    not something an individual org's own admin does for themselves.
+    """
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role in PLATFORM_ADMIN_ROLES)
 
 
 class RoleScopedQuerysetMixin:

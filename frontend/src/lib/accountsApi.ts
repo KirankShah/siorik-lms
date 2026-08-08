@@ -5,6 +5,14 @@ export function fetchOrganizations(): Promise<Organization[]> {
   return apiFetch<Organization[]>('/organizations/')
 }
 
+export interface OrganizationCreateInput {
+  name: string
+}
+
+export function createOrganization(input: OrganizationCreateInput): Promise<Organization> {
+  return apiFetch<Organization>('/organizations/', { method: 'POST', body: input })
+}
+
 export interface DemoUserInput {
   name: string
   email: string

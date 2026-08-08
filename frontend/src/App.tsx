@@ -23,10 +23,12 @@ import { DemoUsersPage } from './pages/admin/DemoUsersPage'
 import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
+import { OrganizationsPage } from './pages/admin/OrganizationsPage'
 import { ReportsPage } from './pages/admin/ReportsPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
 import { OrgAdminRoute } from './routes/OrgAdminRoute'
+import { PlatformAdminRoute } from './routes/PlatformAdminRoute'
 import { ProtectedRoute } from './routes/ProtectedRoute'
 
 function App() {
@@ -71,6 +73,10 @@ function App() {
           <Route element={<OrgAdminRoute />}>
             <Route path="/admin/organization" element={<OrganizationSettingsPage />} />
             <Route path="/admin/learners" element={<LearnersPage />} />
+          </Route>
+
+          <Route element={<PlatformAdminRoute />}>
+            <Route path="/admin/organizations" element={<OrganizationsPage />} />
           </Route>
         </Route>
       </Route>

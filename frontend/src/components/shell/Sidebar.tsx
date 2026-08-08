@@ -2,6 +2,7 @@ import {
   Award,
   BarChart3,
   BookOpen,
+  Building2,
   ClipboardList,
   LayoutDashboard,
   LogOut,
@@ -14,7 +15,7 @@ import type { LucideIcon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import siorikLogo from '../../img/siorik_logo_icon.png'
 import { useAuth } from '../../context/AuthContext'
-import { isAdminRole, isOrgSettingsRole } from '../../lib/roles'
+import { isAdminRole, isOrgSettingsRole, isPlatformAdminRole } from '../../lib/roles'
 
 interface NavItem {
   to: string
@@ -75,6 +76,13 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
             {label}
           </NavLink>
         ))}
+
+        {isPlatformAdminRole(user?.role) && (
+          <NavLink to="/admin/organizations" className={linkClass} onClick={onNavigate}>
+            <Building2 className="h-[18px] w-[18px]" />
+            Organizations
+          </NavLink>
+        )}
 
         {isOrgSettingsRole(user?.role) && (
           <>

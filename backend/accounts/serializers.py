@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from .models import Organization, User
@@ -8,6 +9,21 @@ class OrganizationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
         fields = ['id', 'name', 'slug', 'logo', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
+
+    def validate(self, attrs):
+        # slug is a required-unique model field, but making the caller invent
+        # one is needless friction for the common case — auto-derive it from
+        # name when omitted, disambiguating against any existing collision.
+        if not attrs.get('slug'):
+            base_slug = slugify(attrs.get('name', ''))
+            slug = base_slug
+            suffix = 2
+            while Organization.objects.filter(slug=slug).exists():
+                slug = f'{base_slug}-{suffix}'
+                suffix += 1
+            attrs['slug'] = slug
+        return attrs
 
 
 class UserSerializer(serializers.ModelSerializer):
