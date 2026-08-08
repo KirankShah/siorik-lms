@@ -15,9 +15,9 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.static import serve as serve_static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -33,5 +33,18 @@ urlpatterns = [
     path('api/', include('certificates.api_urls')),
 ]
 
-if settings.DEBUG and not settings.USE_S3:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# Not gated on DEBUG: with USE_S3=False, this is the only thing that serves
+# uploaded files (course covers, certificates, lesson attachments, question
+# images, ...) in production too, since there's no separate Apache/LiteSpeed
+# vhost rule serving MEDIA_ROOT directly. Deliberately NOT using
+# django.conf.urls.static.static() here — that helper has `if not
+# settings.DEBUG: return []` hardcoded into its own implementation, so it
+# silently produces zero URL patterns in production regardless of how it's
+# called. django.views.static.serve isn't the most efficient way to serve
+# files at very high traffic, but for this app's scale on cPanel/Passenger
+# it's the correct, safe default — USE_S3=True is the real fix if traffic
+# ever outgrows it.
+if not settings.USE_S3:
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve_static, {'document_root': settings.MEDIA_ROOT}),
+    ]
