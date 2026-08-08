@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 
 from .models import Course, DemoLessonAccess
 
@@ -44,11 +44,17 @@ def visible_courses_for_user(user):
 def catalog_courses_for_user(user):
     """
     The queryset a course-list/catalog view should enumerate. Identical to
-    visible_courses_for_user for every ordinary user. For a demo user
-    (LEARNER, is_demo=True) this deliberately widens to every published
-    course platform-wide — including ones outside their own Organization's
-    normal assignment — so the catalog can render those as locked teaser
-    cards instead of hiding them outright.
+    visible_courses_for_user for every ordinary user (including its default
+    Course.Meta ordering, -created_at). For a demo user (LEARNER,
+    is_demo=True) this deliberately widens to every published course
+    platform-wide — including ones outside their own Organization's normal
+    assignment — so the catalog can render those as locked teaser cards
+    instead of hiding them outright. Accessible (unlocked) courses are
+    sorted before locked ones — same -created_at order within each group —
+    so a demo user's one or two real courses aren't buried below a wall of
+    locked teasers; the accessible set is the exact same
+    visible_courses_for_user(user) the serializer's is_locked flag checks
+    against, so the sort and the flag can never disagree.
 
     This is catalog-listing only: retrieval of a single course, and every
     content-fetching endpoint below it (modules/lessons/elements/quizzes/
@@ -57,7 +63,18 @@ def catalog_courses_for_user(user):
     though its card is visible — force-navigating to its URL 404s.
     """
     if getattr(user, 'is_demo', False):
-        return Course.objects.filter(is_published=True)
+        accessible_ids = visible_courses_for_user(user).values_list('id', flat=True)
+        return (
+            Course.objects.filter(is_published=True)
+            .annotate(
+                _demo_locked=Case(
+                    When(id__in=accessible_ids, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by('_demo_locked', '-created_at')
+        )
     return visible_courses_for_user(user)
 
 

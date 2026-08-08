@@ -1878,6 +1878,18 @@ class DemoUserCatalogVisibilityTests(BaseAPITestCase):
         self.assertTrue(courses[self.other_org_course.slug]['is_locked'])
         self.assertTrue(courses[self.platform_course.slug]['is_locked'])
 
+    def test_unlocked_courses_sort_before_locked_ones(self):
+        # platform_course and other_org_course are both locked for this demo
+        # user and created after published_org_course (Course.Meta.ordering
+        # is -created_at) — without the lock-status sort, they'd outrank the
+        # one unlocked course. Assert the unlocked/locked split wins first.
+        self.auth_as(self.demo_learner)
+        response = self.client.get('/api/courses/')
+        lock_flags = [row['is_locked'] for row in response.data]
+        self.assertEqual(lock_flags, sorted(lock_flags))
+        self.assertFalse(response.data[0]['is_locked'])
+        self.assertEqual(response.data[0]['slug'], self.published_org_course.slug)
+
     def test_granted_platform_course_becomes_unlocked_for_demo_user(self):
         CourseAccess.objects.create(course=self.platform_course, organization=self.org)
         self.auth_as(self.demo_learner)
