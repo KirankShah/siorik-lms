@@ -18,7 +18,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import Organization, User
-from accounts.services import DemoUserProvisioningError, provision_demo_user
+from accounts.services import UserProvisioningError, provision_demo_user
 from assessments.models import Choice, Question, Quiz, QuizAttempt
 from assignments.models import Assignment
 from audit.models import AuditLog
@@ -1633,16 +1633,16 @@ class DemoUserProvisioningServiceTests(TestCase):
 
     def test_duplicate_email_is_rejected_case_insensitively(self):
         provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
-        with self.assertRaises(DemoUserProvisioningError):
+        with self.assertRaises(UserProvisioningError):
             provision_demo_user(name='Dana Two', email='DANA@example.com', organization=self.org)
 
     def test_missing_name_is_rejected(self):
-        with self.assertRaises(DemoUserProvisioningError):
+        with self.assertRaises(UserProvisioningError):
             provision_demo_user(name='  ', email='dana@example.com', organization=self.org)
 
     def test_email_send_failure_rolls_back_the_account(self):
         with patch('accounts.services.EmailMultiAlternatives.send', side_effect=Exception('smtp down')):
-            with self.assertRaises(DemoUserProvisioningError):
+            with self.assertRaises(UserProvisioningError):
                 provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
 
         # The whole operation is atomic — a failed invite must not leave a
@@ -1739,6 +1739,47 @@ class DemoUserApiTests(BaseAPITestCase):
         self.auth_as(self.learner)
         response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
         self.assertEqual(response.status_code, 403)
+
+
+class OrgAdminApiTests(BaseAPITestCase):
+    def test_platform_admin_can_create_org_admin(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            '/api/org-admins/', {'name': 'Jane Manager', 'email': 'jane@example.com', 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['role'], 'ORG_ADMIN')
+        self.assertFalse(response.data['is_demo'])
+        self.assertTrue(response.data['must_reset_password'])
+
+        user = User.objects.get(email='jane@example.com')
+        self.assertEqual(user.role, User.Role.ORG_ADMIN)
+        self.assertFalse(user.is_demo)
+        self.assertEqual(user.organization, self.org)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('administrator', mail.outbox[0].subject.lower())
+
+    def test_org_admin_cannot_create_org_admin(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(
+            '/api/org-admins/', {'name': 'Jane Manager', 'email': 'jane@example.com', 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_instructor_cannot_create_org_admin(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/org-admins/', {'name': 'Jane Manager', 'email': 'jane@example.com', 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_duplicate_email_returns_400_not_500(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            '/api/org-admins/', {'name': 'Dup', 'email': self.learner.email, 'organization': self.org.id}
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 class SetPasswordApiTests(BaseAPITestCase):

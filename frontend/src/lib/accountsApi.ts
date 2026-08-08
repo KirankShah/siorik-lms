@@ -41,3 +41,10 @@ export function bulkCreateDemoUsers(file: File): Promise<DemoUserBulkResult> {
   formData.append('file', file)
   return apiFetch<DemoUserBulkResult>('/demo-users/bulk/', { method: 'POST', body: formData })
 }
+
+// PLATFORM_ADMIN-only — creates a real (non-demo) ORG_ADMIN account for the
+// given organization. Same input shape as DemoUserInput, but a distinct
+// endpoint: /demo-users/ always creates LEARNER/is_demo accounts.
+export function createOrgAdmin(input: DemoUserInput): Promise<User> {
+  return apiFetch<User>('/org-admins/', { method: 'POST', body: input })
+}

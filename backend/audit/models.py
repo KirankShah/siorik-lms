@@ -12,6 +12,7 @@ class AuditLog(models.Model):
         DEMO_USER_CREATED = 'DEMO_USER_CREATED', 'Demo user created'
         PASSWORD_RESET_COMPLETED = 'PASSWORD_RESET_COMPLETED', 'Password reset completed'
         ORGANIZATION_CREATED = 'ORGANIZATION_CREATED', 'Organization created'
+        ORG_ADMIN_CREATED = 'ORG_ADMIN_CREATED', 'Organization admin created'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

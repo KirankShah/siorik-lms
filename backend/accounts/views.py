@@ -18,7 +18,7 @@ from core.permissions import IsAdminRole, IsPlatformAdminRole
 
 from .models import Organization
 from .serializers import DemoUserCreateSerializer, OrganizationSerializer, SetPasswordSerializer, UserSerializer
-from .services import DemoUserProvisioningError, provision_demo_user
+from .services import UserProvisioningError, provision_demo_user, provision_org_admin
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
@@ -98,7 +98,7 @@ class DemoUserViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         try:
             user = provision_demo_user(**serializer.validated_data)
-        except DemoUserProvisioningError as exc:
+        except UserProvisioningError as exc:
             raise ValidationError({'detail': str(exc)})
 
         log_action(request.user, AuditLog.Action.DEMO_USER_CREATED, user)
@@ -163,7 +163,7 @@ class DemoUserViewSet(viewsets.GenericViewSet):
                     designation=designation,
                     phone_number=phone_number,
                 )
-            except DemoUserProvisioningError as exc:
+            except UserProvisioningError as exc:
                 failed.append({'row': index, 'email': email, 'reason': str(exc)})
                 continue
 
@@ -171,6 +171,33 @@ class DemoUserViewSet(viewsets.GenericViewSet):
             created.append(email)
 
         return Response({'created': created, 'failed': failed})
+
+
+class OrgAdminViewSet(viewsets.GenericViewSet):
+    """
+    PLATFORM_ADMIN-only provisioning of ORG_ADMIN accounts for a given
+    organization — the counterpart to DemoUserViewSet, but creates a real
+    (non-demo) administrator account: is_demo=False, role=ORG_ADMIN, and a
+    distinctly-worded invite email (not "demo access" — this is an ongoing
+    administrator role for their own institution). Restricted to
+    PLATFORM_ADMIN rather than the broader admin roles: designating who
+    administers a client organization is a platform onboarding action, not
+    something an org's own admin does for themselves.
+    """
+
+    permission_classes = [IsAuthenticated, IsPlatformAdminRole]
+    serializer_class = DemoUserCreateSerializer
+
+    def create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            user = provision_org_admin(**serializer.validated_data)
+        except UserProvisioningError as exc:
+            raise ValidationError({'detail': str(exc)})
+
+        log_action(request.user, AuditLog.Action.ORG_ADMIN_CREATED, user)
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
 class SetPasswordView(APIView):
