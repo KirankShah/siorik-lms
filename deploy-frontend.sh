@@ -8,14 +8,14 @@
 # Configure via environment variables, or edit the CHANGE_ME defaults below.
 set -euo pipefail
 
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/siorik_cpanel_key}"
-SSH_USER="${SSH_USER:-CHANGE_ME_cpanel_username}"
-SSH_HOST="${SSH_HOST:-CHANGE_ME_server_hostname_or_ip}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/siorik_deploy}"
+SSH_USER="${SSH_USER:-siorikco}"
+SSH_HOST="${SSH_HOST:-enterprise.learnwithsiorik.com}"
 SSH_PORT="${SSH_PORT:-22}"
 # Document root the frontend vhost/subdomain serves. This gets REPLACED to
 # match dist/ exactly (rsync --delete) — double check this points at the
 # frontend's own directory, never anything shared with other content.
-REMOTE_FRONTEND_ROOT="${REMOTE_FRONTEND_ROOT:-CHANGE_ME_/home/username/enterprise.learnwithsiorik.com}"
+REMOTE_FRONTEND_ROOT="${REMOTE_FRONTEND_ROOT:-/home/siorikco/enterprise.learnwithsiorik.com}"
 
 for var_name in SSH_USER SSH_HOST REMOTE_FRONTEND_ROOT; do
   value="${!var_name}"

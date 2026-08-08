@@ -9,16 +9,16 @@
 # Configure via environment variables, or edit the CHANGE_ME defaults below.
 set -euo pipefail
 
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/siorik_cpanel_key}"
-SSH_USER="${SSH_USER:-CHANGE_ME_cpanel_username}"
-SSH_HOST="${SSH_HOST:-CHANGE_ME_server_hostname_or_ip}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/siorik_deploy}"
+SSH_USER="${SSH_USER:-siorikco}"
+SSH_HOST="${SSH_HOST:-enterprise.learnwithsiorik.com}"
 SSH_PORT="${SSH_PORT:-22}"
 # Application Root on the server — where passenger_wsgi.py lives (repo root,
 # not backend/ — see passenger_wsgi.py's own header comment).
-REMOTE_APP_ROOT="${REMOTE_APP_ROOT:-CHANGE_ME_/home/username/siorik-lms}"
+REMOTE_APP_ROOT="${REMOTE_APP_ROOT:-/home/siorikco/api.enterprise.learnwithsiorik.com}"
 # The exact `source .../activate` command cPanel's "Setup Python App" page
 # shows for this account — copy it verbatim.
-REMOTE_VENV_ACTIVATE="${REMOTE_VENV_ACTIVATE:-CHANGE_ME_/home/username/virtualenv/siorik-lms/3.11/bin/activate}"
+REMOTE_VENV_ACTIVATE="${REMOTE_VENV_ACTIVATE:-/home/siorikco/virtualenv/api.enterprise.learnwithsiorik.com/3.11/bin/activate}"
 
 for var_name in SSH_USER SSH_HOST REMOTE_APP_ROOT REMOTE_VENV_ACTIVATE; do
   value="${!var_name}"
