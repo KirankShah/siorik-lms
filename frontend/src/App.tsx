@@ -1,10 +1,10 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { AchievementsPage } from './pages/AchievementsPage'
 import { AssessmentsPage } from './pages/AssessmentsPage'
 import { CertificatesPage } from './pages/CertificatesPage'
 import { CourseDetailPage } from './pages/CourseDetailPage'
 import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
-import { ForcedPasswordResetPage } from './pages/ForcedPasswordResetPage'
 import { LearnerReportsPage } from './pages/LearnerReportsPage'
 import { LoginPage } from './pages/LoginPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
@@ -35,13 +35,12 @@ function App() {
       <Route path="/login" element={<LoginPage />} />
 
       <Route element={<ProtectedRoute />}>
-        <Route path="/reset-password" element={<ForcedPasswordResetPage />} />
-
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/courses" element={<CoursesPage />} />
           <Route path="/courses/:id" element={<CourseDetailPage />} />
           <Route path="/assessments" element={<AssessmentsPage />} />
+          <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />
           <Route path="/reports" element={<LearnerReportsPage />} />
 
@@ -57,7 +56,6 @@ function App() {
               <Route path="certificate-templates" element={<CertificateTemplatesPage />} />
               <Route path="demo-users" element={<DemoUsersPage />} />
             </Route>
-            <Route path="/admin/learners" element={<LearnersPage />} />
 
             <Route path="/admin/courses/:slug" element={<CourseDashboardLayout />}>
               <Route index element={<Navigate to="slides" replace />} />
@@ -72,6 +70,7 @@ function App() {
 
           <Route element={<OrgAdminRoute />}>
             <Route path="/admin/organization" element={<OrganizationSettingsPage />} />
+            <Route path="/admin/learners" element={<LearnersPage />} />
           </Route>
         </Route>
       </Route>

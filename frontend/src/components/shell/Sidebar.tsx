@@ -7,6 +7,7 @@ import {
   LogOut,
   PanelLeftClose,
   Settings,
+  Trophy,
   Users,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -41,10 +42,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // both already exist, this just picks the useful one per role.
     { to: admin ? '/admin/courses' : '/courses', label: 'Courses', icon: BookOpen },
     { to: '/assessments', label: 'Assessments', icon: ClipboardList },
-    { to: '/admin/learners', label: 'Learners', icon: Users },
     { to: '/certificates', label: 'Certificates', icon: Award },
+    { to: '/achievements', label: 'Achievements', icon: Trophy },
     // Admins get the cross-learner report; everyone else gets their own progress.
-    { to: admin ? '/admin/reports' : '/reports', label: 'Reports', icon: BarChart3 },
+    { to: admin ? '/admin/reports' : '/reports', label: admin ? 'Reports' : 'My Reports', icon: BarChart3 },
   ]
 
   return (
@@ -76,10 +77,16 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
         ))}
 
         {isOrgSettingsRole(user?.role) && (
-          <NavLink to="/admin/organization" className={linkClass} onClick={onNavigate}>
-            <Settings className="h-[18px] w-[18px]" />
-            Organization Settings
-          </NavLink>
+          <>
+            <NavLink to="/admin/learners" className={linkClass} onClick={onNavigate}>
+              <Users className="h-[18px] w-[18px]" />
+              Learners
+            </NavLink>
+            <NavLink to="/admin/organization" className={linkClass} onClick={onNavigate}>
+              <Settings className="h-[18px] w-[18px]" />
+              Organization Settings
+            </NavLink>
+          </>
         )}
       </nav>
 

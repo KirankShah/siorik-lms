@@ -42,7 +42,7 @@ export function LearnerReportsPage() {
 
   return (
     <div>
-      <h1 className="text-lg font-semibold text-neutral-900">My Report</h1>
+      <h1 className="text-lg font-semibold text-neutral-900">My Reports</h1>
       <p className="mt-1 text-sm text-neutral-500">Your progress across every course you're enrolled in.</p>
 
       <Card className="mt-6 overflow-x-auto p-0">

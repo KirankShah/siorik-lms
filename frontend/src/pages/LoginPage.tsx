@@ -163,8 +163,6 @@ export function LoginPage() {
             >
               {isSubmitting ? 'Signing in…' : 'Sign In'}
             </Button>
-
-            <p className="text-center text-xs text-neutral-400">Role-Based Access Control · Audit Logging Enabled</p>
           </form>
         </div>
       </div>
