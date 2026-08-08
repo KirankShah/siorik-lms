@@ -1,9 +1,17 @@
+# Python (passenger_wsgi.py lives at the repo root)
+__pycache__/
+*.pyc
+
 # Editor / tooling local settings
 .claude/settings.local.json
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Passenger restart-trigger dir (backend/scripts/deploy.sh touches
+# tmp/restart.txt here — Application Root is the repo root), server-side only
+tmp/
 
 # Local scratch files / secrets — not part of the app
 backend/_token.txt
