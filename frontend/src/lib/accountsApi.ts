@@ -9,6 +9,8 @@ export interface DemoUserInput {
   name: string
   email: string
   organization: number
+  designation?: string
+  phone_number?: string
 }
 
 export interface DemoUserBulkFailure {

@@ -1,4 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { ForcedPasswordResetModal } from '../components/ForcedPasswordResetModal'
 import { useAuth } from '../context/AuthContext'
 
 export function ProtectedRoute() {
@@ -20,9 +21,10 @@ export function ProtectedRoute() {
   // Any account created with a system-generated temp password (see the
   // "demo users" admin tool) must pick its own password before it can reach
   // anything else — this is the single choke point every protected route
-  // passes through, so the redirect is enforced here rather than per-page.
-  if (user.must_reset_password && location.pathname !== '/reset-password') {
-    return <Navigate to="/reset-password" replace />
+  // passes through, so no route ever mounts (no data fetches, nothing
+  // interactive) until must_reset_password clears.
+  if (user.must_reset_password) {
+    return <ForcedPasswordResetModal />
   }
 
   return <Outlet />

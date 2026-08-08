@@ -14,6 +14,7 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -162,17 +163,42 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
+#
+# DB_ENGINE picks the backend: 'postgresql' (default, for local dev) or
+# 'mysql' (cPanel hosting only offers MySQL — see the audit that preceded
+# this switch: nothing in the codebase uses django.contrib.postgres or any
+# other Postgres-only feature, so this is a safe env-var toggle rather than
+# a real migration effort).
+
+DB_ENGINE = os.environ.get('DB_ENGINE', 'postgresql')
+
+_DB_ENGINE_BACKENDS = {
+    'postgresql': 'django.db.backends.postgresql',
+    'mysql': 'django.db.backends.mysql',
+}
+_DB_ENGINE_DEFAULT_PORTS = {
+    'postgresql': '5432',
+    'mysql': '3306',
+}
+
+if DB_ENGINE not in _DB_ENGINE_BACKENDS:
+    raise ImproperlyConfigured(f"DB_ENGINE must be 'postgresql' or 'mysql', got {DB_ENGINE!r}.")
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': _DB_ENGINE_BACKENDS[DB_ENGINE],
         'NAME': os.environ.get('DB_NAME'),
         'USER': os.environ.get('DB_USER'),
         'PASSWORD': os.environ.get('DB_PASSWORD'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+        'PORT': os.environ.get('DB_PORT', _DB_ENGINE_DEFAULT_PORTS[DB_ENGINE]),
     }
 }
+
+if DB_ENGINE == 'mysql':
+    # utf8mb4 (not MySQL's default 3-byte utf8) is required for full Unicode,
+    # including the emoji stored in gamification.Badge.icon.
+    DATABASES['default']['OPTIONS'] = {'charset': 'utf8mb4'}
 
 
 # Password validation
@@ -184,12 +210,16 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 8},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
     },
     {
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+    {
+        'NAME': 'accounts.validators.LetterAndDigitPasswordValidator',
     },
 ]
 

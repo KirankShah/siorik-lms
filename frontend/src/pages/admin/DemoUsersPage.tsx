@@ -118,8 +118,11 @@ export function DemoUsersPage() {
         <Card>
           <h2 className="text-sm font-semibold text-neutral-900">Bulk upload via CSV</h2>
           <p className="mt-1 text-sm text-neutral-500">
-            Columns: <code className="rounded bg-neutral-100 px-1 py-0.5">name, email, organization</code> (organization
-            matched by name). A header row is optional.
+            Columns:{' '}
+            <code className="rounded bg-neutral-100 px-1 py-0.5">
+              name, email, organization, designation, phone_number
+            </code>{' '}
+            (organization matched by name; designation and phone_number are optional). A header row is optional.
           </p>
 
           <div className="mt-4 space-y-4">

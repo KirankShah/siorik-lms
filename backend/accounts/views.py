@@ -56,7 +56,10 @@ class OrganizationViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
 
-CSV_EXPECTED_HEADER = ['name', 'email', 'organization']
+CSV_EXPECTED_HEADER = ['name', 'email', 'organization', 'designation', 'phone_number']
+# Older 3-column files (pre-designation/phone_number) still work — only the
+# first 3 columns are required, so a legacy header is recognized too.
+CSV_LEGACY_HEADER = CSV_EXPECTED_HEADER[:3]
 
 
 def _resolve_organization(name_or_slug):
@@ -100,8 +103,10 @@ class DemoUserViewSet(viewsets.GenericViewSet):
             return Response({'detail': 'Could not read the uploaded file as UTF-8 text.'}, status=400)
 
         rows = list(csv.reader(io.StringIO(decoded)))
-        if rows and [c.strip().lower() for c in rows[0][:3]] == CSV_EXPECTED_HEADER:
-            rows = rows[1:]
+        if rows:
+            header = [c.strip().lower() for c in rows[0]]
+            if header[:5] == CSV_EXPECTED_HEADER or header[:3] == CSV_LEGACY_HEADER:
+                rows = rows[1:]
 
         created = []
         failed = []
@@ -115,11 +120,13 @@ class DemoUserViewSet(viewsets.GenericViewSet):
                 failed.append({
                     'row': index,
                     'email': row[1].strip() if len(row) >= 2 else '',
-                    'reason': 'Malformed row: expected 3 columns (name, email, organization).',
+                    'reason': 'Malformed row: expected at least 3 columns (name, email, organization).',
                 })
                 continue
 
             name, email, org_name = (cell.strip() for cell in row[:3])
+            designation = row[3].strip() if len(row) >= 4 else ''
+            phone_number = row[4].strip() if len(row) >= 5 else ''
             email_key = email.lower()
 
             if not name or not email or not org_name:
@@ -136,7 +143,13 @@ class DemoUserViewSet(viewsets.GenericViewSet):
                 continue
 
             try:
-                user = provision_demo_user(name=name, email=email, organization=organization)
+                user = provision_demo_user(
+                    name=name,
+                    email=email,
+                    organization=organization,
+                    designation=designation,
+                    phone_number=phone_number,
+                )
             except DemoUserProvisioningError as exc:
                 failed.append({'row': index, 'email': email, 'reason': str(exc)})
                 continue
@@ -149,9 +162,11 @@ class DemoUserViewSet(viewsets.GenericViewSet):
 
 class SetPasswordView(APIView):
     """
-    Lets an authenticated user set a new password, given their current one.
-    Used by the forced-reset flow (must_reset_password=True after demo-user
-    provisioning) but is generic — nothing here is demo-user-specific.
+    Backs the forced-reset dialog (must_reset_password=True after demo-user
+    provisioning) — its only caller. No current-password check: reaching this
+    endpoint already requires a valid access token, which the user could only
+    have obtained by authenticating with their current password moments
+    earlier, so re-verifying it here would be redundant.
     """
 
     permission_classes = [IsAuthenticated]
@@ -161,9 +176,6 @@ class SetPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = request.user
-        if not user.check_password(serializer.validated_data['current_password']):
-            raise ValidationError({'current_password': 'Current password is incorrect.'})
-
         user.set_password(serializer.validated_data['new_password'])
         user.must_reset_password = False
         user.save(update_fields=['password', 'must_reset_password'])

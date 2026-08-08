@@ -1641,7 +1641,7 @@ class DemoUserProvisioningServiceTests(TestCase):
             provision_demo_user(name='  ', email='dana@example.com', organization=self.org)
 
     def test_email_send_failure_rolls_back_the_account(self):
-        with patch('accounts.services.send_mail', side_effect=Exception('smtp down')):
+        with patch('accounts.services.EmailMultiAlternatives.send', side_effect=Exception('smtp down')):
             with self.assertRaises(DemoUserProvisioningError):
                 provision_demo_user(name='Dana Demo', email='dana@example.com', organization=self.org)
 
@@ -1700,6 +1700,23 @@ class DemoUserApiTests(BaseAPITestCase):
         self.assertIn('Malformed row', failures_by_email['twocols@example.com'])
         self.assertEqual(len(mail.outbox), 2)
 
+    def test_bulk_upload_captures_designation_and_phone_number(self):
+        csv_content = (
+            'name,email,organization,designation,phone_number\n'
+            f'Alice Alpha,alice@example.com,{self.org.name},Compliance Officer,+977-1-4123456\n'
+        )
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], ['alice@example.com'])
+
+        user = User.objects.get(email='alice@example.com')
+        self.assertEqual(user.designation, 'Compliance Officer')
+        self.assertEqual(user.phone_number, '+977-1-4123456')
+
     def test_bulk_upload_reports_existing_user_as_failure_not_500(self):
         csv_content = f'name,email,organization\nExisting User,{self.learner.email},{self.org.name}\n'
         upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
@@ -1735,37 +1752,45 @@ class SetPasswordApiTests(BaseAPITestCase):
             is_demo=True, must_reset_password=True,
         )
 
-    def test_correct_current_password_clears_must_reset_flag(self):
+    def test_new_password_clears_must_reset_flag(self):
+        # No current_password field — reaching this endpoint already required
+        # a valid access token, which the caller could only have obtained by
+        # authenticating with the temp password moments earlier.
         self.auth_as(self.demo_user)
         response = self.client.post('/api/auth/set-password/', {
-            'current_password': self.temp_password,
-            'new_password': 'BrandNewPassw0rd!',
+            'new_password': 'BrandNewPassw0rd1',
         })
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['must_reset_password'])
 
         self.demo_user.refresh_from_db()
         self.assertFalse(self.demo_user.must_reset_password)
-        self.assertTrue(self.demo_user.check_password('BrandNewPassw0rd!'))
+        self.assertTrue(self.demo_user.check_password('BrandNewPassw0rd1'))
 
-    def test_wrong_current_password_is_rejected(self):
+    def test_too_short_new_password_is_rejected_by_validators(self):
         self.auth_as(self.demo_user)
-        response = self.client.post('/api/auth/set-password/', {
-            'current_password': 'not-the-temp-password',
-            'new_password': 'BrandNewPassw0rd!',
-        })
+        response = self.client.post('/api/auth/set-password/', {'new_password': 'ab1'})
         self.assertEqual(response.status_code, 400)
 
         self.demo_user.refresh_from_db()
         self.assertTrue(self.demo_user.must_reset_password)
 
-    def test_weak_new_password_is_rejected_by_validators(self):
+    def test_new_password_missing_a_digit_is_rejected(self):
         self.auth_as(self.demo_user)
-        response = self.client.post('/api/auth/set-password/', {
-            'current_password': self.temp_password,
-            'new_password': '123',
-        })
+        response = self.client.post('/api/auth/set-password/', {'new_password': 'allletters'})
         self.assertEqual(response.status_code, 400)
+
+        self.demo_user.refresh_from_db()
+        self.assertTrue(self.demo_user.must_reset_password)
+
+    def test_new_password_missing_a_letter_is_rejected(self):
+        self.auth_as(self.demo_user)
+        # Also all-numeric, so this doubles as coverage for NumericPasswordValidator.
+        response = self.client.post('/api/auth/set-password/', {'new_password': '12345678'})
+        self.assertEqual(response.status_code, 400)
+
+        self.demo_user.refresh_from_db()
+        self.assertTrue(self.demo_user.must_reset_password)
 
     def test_me_endpoint_reflects_must_reset_password(self):
         self.auth_as(self.demo_user)

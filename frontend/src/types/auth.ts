@@ -16,6 +16,7 @@ export interface User {
   role: Role
   organization: Organization | null
   phone_number: string | null
+  designation: string | null
   is_active: boolean
   is_demo: boolean
   must_reset_password: boolean

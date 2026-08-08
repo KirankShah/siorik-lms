@@ -1,31 +1,38 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
 import siorikLogoIcon from '../img/siorik_logo_icon.png'
 import { ApiError, setPassword } from '../lib/apiClient'
 import { useAuth } from '../context/AuthContext'
-import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
+import { Button } from './ui/Button'
+import { Input } from './ui/Input'
 
-export function ForcedPasswordResetPage() {
-  const { user, refreshUser } = useAuth()
-  const navigate = useNavigate()
+const MIN_PASSWORD_LENGTH = 8
+const RULES_MESSAGE = `Password must be at least ${MIN_PASSWORD_LENGTH} characters and include at least 1 letter and 1 number.`
 
-  const [currentPassword, setCurrentPassword] = useState('')
+function passwordMeetsRules(password: string): boolean {
+  return password.length >= MIN_PASSWORD_LENGTH && /[A-Za-z]/.test(password) && /[0-9]/.test(password)
+}
+
+// The forced first-login reset, shown as a blocking dialog rather than a
+// routed page — ProtectedRoute renders this instead of <Outlet /> for as
+// long as must_reset_password is true, so no other route ever mounts until
+// it's cleared.
+export function ForcedPasswordResetModal() {
+  const { refreshUser } = useAuth()
+
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Already reset (or not a temp-password account) — nothing to do here.
-  if (user && !user.must_reset_password) {
-    return <Navigate to="/dashboard" replace />
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
 
+    if (!passwordMeetsRules(newPassword)) {
+      setError(RULES_MESSAGE)
+      return
+    }
     if (newPassword !== confirmPassword) {
       setError('New password and confirmation do not match.')
       return
@@ -33,13 +40,15 @@ export function ForcedPasswordResetPage() {
 
     setIsSubmitting(true)
     try {
-      await setPassword(currentPassword, newPassword)
+      await setPassword(newPassword)
+      // must_reset_password is now false server-side; refreshing the user
+      // lets ProtectedRoute swap this dialog for the real <Outlet /> at
+      // whatever URL is already current — no explicit navigate needed.
       await refreshUser()
-      navigate('/dashboard', { replace: true })
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
-        const body = err.body as { current_password?: string[]; new_password?: string[]; detail?: string } | null
-        setError(body?.current_password?.[0] ?? body?.new_password?.[0] ?? body?.detail ?? 'Could not update your password.')
+        const body = err.body as { new_password?: string[]; detail?: string } | null
+        setError(body?.new_password?.[0] ?? body?.detail ?? 'Could not update your password.')
       } else {
         setError('Something went wrong. Please try again.')
       }
@@ -49,32 +58,27 @@ export function ForcedPasswordResetPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-12">
-      <div className="w-full max-w-sm">
+    <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-12">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-2xl">
         <div className="flex items-center gap-3">
           <img src={siorikLogoIcon} alt="Siorik Consultancy" className="h-9 w-9 object-contain" />
           <span className="text-xs font-semibold tracking-[0.2em] text-brand-navy uppercase">Siorik Consultancy</span>
         </div>
 
-        <h1 className="mt-8 text-xl font-semibold text-neutral-900">Set your password</h1>
+        <h2 className="mt-6 text-xl font-semibold text-neutral-900">Set your password</h2>
         <p className="mt-1 text-sm text-neutral-500">
           This account was created with a temporary password. Choose your own before continuing.
         </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <Input
-            id="current-password"
-            label="Temporary password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-          />
+        <ul className="mt-4 space-y-1 rounded-lg bg-neutral-50 px-4 py-3 text-xs text-neutral-600">
+          <li>• Minimum {MIN_PASSWORD_LENGTH} characters</li>
+          <li>• At least 1 letter and 1 number</li>
+        </ul>
 
+        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
           <Input
             id="new-password"
-            label="New password"
+            label="New Password"
             type="password"
             autoComplete="new-password"
             required
@@ -84,7 +88,7 @@ export function ForcedPasswordResetPage() {
 
           <Input
             id="confirm-password"
-            label="Confirm new password"
+            label="Confirm Password"
             type="password"
             autoComplete="new-password"
             required

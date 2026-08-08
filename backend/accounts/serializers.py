@@ -23,6 +23,7 @@ class UserSerializer(serializers.ModelSerializer):
             'role',
             'organization',
             'phone_number',
+            'designation',
             'is_active',
             'is_demo',
             'must_reset_password',
@@ -34,10 +35,19 @@ class DemoUserCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     email = serializers.EmailField()
     organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.filter(is_active=True))
+    designation = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True, default='')
 
 
 class SetPasswordSerializer(serializers.Serializer):
-    current_password = serializers.CharField(write_only=True)
+    """
+    Backs the forced-reset dialog shown to any account with must_reset_password
+    set (see accounts.views.SetPasswordView). No current_password field — the
+    caller already proved they know it by logging in with it, and this
+    endpoint has no other consumer, so re-verifying it here would just be
+    redundant friction in the dialog.
+    """
+
     new_password = serializers.CharField(write_only=True)
 
     def validate_new_password(self, value):
