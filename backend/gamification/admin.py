@@ -5,14 +5,22 @@ from .models import Badge, LeaderboardEntry, UserBadge
 
 @admin.register(LeaderboardEntry)
 class LeaderboardEntryAdmin(admin.ModelAdmin):
-    list_display = ('user', 'organization', 'total_points', 'courses_completed_count', 'average_quiz_score', 'updated_at')
+    list_display = (
+        'user',
+        'organization',
+        'total_points',
+        'courses_completed_count',
+        'average_quiz_score',
+        'certificates_earned_count',
+        'updated_at',
+    )
     list_filter = ('organization',)
     search_fields = ('user__email',)
 
 
 @admin.register(Badge)
 class BadgeAdmin(admin.ModelAdmin):
-    list_display = ('key', 'name', 'icon')
+    list_display = ('key', 'name', 'icon', 'unlock_condition')
     search_fields = ('key', 'name')
 
 

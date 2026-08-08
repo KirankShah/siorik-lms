@@ -17,6 +17,9 @@ class LeaderboardEntry(models.Model):
     total_points = models.PositiveIntegerField(default=0)
     courses_completed_count = models.PositiveIntegerField(default=0)
     average_quiz_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Recalculated alongside the other fields, on certificate generation (see
+    # certificates.services.generate_certificate) rather than computed live.
+    certificates_earned_count = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -33,6 +36,10 @@ class Badge(models.Model):
     name = models.CharField(max_length=100)
     description = models.CharField(max_length=255, blank=True, default='')
     icon = models.CharField(max_length=10, blank=True, default='', help_text='A single emoji shown next to the badge.')
+    # Learner-facing copy for the not-yet-earned state, e.g. "Complete 5
+    # courses to unlock." Mirrors the actual condition checked in
+    # gamification.services.award_badges_for_user for this badge's key.
+    unlock_condition = models.CharField(max_length=255, blank=True, default='')
 
     def __str__(self):
         return self.name

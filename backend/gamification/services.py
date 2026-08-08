@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db.models import Max
 
 from assessments.models import QuizAttempt
+from certificates.models import Certificate
 from courses.models import Enrollment
 
 from .models import Badge, LeaderboardEntry, UserBadge
@@ -35,8 +36,8 @@ def recalculate_leaderboard_entry(user):
     Recomputes and persists this user's LeaderboardEntry: 100 points per
     completed course, plus up to 50 bonus points scaled linearly to that
     course's own quiz average (each quiz counted once, at its best score).
-    Not called on every dashboard read — only from the two events that can
-    change it (course completion, quiz attempt); see
+    Not called on every dashboard read — only from the events that can change
+    it (course completion, quiz attempt, certificate generation); see
     update_gamification_for_user.
     """
     if user.organization_id is None:
@@ -59,6 +60,7 @@ def recalculate_leaderboard_entry(user):
             'total_points': total_points,
             'courses_completed_count': completed_enrollments.count(),
             'average_quiz_score': overall_average,
+            'certificates_earned_count': Certificate.objects.filter(user=user).count(),
         },
     )
     return entry

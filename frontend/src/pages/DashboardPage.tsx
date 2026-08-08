@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { BadgesWidget } from '../components/BadgesWidget'
 import { LeaderboardWidget } from '../components/LeaderboardWidget'
+import { LearnerWelcomeBanner } from '../components/LearnerWelcomeBanner'
 import { Badge } from '../components/ui/Badge'
 import type { BadgeVariant } from '../components/ui/Badge'
 import { Banner } from '../components/ui/Banner'
@@ -17,6 +18,7 @@ import { fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
 import { fetchQuizzes } from '../lib/quizApi'
 import { isAdminRole } from '../lib/roles'
 import type { Certificate } from '../types/certificates'
+import type { User } from '../types/auth'
 import type { Assignment } from '../types/assignment'
 import type { CourseListItem, Enrollment } from '../types/courses'
 import type { LeaderboardEntry, UserBadge } from '../types/gamification'
@@ -45,20 +47,19 @@ function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: strin
 export function DashboardPage() {
   const { user } = useAuth()
   const [showWelcome, setShowWelcome] = useState(true)
+  const isAdmin = isAdminRole(user?.role)
 
   return (
     <div className="space-y-6">
-      {showWelcome && (
+      {isAdmin && showWelcome && (
         <Banner
           variant="info"
           title={`Welcome back${user?.first_name ? `, ${user.first_name}` : ''}`}
           onDismiss={() => setShowWelcome(false)}
-        >
-          This banner is reusable for future notices — trial status, platform announcements, and more.
-        </Banner>
+        />
       )}
 
-      {isAdminRole(user?.role) ? <AdminDashboard /> : <LearnerDashboard />}
+      {isAdmin ? <AdminDashboard /> : user && <LearnerDashboard user={user} />}
     </div>
   )
 }
@@ -209,7 +210,7 @@ interface PendingAssignment {
   courseSlug: string
 }
 
-function LearnerDashboard() {
+function LearnerDashboard({ user }: { user: User }) {
   const [enrollments, setEnrollments] = useState<Enrollment[] | null>(null)
   const [courses, setCourses] = useState<CourseListItem[]>([])
   const [pendingAssignments, setPendingAssignments] = useState<PendingAssignment[] | null>(null)
@@ -309,9 +310,21 @@ function LearnerDashboard() {
 
   const courseById = new Map(courses.map((course) => [course.id, course]))
 
+  const myPoints = leaderboard?.find((entry) => entry.user_id === user.id)?.total_points ?? 0
+
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <LearnerWelcomeBanner
+        user={user}
+        totalCourses={enrollments?.length ?? null}
+        completedCourses={enrollments ? enrollments.filter((enrollment) => enrollment.status === 'COMPLETED').length : null}
+        points={leaderboard ? myPoints : null}
+        badgesEarned={myBadges?.length ?? null}
+      />
+
+      <LeaderboardWidget entries={leaderboard} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
@@ -404,10 +417,7 @@ function LearnerDashboard() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <LeaderboardWidget entries={leaderboard} />
-        <BadgesWidget badges={myBadges} />
-      </div>
+      <BadgesWidget badges={myBadges} />
     </div>
   )
 }

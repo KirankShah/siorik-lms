@@ -8,6 +8,7 @@ export interface LeaderboardEntry {
   total_points: number
   courses_completed_count: number
   average_quiz_score: string
+  certificates_earned_count: number
   updated_at: string
 }
 
@@ -17,6 +18,7 @@ export interface Badge {
   name: string
   description: string
   icon: string
+  unlock_condition: string
 }
 
 export interface UserBadge {

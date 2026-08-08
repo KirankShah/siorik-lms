@@ -6,7 +6,7 @@ export type BannerVariant = 'info' | 'success' | 'warning' | 'gold'
 export interface BannerProps {
   variant?: BannerVariant
   title?: string
-  children: ReactNode
+  children?: ReactNode
   action?: ReactNode
   onDismiss?: () => void
   className?: string
@@ -30,7 +30,7 @@ export function Banner({ variant = 'info', title, children, action, onDismiss, c
     >
       <div className="min-w-0">
         {title && <p className="font-semibold">{title}</p>}
-        <div className={title ? 'mt-0.5' : ''}>{children}</div>
+        {children && <div className={title ? 'mt-0.5' : ''}>{children}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-3">
         {action}

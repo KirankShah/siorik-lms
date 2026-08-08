@@ -19,6 +19,7 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
             'total_points',
             'courses_completed_count',
             'average_quiz_score',
+            'certificates_earned_count',
             'updated_at',
         ]
 
@@ -26,7 +27,7 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
 class BadgeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Badge
-        fields = ['id', 'key', 'name', 'description', 'icon']
+        fields = ['id', 'key', 'name', 'description', 'icon', 'unlock_condition']
 
 
 class UserBadgeSerializer(serializers.ModelSerializer):
