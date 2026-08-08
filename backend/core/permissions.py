@@ -1,6 +1,7 @@
 from rest_framework.permissions import BasePermission
 
 ADMIN_ROLES = ('INSTRUCTOR', 'ORG_ADMIN', 'PLATFORM_ADMIN')
+ORG_ADMIN_ROLES = ('ORG_ADMIN', 'PLATFORM_ADMIN')
 
 
 class IsAdminRole(BasePermission):
@@ -8,6 +9,13 @@ class IsAdminRole(BasePermission):
 
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.role in ADMIN_ROLES)
+
+
+class IsOrgAdminRole(BasePermission):
+    """Stricter than IsAdminRole — excludes INSTRUCTOR. ORG_ADMIN/PLATFORM_ADMIN only."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role in ORG_ADMIN_ROLES)
 
 
 class RoleScopedQuerysetMixin:

@@ -2,6 +2,7 @@ export interface Certificate {
   id: number
   user: number
   course: number
+  course_title: string
   issued_at: string
   certificate_number: string
   verification_token: string

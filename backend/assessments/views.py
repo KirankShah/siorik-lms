@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+from certificates.services import try_auto_issue_certificate
 from core.permissions import IsAdminRole
+from courses.models import Enrollment
 from courses.permissions import editable_courses_for_user, exclude_demo_locked, visible_courses_for_user
 from gamification.services import update_gamification_for_user
 
@@ -210,6 +212,16 @@ class QuizViewSet(
 
             attempt.calculate_score_percent()
             update_gamification_for_user(request.user)
+
+        # If every slide is already complete, this submission's score may be
+        # the last piece needed to cross the certificate pass threshold — see
+        # try_auto_issue_certificate. Skipped when slides aren't all done yet
+        # (still ineligible regardless of this score), so a routine quiz
+        # attempt on an in-progress course doesn't pay for the eligibility
+        # check.
+        course = quiz.slide.lesson.module.course
+        if Enrollment.objects.filter(user=request.user, course=course, status=Enrollment.Status.COMPLETED).exists():
+            try_auto_issue_certificate(request.user, course)
 
         return Response(QuizAttemptSerializer(attempt).data, status=201)
 

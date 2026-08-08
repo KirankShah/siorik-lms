@@ -24,8 +24,8 @@ from accounts.models import Organization, User
 from assessments.models import Quiz, QuizAttempt
 from audit.models import AuditLog
 from audit.services import log_action
-from certificates.services import certificate_ineligibility_reason
-from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
+from certificates.services import certificate_ineligibility_reason, try_auto_issue_certificate
+from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
 from gamification.services import update_gamification_for_user
 
 from .models import (
@@ -637,6 +637,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         enrollment.save()
         if newly_completed:
             update_gamification_for_user(enrollment.user)
+            try_auto_issue_certificate(enrollment.user, enrollment.course)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
 
@@ -687,52 +688,61 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         enrollment.save()
         if newly_completed:
             update_gamification_for_user(enrollment.user)
+            try_auto_issue_certificate(enrollment.user, enrollment.course)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
+
+
+def _build_enrollment_report_rows(user, query_params):
+    """
+    Shared by EnrollmentReportView and LearnerRosterView — same underlying
+    data, org-scoping rule, and filters; only the permission gate on top
+    (and CSV export) differs per view.
+    """
+    queryset = Enrollment.objects.select_related('user', 'course')
+
+    if user.role == User.Role.PLATFORM_ADMIN:
+        pass
+    elif user.role in (User.Role.ORG_ADMIN, User.Role.INSTRUCTOR):
+        queryset = queryset.filter(user__organization_id=user.organization_id)
+
+    course_id = query_params.get('course')
+    if course_id:
+        queryset = queryset.filter(course_id=course_id)
+
+    status_param = query_params.get('status')
+    if status_param:
+        queryset = queryset.filter(status=status_param)
+
+    date_from = query_params.get('date_from')
+    if date_from:
+        queryset = queryset.filter(completed_at__date__gte=date_from)
+
+    date_to = query_params.get('date_to')
+    if date_to:
+        queryset = queryset.filter(completed_at__date__lte=date_to)
+
+    rows = []
+    for enrollment in queryset.order_by('-enrolled_at'):
+        best_score = QuizAttempt.objects.filter(
+            user=enrollment.user, quiz__slide__lesson__module__course=enrollment.course
+        ).aggregate(best=Max('score_percent'))['best']
+        rows.append({
+            'learner_email': enrollment.user.email,
+            'learner_name': enrollment.user.get_full_name() or enrollment.user.email,
+            'course_title': enrollment.course.title,
+            'status': enrollment.status,
+            'score_percent': float(best_score) if best_score is not None else None,
+            'completion_date': enrollment.completed_at.isoformat() if enrollment.completed_at else None,
+        })
+    return rows
 
 
 class EnrollmentReportView(APIView):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get(self, request):
-        user = request.user
-        queryset = Enrollment.objects.select_related('user', 'course')
-
-        if user.role == User.Role.PLATFORM_ADMIN:
-            pass
-        elif user.role in (User.Role.ORG_ADMIN, User.Role.INSTRUCTOR):
-            queryset = queryset.filter(user__organization_id=user.organization_id)
-
-        course_id = request.query_params.get('course')
-        if course_id:
-            queryset = queryset.filter(course_id=course_id)
-
-        status_param = request.query_params.get('status')
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-
-        date_from = request.query_params.get('date_from')
-        if date_from:
-            queryset = queryset.filter(completed_at__date__gte=date_from)
-
-        date_to = request.query_params.get('date_to')
-        if date_to:
-            queryset = queryset.filter(completed_at__date__lte=date_to)
-
-        rows = []
-        for enrollment in queryset.order_by('-enrolled_at'):
-            best_score = QuizAttempt.objects.filter(
-                user=enrollment.user, quiz__slide__lesson__module__course=enrollment.course
-            ).aggregate(best=Max('score_percent'))['best']
-            rows.append({
-                'learner_email': enrollment.user.email,
-                'learner_name': enrollment.user.get_full_name() or enrollment.user.email,
-                'course_title': enrollment.course.title,
-                'status': enrollment.status,
-                'score_percent': float(best_score) if best_score is not None else None,
-                'completion_date': enrollment.completed_at.isoformat() if enrollment.completed_at else None,
-            })
-
+        rows = _build_enrollment_report_rows(request.user, request.query_params)
         if request.query_params.get('export') == 'csv':
             return self._csv_response(rows)
         return Response(rows)
@@ -752,6 +762,20 @@ class EnrollmentReportView(APIView):
                 row['completion_date'] or '',
             ])
         return response
+
+
+class LearnerRosterView(APIView):
+    """
+    Backs the admin "Learners" page — same roster data as EnrollmentReportView,
+    but restricted to ORG_ADMIN/PLATFORM_ADMIN (unlike Reports, INSTRUCTOR is
+    not granted access here; see courses.permissions/Sidebar.tsx for the
+    matching frontend gate).
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+
+    def get(self, request):
+        return Response(_build_enrollment_report_rows(request.user, request.query_params))
 
 
 def _format_time_spent(total_seconds):

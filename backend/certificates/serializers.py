@@ -4,12 +4,17 @@ from .models import Certificate, CertificateTemplate
 
 
 class CertificateSerializer(serializers.ModelSerializer):
+    # For the learner-facing Certificates page card — avoids a separate
+    # course lookup just to show what the certificate is for.
+    course_title = serializers.CharField(source='course.title', read_only=True)
+
     class Meta:
         model = Certificate
         fields = [
             'id',
             'user',
             'course',
+            'course_title',
             'issued_at',
             'certificate_number',
             'verification_token',

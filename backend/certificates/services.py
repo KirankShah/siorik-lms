@@ -14,6 +14,7 @@ from assessments.models import Quiz, QuizAttempt
 from audit.models import AuditLog
 from audit.services import log_action
 from courses.models import Enrollment
+from gamification.services import update_gamification_for_user
 
 from .models import Certificate, CertificateTemplate
 
@@ -104,8 +105,29 @@ def generate_certificate(user, course):
         pdf_bytes = _render_certificate_pdf(certificate)
         certificate.pdf_file.save(f'{certificate.certificate_number}.pdf', ContentFile(pdf_bytes), save=True)
 
+    update_gamification_for_user(user)
     log_action(user, AuditLog.Action.CERTIFICATE_GENERATED, certificate)
     return certificate
+
+
+def try_auto_issue_certificate(user, course):
+    """
+    Best-effort automatic issuance, called right after whichever event just
+    changed this user's eligibility for `course` — final slide/lesson
+    completion (courses.views.EnrollmentViewSet.slide_progress/complete_lesson)
+    or a quiz submission that moves their course-wide average across the
+    certificate_pass_threshold (assessments.views.QuizViewSet.submit).
+    Either call site may fire before the learner is actually eligible (e.g.
+    slides finish before quizzes are attempted) — that's expected, this is a
+    silent no-op in that case rather than an error. generate_certificate()
+    is itself idempotent (returns the existing certificate if one is still
+    valid), so calling this from both events is safe even if both end up
+    eligible at once.
+    """
+    try:
+        return generate_certificate(user, course)
+    except CertificateIssuanceError:
+        return None
 
 
 def _generate_certificate_number():

@@ -244,6 +244,13 @@ export function fetchEnrollmentReport(filters: ReportFilters): Promise<ReportRow
   return apiFetch<ReportRow[]>(`/reports/enrollments/${query ? `?${query}` : ''}`)
 }
 
+// Backs the admin Learners roster — same row shape as the enrollment report,
+// but ORG_ADMIN/PLATFORM_ADMIN only server-side (INSTRUCTOR is not granted
+// access here, unlike /reports/enrollments/).
+export function fetchLearnerRoster(): Promise<ReportRow[]> {
+  return apiFetch<ReportRow[]>('/reports/learners/')
+}
+
 export async function downloadEnrollmentReportCsv(filters: ReportFilters): Promise<void> {
   const query = reportQueryString(filters)
   const blob = await apiFetchBlob(`/reports/enrollments/?${query ? `${query}&` : ''}export=csv`)

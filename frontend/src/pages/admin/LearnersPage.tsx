@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Badge } from '../../components/ui/Badge'
 import type { BadgeVariant } from '../../components/ui/Badge'
-import { fetchEnrollmentReport } from '../../lib/coursesApi'
+import { fetchLearnerRoster } from '../../lib/coursesApi'
 import type { ReportRow } from '../../types/admin'
 
 const STATUS_BADGE: Record<string, BadgeVariant> = {
@@ -17,14 +17,16 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 // One row per learner+course enrollment (a learner in 3 courses appears 3
-// times) — reuses the same enrollment-report data ReportsPage's filterable
-// view is built on, just as an unfiltered roster snapshot.
+// times) — same row shape as ReportsPage's filterable view, but served by a
+// separate ORG_ADMIN/PLATFORM_ADMIN-only endpoint (see fetchLearnerRoster),
+// since this page is restricted to org admins while Reports also allows
+// INSTRUCTOR.
 export function LearnersPage() {
   const [rows, setRows] = useState<ReportRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchEnrollmentReport({})
+    fetchLearnerRoster()
       .then(setRows)
       .catch(() => setError('Could not load learners.'))
   }, [])
