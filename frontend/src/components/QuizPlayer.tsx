@@ -300,7 +300,10 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                 <div className="min-w-0 flex-1 text-sm font-medium text-neutral-900">
                   <span className="text-neutral-400">{index + 1}.</span>{' '}
                   {question.question_type !== 'FILL_BLANK' && (
-                    <div className="inline-block align-top" dangerouslySetInnerHTML={{ __html: question.question_text }} />
+                    <div
+                      className="inline-block w-full max-w-full align-top [overflow-wrap:anywhere]"
+                      dangerouslySetInnerHTML={{ __html: question.question_text }}
+                    />
                   )}
                 </div>
                 <span className="shrink-0 text-sm font-normal text-neutral-400">
@@ -413,7 +416,7 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1 text-sm font-medium text-neutral-900">
                     {question.question_type !== 'FILL_BLANK' && (
-                      <div dangerouslySetInnerHTML={{ __html: question.question_text }} />
+                      <div className="w-full min-w-0 [overflow-wrap:anywhere]" dangerouslySetInnerHTML={{ __html: question.question_text }} />
                     )}
                   </div>
                   <span

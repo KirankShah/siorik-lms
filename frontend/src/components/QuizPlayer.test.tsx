@@ -47,6 +47,9 @@ const quizDetail: QuizDetail = {
 const LONG_UNBROKEN_EXPLANATION =
   'Theseareexamplesofsectorsthatarespecificallytargetedbycriminalsseekingtolaunderillegallyobtainedfundsthroughlegitimatelookingbusinesschannelsandtransactions'.repeat(3)
 
+const LONG_UNBROKEN_QUESTION =
+  'Abranchemployeelearnsfromlocalnewsthatacustomerisundersscrutinyforallegedlydivertingcommunityfundsthroughapersonalaccountbeforetransferring'.repeat(2)
+
 function buildResult(overrides: Partial<QuizAttemptResult['answers'][number]> = {}): QuizAttemptResult {
   return {
     id: 500,
@@ -139,6 +142,40 @@ describe('QuizPlayer results feedback text wrapping', () => {
 
     expect(screen.getByText('Correct — well done.')).toBeInTheDocument()
     expect(screen.getByText('Nice work.')).toBeInTheDocument()
+  })
+
+  it('applies overflow-wrap to a long unbroken question prompt while in progress', async () => {
+    const longQuestionQuiz = {
+      ...quizDetail,
+      questions: [{ ...quizDetail.questions[0], question_text: LONG_UNBROKEN_QUESTION }],
+    }
+    vi.mocked(quizApi.fetchQuizDetail).mockResolvedValue(longQuestionQuiz)
+
+    render(<QuizPlayer quizSummary={quizSummary} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Start Quiz' }))
+    await waitFor(() => expect(screen.getByText('Submit')).toBeInTheDocument())
+
+    const questionEl = screen.getByText(LONG_UNBROKEN_QUESTION, { selector: 'div' })
+    expect(questionEl.className).toMatch(/overflow-wrap:anywhere/)
+  })
+
+  it('applies overflow-wrap to a long unbroken question prompt on the results screen', async () => {
+    const longQuestionQuiz = {
+      ...quizDetail,
+      questions: [{ ...quizDetail.questions[0], question_text: LONG_UNBROKEN_QUESTION }],
+    }
+    vi.mocked(quizApi.fetchQuizDetail).mockResolvedValue(longQuestionQuiz)
+    vi.mocked(quizApi.submitQuizAttempt).mockResolvedValue(buildResult())
+
+    render(<QuizPlayer quizSummary={quizSummary} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Start Quiz' }))
+    await waitFor(() => expect(screen.getByText('Submit')).toBeInTheDocument())
+    fireEvent.click(screen.getByLabelText('Placement'))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(screen.getByText(/pass mark/)).toBeInTheDocument())
+
+    const questionEl = screen.getByText(LONG_UNBROKEN_QUESTION, { selector: 'div' })
+    expect(questionEl.className).toMatch(/overflow-wrap:anywhere/)
   })
 })
 
