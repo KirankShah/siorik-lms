@@ -19,7 +19,11 @@ export function Modal({
   maxHeightClassName = 'max-h-[85vh]',
 }: ModalProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    // z-[110]: a dialog must always sit above every other overlay in the
+    // app, including FullscreenSlideOverlay's z-[100] — otherwise a modal
+    // triggered while fullscreen (e.g. CourseCompletionModal) renders but is
+    // stacked invisibly underneath it.
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className={`relative flex ${maxHeightClassName} w-full ${widthClassName} flex-col overflow-hidden rounded-xl bg-white shadow-xl`}>
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
