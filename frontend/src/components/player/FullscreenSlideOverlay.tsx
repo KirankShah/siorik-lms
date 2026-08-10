@@ -21,6 +21,7 @@ interface FullscreenSlideOverlayProps {
   onNext: () => void
   nextDisabled: boolean
   secondsRemaining: number
+  nextDisabledReason?: string
   isAtFirst: boolean
   isAtLast: boolean
   onGoToFirst: () => void
@@ -42,12 +43,20 @@ export function FullscreenSlideOverlay({
   onNext,
   nextDisabled,
   secondsRemaining,
+  nextDisabledReason,
   isAtFirst,
   isAtLast,
   onGoToFirst,
   onGoToLast,
   onExit,
 }: FullscreenSlideOverlayProps) {
+  const nextButtonEl = (
+    <Button size="sm" onClick={onNext} disabled={!hasNext || nextDisabled}>
+      {hasNext ? 'Next' : 'Finish'}
+      <ChevronRight className="h-4 w-4" />
+    </Button>
+  )
+
   return (
     <div className="fixed inset-0 z-[100] flex flex-col bg-gradient-to-br from-brand-navy-tint-1 to-brand-navy-tint-2">
       <div className="flex shrink-0 items-center justify-between px-6 py-4">
@@ -104,10 +113,7 @@ export function FullscreenSlideOverlay({
           )}
 
           <div className="flex items-center gap-1">
-            <Button size="sm" onClick={onNext} disabled={!hasNext || nextDisabled}>
-              {hasNext ? 'Next' : 'Finish'}
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+            {nextDisabled && nextDisabledReason ? <span title={nextDisabledReason}>{nextButtonEl}</span> : nextButtonEl}
             <button
               type="button"
               onClick={onGoToLast}

@@ -5,6 +5,7 @@ Run with:
     python manage.py test test_api_flows
 """
 import io
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.core import mail
@@ -800,6 +801,24 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
         self.auth_as(self.learner)
         response = self.client.get(f'/api/enrollments/{self.enrollment.id}/')
         self.assertIsNone(response.data['certificate_ineligible_reason'])
+
+    def test_certificate_eligible_when_average_is_exactly_the_70_percent_threshold(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=70)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=70)
+        # Average = (70 + 70) / 2 = 70.0 — the boundary itself. Eligibility is
+        # "at or above" the threshold, so this must be eligible, not blocked.
+
+        self.assertIsNone(certificate_ineligibility_reason(self.learner, self.published_org_course))
+
+    def test_certificate_ineligible_when_average_is_just_below_the_70_percent_threshold(self):
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=70)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=False, score_percent=Decimal('69.8'))
+        # Average = (70 + 69.8) / 2 = 69.9 — one tenth of a point under the
+        # boundary, so this must be ineligible.
+
+        reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
+        self.assertIsNotNone(reason)
+        self.assertIn('69.9%', reason)
 
 
 class OrganizationListTests(BaseAPITestCase):

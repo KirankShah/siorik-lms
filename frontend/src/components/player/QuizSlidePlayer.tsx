@@ -6,11 +6,10 @@ import type { SlideSummary } from '../../types/slides'
 
 interface QuizSlidePlayerProps {
   slide: SlideSummary
-  courseId: number
   onSubmitted: () => void
 }
 
-export function QuizSlidePlayer({ slide, courseId, onSubmitted }: QuizSlidePlayerProps) {
+export function QuizSlidePlayer({ slide, onSubmitted }: QuizSlidePlayerProps) {
   const [quiz, setQuiz] = useState<QuizDetail | null | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
 
@@ -25,5 +24,5 @@ export function QuizSlidePlayer({ slide, courseId, onSubmitted }: QuizSlidePlaye
   if (quiz === undefined) return <p className="text-sm text-neutral-500">Loading quiz…</p>
   if (quiz === null) return <p className="text-sm text-neutral-400 italic">This quiz hasn't been set up yet.</p>
 
-  return <QuizPlayer quizSummary={quiz} courseId={courseId} onSubmitted={onSubmitted} />
+  return <QuizPlayer quizSummary={quiz} onSubmitted={onSubmitted} />
 }

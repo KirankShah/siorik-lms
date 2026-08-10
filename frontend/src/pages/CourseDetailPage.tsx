@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { CertificateButton } from '../components/CertificateButton'
+import { useNavigate, useParams } from 'react-router-dom'
+import { CourseCompletionModal } from '../components/CourseCompletionModal'
 import { CourseSidebar } from '../components/player/CourseSidebar'
 import { FullscreenSlideOverlay } from '../components/player/FullscreenSlideOverlay'
 import { SlideNavFooter } from '../components/player/SlideNavFooter'
@@ -13,6 +13,7 @@ import type { CourseDetail, Enrollment } from '../types/courses'
 
 export function CourseDetailPage() {
   const { id: slug } = useParams<{ id: string }>()
+  const navigate = useNavigate()
 
   const [course, setCourse] = useState<CourseDetail | null>(null)
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null)
@@ -22,7 +23,9 @@ export function CourseDetailPage() {
   const [hasPositionedInitially, setHasPositionedInitially] = useState(false)
   const [canAdvance, setCanAdvance] = useState(false)
   const [secondsRemaining, setSecondsRemaining] = useState(0)
+  const [nextDisabledReason, setNextDisabledReason] = useState<string | undefined>(undefined)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showCompletionModal, setShowCompletionModal] = useState(false)
 
   useEffect(() => {
     if (!slug) return
@@ -57,6 +60,15 @@ export function CourseDetailPage() {
 
   const reachedSlideIds = useMemo(() => computeReachedSlideIds(entries, completedSlideIds), [entries, completedSlideIds])
 
+  const allSlidesComplete = entries.length > 0 && entries.every((e) => completedSlideIds.has(e.slide.id))
+
+  // Shown once whenever the learner reaches (or revisits) a fully-completed
+  // course — dismissing it doesn't reopen it again this mount, since
+  // allSlidesComplete can't flip back to false once every slide is done.
+  useEffect(() => {
+    if (allSlidesComplete) setShowCompletionModal(true)
+  }, [allSlidesComplete])
+
   // Resume where they left off, once, after the first load — the first slide
   // not yet completed, or the last slide if the whole course is done.
   useEffect(() => {
@@ -72,6 +84,7 @@ export function CourseDetailPage() {
   useEffect(() => {
     setCanAdvance(false)
     setSecondsRemaining(0)
+    setNextDisabledReason(undefined)
   }, [activeSlideId])
 
   async function handleEnroll() {
@@ -136,8 +149,6 @@ export function CourseDetailPage() {
   if (error) return <p className="text-sm text-red-600">{error}</p>
   if (!course) return <p className="text-sm text-neutral-500">Loading course…</p>
 
-  const allSlidesComplete = entries.length > 0 && entries.every((e) => completedSlideIds.has(e.slide.id))
-
   const lessonEntries = activeEntry ? entries.filter((e) => e.lesson.id === activeEntry.lesson.id) : []
   const lessonCompletedCount = lessonEntries.filter((e) => completedSlideIds.has(e.slide.id)).length
 
@@ -145,14 +156,14 @@ export function CourseDetailPage() {
     <SlidePlayer
       key={activeEntry.slide.id}
       slide={activeEntry.slide}
-      courseId={course.id}
       courseTemplateId={course.template}
       enrollmentId={enrollment.id}
       existingProgress={enrollment.slide_progress.find((p) => p.slide === activeEntry.slide.id)}
       onProgressSynced={setEnrollment}
-      onCanAdvanceChange={(advance, remaining) => {
+      onCanAdvanceChange={(advance, remaining, disabledReason) => {
         setCanAdvance(advance)
         setSecondsRemaining(remaining)
+        setNextDisabledReason(disabledReason)
       }}
       onEnterFullscreen={() => setIsFullscreen(true)}
       isFullscreen={isFullscreen}
@@ -170,6 +181,7 @@ export function CourseDetailPage() {
         onNext={() => goToOffset(1)}
         nextDisabled={!canAdvance}
         secondsRemaining={secondsRemaining}
+        nextDisabledReason={nextDisabledReason}
         isAtFirst={activeIndex <= 0}
         isAtLast={activeIndex >= lastReachedIndex}
         onGoToFirst={goToFirst}
@@ -224,29 +236,23 @@ export function CourseDetailPage() {
               onNext={() => goToOffset(1)}
               nextDisabled={!canAdvance}
               secondsRemaining={secondsRemaining}
+              nextDisabledReason={nextDisabledReason}
             />
 
-            {allSlidesComplete && enrollment.certificate_ineligible_reason && (
-              <div className="no-print mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
-                <p className="text-sm font-medium text-amber-800">
-                  You've completed every slide, but haven't earned a certificate yet.
-                </p>
-                <p className="mt-1 text-xs text-amber-700">{enrollment.certificate_ineligible_reason}</p>
-                <div className="mt-3">
-                  <Button variant="outline" size="sm" onClick={goToFirst}>
-                    Retake Course
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {allSlidesComplete && !enrollment.certificate_ineligible_reason && (
-              <div className="no-print mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                <p className="text-sm font-medium text-emerald-800">You've completed every slide in this course.</p>
-                <div className="mt-3">
-                  <CertificateButton courseId={course.id} />
-                </div>
-              </div>
+            {showCompletionModal && (
+              <CourseCompletionModal
+                courseName={course.title}
+                courseId={course.id}
+                isEligible={!enrollment.certificate_ineligible_reason}
+                onRetake={() => {
+                  setShowCompletionModal(false)
+                  goToFirst()
+                }}
+                onMaybeLater={() => {
+                  setShowCompletionModal(false)
+                  navigate('/dashboard')
+                }}
+              />
             )}
           </Card>
         ) : (

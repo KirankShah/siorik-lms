@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../lib/apiClient'
-import { downloadCertificate, issueCertificate } from '../lib/certificatesApi'
 import { fetchQuizDetail, submitQuizAttempt } from '../lib/quizApi'
 import { CategorizeAnswer } from './CategorizeAnswer'
 import { FillBlankSentence } from './FillBlankSentence'
@@ -118,19 +117,16 @@ function formatTime(totalSeconds: number): string {
 
 interface QuizPlayerProps {
   quizSummary: QuizSummary
-  courseId: number
   onSubmitted?: () => void
 }
 
-export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerProps) {
+export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
   const [stage, setStage] = useState<Stage>('intro')
   const [quiz, setQuiz] = useState<QuizDetail | null>(null)
   const [answers, setAnswers] = useState<Record<number, AnswerState>>({})
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null)
   const [result, setResult] = useState<QuizAttemptResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [certificateId, setCertificateId] = useState<number | null>(null)
-  const [isPreparingCertificate, setIsPreparingCertificate] = useState(false)
 
   const handleSubmit = useCallback(
     async (currentQuiz: QuizDetail, currentAnswers: Record<number, AnswerState>) => {
@@ -256,26 +252,6 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
   function getWordBankValue(question: Question): Record<number, number> {
     const answer = answers[question.id]
     return answer?.kind === 'WORD_BANK' ? answer.placements : {}
-  }
-
-  async function handleDownloadCertificate() {
-    setIsPreparingCertificate(true)
-    setError(null)
-    try {
-      let id = certificateId
-      if (!id) {
-        const certificate = await issueCertificate(courseId)
-        id = certificate.id
-        setCertificateId(id)
-        await downloadCertificate(id, `${certificate.certificate_number}.pdf`)
-      } else {
-        await downloadCertificate(id, 'certificate.pdf')
-      }
-    } catch {
-      setError('Could not generate the certificate. Please try again.')
-    } finally {
-      setIsPreparingCertificate(false)
-    }
   }
 
   if (stage === 'intro') {
@@ -416,8 +392,6 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
   }
 
   if (stage === 'results' && result && quiz) {
-    const canRetake = !result.passed && (quiz.max_attempts === null || result.attempt_number < quiz.max_attempts)
-
     return (
       <Card>
         <div
@@ -655,36 +629,22 @@ export function QuizPlayer({ quizSummary, courseId, onSubmitted }: QuizPlayerPro
 
                 {answer?.explanation && (
                   <div
-                    className="mt-3 rounded-md bg-neutral-50 p-3 text-sm text-neutral-700"
+                    className="mt-3 w-full min-w-0 rounded-md bg-neutral-50 p-3 text-sm text-neutral-700 [overflow-wrap:anywhere]"
                     dangerouslySetInnerHTML={{ __html: answer.explanation }}
                   />
                 )}
 
                 {answer?.is_correct && answer.feedback_correct && (
-                  <p className="mt-2 text-sm text-emerald-700">{answer.feedback_correct}</p>
+                  <p className="mt-2 break-words text-sm text-emerald-700">{answer.feedback_correct}</p>
                 )}
                 {answer && !answer.is_correct && answer.feedback_incorrect && (
-                  <p className="mt-2 text-sm text-red-700">{answer.feedback_incorrect}</p>
+                  <p className="mt-2 break-words text-sm text-red-700">{answer.feedback_incorrect}</p>
                 )}
               </div>
             )
           })}
         </div>
 
-        {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
-
-        <div className="mt-6 flex gap-3">
-          {canRetake && (
-            <Button variant="outline" onClick={() => setStage('intro')}>
-              Retake Quiz
-            </Button>
-          )}
-          {result.passed && (
-            <Button disabled={isPreparingCertificate} onClick={handleDownloadCertificate}>
-              {isPreparingCertificate ? 'Preparing…' : 'Download Certificate'}
-            </Button>
-          )}
-        </div>
       </Card>
     )
   }

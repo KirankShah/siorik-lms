@@ -15,19 +15,17 @@ const FLUSH_EVERY_N_TICKS = 10
 
 interface SlidePlayerProps {
   slide: SlideSummary
-  courseId: number
   courseTemplateId: number | null
   enrollmentId: number
   existingProgress: SlideProgress | undefined
   onProgressSynced: (enrollment: Enrollment) => void
-  onCanAdvanceChange: (canAdvance: boolean, secondsRemaining: number) => void
+  onCanAdvanceChange: (canAdvance: boolean, secondsRemaining: number, nextDisabledReason?: string) => void
   onEnterFullscreen?: () => void
   isFullscreen?: boolean
 }
 
 export function SlidePlayer({
   slide,
-  courseId,
   courseTemplateId,
   enrollmentId,
   existingProgress,
@@ -102,10 +100,21 @@ export function SlidePlayer({
 
   const canAdvance = slide.slide_type === 'CONTENT' ? dwellSatisfied || isMarkedComplete : isMarkedComplete
 
+  // CONTENT's gate already explains itself via the dwell-timer countdown
+  // text (secondsRemaining) — only QUIZ/SCENARIO get a tooltip reason here,
+  // since those are the two types this gate is meant to explain per the
+  // ticket. ASSIGNMENT shares the same isMarkedComplete gate but has no
+  // tooltip copy of its own yet.
+  let nextDisabledReason: string | undefined
+  if (!canAdvance) {
+    if (slide.slide_type === 'QUIZ') nextDisabledReason = 'Submit your answer to continue.'
+    else if (slide.slide_type === 'SCENARIO') nextDisabledReason = 'Reach an ending to continue.'
+  }
+
   useEffect(() => {
-    onCanAdvanceChange(canAdvance, Math.max(0, requiredSeconds - dwellSeconds))
+    onCanAdvanceChange(canAdvance, Math.max(0, requiredSeconds - dwellSeconds), nextDisabledReason)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canAdvance, dwellSeconds, requiredSeconds])
+  }, [canAdvance, dwellSeconds, requiredSeconds, nextDisabledReason])
 
   function handleSubmitted() {
     void flush(true)
@@ -113,7 +122,7 @@ export function SlidePlayer({
 
   let content
   if (slide.slide_type === 'QUIZ') {
-    content = <QuizSlidePlayer slide={slide} courseId={courseId} onSubmitted={handleSubmitted} />
+    content = <QuizSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
   } else if (slide.slide_type === 'ASSIGNMENT') {
     content = <AssignmentSlidePlayer slide={slide} onSubmitted={handleSubmitted} />
   } else if (slide.slide_type === 'SCENARIO') {
