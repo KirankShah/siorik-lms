@@ -170,26 +170,50 @@ export function CourseDetailPage() {
     />
   )
 
+  // Rendered from both the fullscreen and normal return branches below —
+  // FullscreenSlideOverlay returns its own tree early, so this can't just
+  // live once at the bottom of the normal branch's JSX or it would never
+  // appear while fullscreen (the bug this comment is here to prevent
+  // regressing: the modal silently never showed in fullscreen mode).
+  const completionModalNode = showCompletionModal && enrollment && (
+    <CourseCompletionModal
+      courseName={course.title}
+      courseId={course.id}
+      isEligible={!enrollment.certificate_ineligible_reason}
+      onRetake={() => {
+        setShowCompletionModal(false)
+        goToFirst()
+      }}
+      onMaybeLater={() => {
+        setShowCompletionModal(false)
+        navigate('/dashboard')
+      }}
+    />
+  )
+
   if (isFullscreen && activeEntry && enrollment) {
     return (
-      <FullscreenSlideOverlay
-        activeEntry={activeEntry}
-        isCanvasSlide={activeEntry.slide.slide_type === 'CONTENT'}
-        hasPrevious={activeIndex > 0}
-        hasNext={activeIndex < entries.length - 1}
-        onPrevious={() => goToOffset(-1)}
-        onNext={() => goToOffset(1)}
-        nextDisabled={!canAdvance}
-        secondsRemaining={secondsRemaining}
-        nextDisabledReason={nextDisabledReason}
-        isAtFirst={activeIndex <= 0}
-        isAtLast={activeIndex >= lastReachedIndex}
-        onGoToFirst={goToFirst}
-        onGoToLast={goToLastReached}
-        onExit={() => setIsFullscreen(false)}
-      >
-        {slidePlayerNode}
-      </FullscreenSlideOverlay>
+      <>
+        <FullscreenSlideOverlay
+          activeEntry={activeEntry}
+          isCanvasSlide={activeEntry.slide.slide_type === 'CONTENT'}
+          hasPrevious={activeIndex > 0}
+          hasNext={activeIndex < entries.length - 1}
+          onPrevious={() => goToOffset(-1)}
+          onNext={() => goToOffset(1)}
+          nextDisabled={!canAdvance}
+          secondsRemaining={secondsRemaining}
+          nextDisabledReason={nextDisabledReason}
+          isAtFirst={activeIndex <= 0}
+          isAtLast={activeIndex >= lastReachedIndex}
+          onGoToFirst={goToFirst}
+          onGoToLast={goToLastReached}
+          onExit={() => setIsFullscreen(false)}
+        >
+          {slidePlayerNode}
+        </FullscreenSlideOverlay>
+        {completionModalNode}
+      </>
     )
   }
 
@@ -239,21 +263,7 @@ export function CourseDetailPage() {
               nextDisabledReason={nextDisabledReason}
             />
 
-            {showCompletionModal && (
-              <CourseCompletionModal
-                courseName={course.title}
-                courseId={course.id}
-                isEligible={!enrollment.certificate_ineligible_reason}
-                onRetake={() => {
-                  setShowCompletionModal(false)
-                  goToFirst()
-                }}
-                onMaybeLater={() => {
-                  setShowCompletionModal(false)
-                  navigate('/dashboard')
-                }}
-              />
-            )}
+            {completionModalNode}
           </Card>
         ) : (
           <p className="text-sm text-neutral-500">Select a slide to get started.</p>
