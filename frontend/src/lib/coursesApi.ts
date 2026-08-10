@@ -45,6 +45,15 @@ export function saveSlideProgress(
   })
 }
 
+// Resets this enrollment to a fresh state — deletes SlideProgress,
+// LessonProgress, and every attempt type (QuizAttempt/ScenarioAttempt/
+// AssignmentSubmission) scoped to this user+course, so quiz max_attempts
+// and course completion both start over. See
+// courses.views.EnrollmentViewSet.retake.
+export function retakeCourse(enrollmentId: number): Promise<Enrollment> {
+  return apiFetch<Enrollment>(`/enrollments/${enrollmentId}/retake/`, { method: 'POST' })
+}
+
 function buildFormData<T extends object>(payload: T): FormData {
   const formData = new FormData()
   for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {

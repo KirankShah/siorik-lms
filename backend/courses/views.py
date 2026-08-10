@@ -22,11 +22,13 @@ from rest_framework.views import APIView
 
 from accounts.models import Organization, User
 from assessments.models import Quiz, QuizAttempt
+from assignments.models import AssignmentSubmission
 from audit.models import AuditLog
 from audit.services import log_action
 from certificates.services import certificate_ineligibility_reason, try_auto_issue_certificate
 from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
 from gamification.services import update_gamification_for_user
+from scenarios.models import ScenarioAttempt
 
 from .models import (
     Course,
@@ -689,6 +691,39 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         if newly_completed:
             update_gamification_for_user(enrollment.user)
             try_auto_issue_certificate(enrollment.user, enrollment.course)
+        log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
+        return Response(EnrollmentSerializer(enrollment).data)
+
+    @action(detail=True, methods=['post'], url_path='retake')
+    def retake(self, request, pk=None):
+        """
+        Resets this enrollment to a fresh state so the learner can take the
+        course again from scratch, same as if they'd never started it:
+        deletes all progress (SlideProgress, LessonProgress) and attempt
+        history scoped to this user+course (QuizAttempt, ScenarioAttempt,
+        AssignmentSubmission) — clearing QuizAttempt rows is what resets
+        Quiz.max_attempts back to zero used, since that's counted live off
+        these rows rather than a separate counter. Used by the "Retake
+        Course" action on CourseCompletionModal.tsx.
+        """
+        enrollment = self.get_object()
+        course = enrollment.course
+        user = enrollment.user
+
+        with transaction.atomic():
+            SlideProgress.objects.filter(enrollment=enrollment).delete()
+            LessonProgress.objects.filter(enrollment=enrollment).delete()
+            ScenarioAttempt.objects.filter(enrollment=enrollment).delete()
+            QuizAttempt.objects.filter(user=user, quiz__slide__lesson__module__course=course).delete()
+            AssignmentSubmission.objects.filter(
+                user=user, assignment__slide__lesson__module__course=course
+            ).delete()
+
+            enrollment.status = Enrollment.Status.NOT_STARTED
+            enrollment.progress_percent = 0
+            enrollment.completed_at = None
+            enrollment.save()
+
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         return Response(EnrollmentSerializer(enrollment).data)
 

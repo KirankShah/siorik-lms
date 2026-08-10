@@ -7,7 +7,7 @@ import { SlideNavFooter } from '../components/player/SlideNavFooter'
 import { SlidePlayer } from '../components/player/SlidePlayer'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
-import { enrollInCourse, fetchCourseDetail, fetchEnrollments } from '../lib/coursesApi'
+import { enrollInCourse, fetchCourseDetail, fetchEnrollments, retakeCourse } from '../lib/coursesApi'
 import { computeReachedSlideIds, flattenCourseSlides } from '../lib/slideSequence'
 import type { CourseDetail, Enrollment } from '../types/courses'
 
@@ -26,6 +26,7 @@ export function CourseDetailPage() {
   const [nextDisabledReason, setNextDisabledReason] = useState<string | undefined>(undefined)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showCompletionModal, setShowCompletionModal] = useState(false)
+  const [isRetaking, setIsRetaking] = useState(false)
 
   useEffect(() => {
     if (!slug) return
@@ -97,6 +98,26 @@ export function CourseDetailPage() {
       setError('Could not enroll in this course. Please try again.')
     } finally {
       setIsEnrolling(false)
+    }
+  }
+
+  // Resets progress/attempts server-side (courses.views.EnrollmentViewSet.retake)
+  // before navigating back to slide 1, so the fresh enrollment (empty
+  // slide_progress) is already in state by the time the player re-renders —
+  // otherwise completedSlideIds would still reflect the old, now-deleted
+  // progress until the next unrelated re-fetch.
+  async function handleRetake() {
+    if (!enrollment) return
+    setIsRetaking(true)
+    try {
+      const freshEnrollment = await retakeCourse(enrollment.id)
+      setEnrollment(freshEnrollment)
+      setShowCompletionModal(false)
+      goToFirst()
+    } catch {
+      setError('Could not reset your progress for a retake. Please try again.')
+    } finally {
+      setIsRetaking(false)
     }
   }
 
@@ -180,10 +201,8 @@ export function CourseDetailPage() {
       courseName={course.title}
       courseId={course.id}
       isEligible={!enrollment.certificate_ineligible_reason}
-      onRetake={() => {
-        setShowCompletionModal(false)
-        goToFirst()
-      }}
+      isRetaking={isRetaking}
+      onRetake={() => void handleRetake()}
       onMaybeLater={() => {
         setShowCompletionModal(false)
         navigate('/dashboard')

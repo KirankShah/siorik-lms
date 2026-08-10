@@ -11,11 +11,21 @@ interface CourseCompletionModalProps {
   // existing backend-verified decision rather than re-deriving the 70% math
   // here.
   isEligible: boolean
+  // True while the retake reset request is in flight — disables the button
+  // and swaps its label so a slow request can't be double-submitted.
+  isRetaking?: boolean
   onRetake: () => void
   onMaybeLater: () => void
 }
 
-export function CourseCompletionModal({ courseName, courseId, isEligible, onRetake, onMaybeLater }: CourseCompletionModalProps) {
+export function CourseCompletionModal({
+  courseName,
+  courseId,
+  isEligible,
+  isRetaking = false,
+  onRetake,
+  onMaybeLater,
+}: CourseCompletionModalProps) {
   if (isEligible) {
     return (
       <Modal title="Course Complete" onClose={onMaybeLater}>
@@ -33,8 +43,10 @@ export function CourseCompletionModal({ courseName, courseId, isEligible, onReta
         You didn't quite reach the pass mark for this course. Would you like to retake it?
       </p>
       <div className="mt-4 flex gap-3">
-        <Button onClick={onRetake}>Retake Course</Button>
-        <Button variant="outline" onClick={onMaybeLater}>
+        <Button disabled={isRetaking} onClick={onRetake}>
+          {isRetaking ? 'Resetting…' : 'Retake Course'}
+        </Button>
+        <Button variant="outline" disabled={isRetaking} onClick={onMaybeLater}>
           Maybe Later
         </Button>
       </div>

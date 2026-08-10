@@ -60,6 +60,23 @@ describe('CourseCompletionModal', () => {
     expect(onRetake).toHaveBeenCalledTimes(1)
   })
 
+  it('disables both buttons and shows a resetting label while the retake request is in flight', () => {
+    render(
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={false}
+        isRetaking={true}
+        onRetake={vi.fn()}
+        onMaybeLater={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Resetting…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Maybe Later' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Retake Course' })).not.toBeInTheDocument()
+  })
+
   it('calls onMaybeLater when Maybe Later is clicked', () => {
     const onMaybeLater = vi.fn()
     render(

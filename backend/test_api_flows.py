@@ -21,7 +21,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.models import Organization, User
 from accounts.services import UserProvisioningError, provision_demo_user
 from assessments.models import Choice, Question, Quiz, QuizAttempt
-from assignments.models import Assignment
+from assignments.models import Assignment, AssignmentSubmission
 from audit.models import AuditLog
 from certificates.models import Certificate, CertificateTemplate
 from certificates.services import (
@@ -31,9 +31,20 @@ from certificates.services import (
     certificate_ineligibility_reason,
     generate_certificate,
 )
-from courses.models import Course, CourseAccess, DemoLessonAccess, Element, Enrollment, Lesson, Module, Slide, SlideProgress
+from courses.models import (
+    Course,
+    CourseAccess,
+    DemoLessonAccess,
+    Element,
+    Enrollment,
+    Lesson,
+    LessonProgress,
+    Module,
+    Slide,
+    SlideProgress,
+)
 from courses.video_streaming import build_video_stream_token
-from scenarios.models import ScenarioChoice, ScenarioNode
+from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
 
 def make_test_certificate_template(**overrides):
@@ -379,6 +390,83 @@ class EnrollmentFlowTests(BaseAPITestCase):
         self.auth_as(self.other_org_learner)
         response = self.client.post(f'/api/enrollments/{enrollment.id}/complete-lesson/', {'lesson': self.lesson1.id})
         self.assertEqual(response.status_code, 404)
+
+
+class EnrollmentRetakeTests(BaseAPITestCase):
+    """"Retake Course" (CourseCompletionModal.tsx) resets an enrollment to a
+    fresh state — progress, quiz attempts (so max_attempts starts over), and
+    every other attempt type, scoped to just this user+course."""
+
+    def setUp(self):
+        super().setUp()
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course,
+            status=Enrollment.Status.COMPLETED, progress_percent=100,
+            completed_at=timezone.now(),
+        )
+        SlideProgress.objects.create(enrollment=self.enrollment, slide=self.quiz_slide, completed_at=timezone.now())
+        LessonProgress.objects.create(enrollment=self.enrollment, lesson=self.lesson1, completed_at=timezone.now())
+        # Exhaust max_attempts (2) so we can prove a retake actually frees it up.
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=False, score_percent=0)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=2, passed=False, score_percent=0)
+
+        scenario_slide = Slide.objects.create(
+            lesson=self.lesson2, order=1, title='Scenario', slide_type=Slide.SlideType.SCENARIO,
+        )
+        node = ScenarioNode.objects.create(slide=scenario_slide, node_key='start', is_start=True)
+        ScenarioAttempt.objects.create(enrollment=self.enrollment, slide=scenario_slide, path_taken=[node.id])
+
+        assignment_slide = Slide.objects.create(
+            lesson=self.lesson2, order=2, title='Assignment', slide_type=Slide.SlideType.ASSIGNMENT,
+        )
+        assignment = Assignment.objects.create(slide=assignment_slide)
+        AssignmentSubmission.objects.create(assignment=assignment, user=self.learner, text_response='done')
+
+        # A different course's data for the same learner must survive untouched.
+        self.other_enrollment = Enrollment.objects.create(user=self.learner, course=self.platform_course)
+        other_module = Module.objects.create(course=self.platform_course, title='M', order=1)
+        other_lesson = Lesson.objects.create(module=other_module, title='L', order=1)
+        other_quiz_slide = Slide.objects.create(lesson=other_lesson, order=1, title='Q', slide_type=Slide.SlideType.QUIZ)
+        self.other_quiz = Quiz.objects.create(slide=other_quiz_slide, title='Q', pass_percentage=50)
+        QuizAttempt.objects.create(user=self.learner, quiz=self.other_quiz, attempt_number=1, passed=True, score_percent=100)
+
+    def test_retake_resets_enrollment_and_deletes_all_progress_and_attempts(self):
+        self.auth_as(self.learner)
+        response = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'NOT_STARTED')
+        self.assertEqual(response.data['progress_percent'], 0)
+        self.assertIsNone(response.data['completed_at'])
+
+        self.assertFalse(SlideProgress.objects.filter(enrollment=self.enrollment).exists())
+        self.assertFalse(LessonProgress.objects.filter(enrollment=self.enrollment).exists())
+        self.assertFalse(QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz).exists())
+        self.assertFalse(ScenarioAttempt.objects.filter(enrollment=self.enrollment).exists())
+        self.assertFalse(AssignmentSubmission.objects.filter(user=self.learner).filter(assignment__slide__lesson=self.lesson2).exists())
+
+    def test_retake_lets_learner_exceed_the_old_max_attempts(self):
+        self.auth_as(self.learner)
+        self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+
+        payload = [{'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                   {'question': self.q2.id, 'selected_choices': [self.q2_right.id]}]
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', {'answers': payload}, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz).count(), 1)
+
+    def test_retake_does_not_touch_a_different_course(self):
+        self.auth_as(self.learner)
+        self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+
+        self.other_enrollment.refresh_from_db()
+        self.assertTrue(QuizAttempt.objects.filter(user=self.learner, quiz=self.other_quiz).exists())
+
+    def test_other_learner_cannot_retake_someone_elses_enrollment(self):
+        self.auth_as(self.other_org_learner)
+        response = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(response.status_code, 404)
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.status, 'COMPLETED')
 
 
 class QuizFlowTests(BaseAPITestCase):
