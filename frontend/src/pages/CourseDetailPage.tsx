@@ -203,7 +203,12 @@ export function CourseDetailPage() {
       isEligible={!enrollment.certificate_ineligible_reason}
       isRetaking={isRetaking}
       onRetake={() => void handleRetake()}
+      onBackToCourse={() => setShowCompletionModal(false)}
       onMaybeLater={() => {
+        setShowCompletionModal(false)
+        navigate('/dashboard')
+      }}
+      onCertificateDownloaded={() => {
         setShowCompletionModal(false)
         navigate('/dashboard')
       }}

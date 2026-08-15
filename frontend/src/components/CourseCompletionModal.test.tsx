@@ -23,12 +23,15 @@ describe('CourseCompletionModal', () => {
         courseId={1}
         isEligible={true}
         onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
         onMaybeLater={vi.fn()}
+        onCertificateDownloaded={vi.fn()}
       />,
     )
 
     expect(screen.getByText(/Congratulations.*AML Fundamentals/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Download Certificate/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to Course' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retake Course' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Maybe Later' })).not.toBeInTheDocument()
   })
@@ -40,12 +43,15 @@ describe('CourseCompletionModal', () => {
         courseId={1}
         isEligible={false}
         onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
         onMaybeLater={vi.fn()}
+        onCertificateDownloaded={vi.fn()}
       />,
     )
 
     expect(screen.getByText(/didn't quite reach the pass mark/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retake Course' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to Course' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Maybe Later' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Download Certificate/ })).not.toBeInTheDocument()
   })
@@ -53,14 +59,22 @@ describe('CourseCompletionModal', () => {
   it('calls onRetake when Retake Course is clicked', () => {
     const onRetake = vi.fn()
     render(
-      <CourseCompletionModal courseName="AML Fundamentals" courseId={1} isEligible={false} onRetake={onRetake} onMaybeLater={vi.fn()} />,
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={false}
+        onRetake={onRetake}
+        onBackToCourse={vi.fn()}
+        onMaybeLater={vi.fn()}
+        onCertificateDownloaded={vi.fn()}
+      />,
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Retake Course' }))
     expect(onRetake).toHaveBeenCalledTimes(1)
   })
 
-  it('disables both buttons and shows a resetting label while the retake request is in flight', () => {
+  it('disables Retake, Back to Course, and Maybe Later while the retake request is in flight', () => {
     render(
       <CourseCompletionModal
         courseName="AML Fundamentals"
@@ -68,11 +82,14 @@ describe('CourseCompletionModal', () => {
         isEligible={false}
         isRetaking={true}
         onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
         onMaybeLater={vi.fn()}
+        onCertificateDownloaded={vi.fn()}
       />,
     )
 
     expect(screen.getByRole('button', { name: 'Resetting…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Back to Course' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Maybe Later' })).toBeDisabled()
     expect(screen.queryByRole('button', { name: 'Retake Course' })).not.toBeInTheDocument()
   })
@@ -85,7 +102,9 @@ describe('CourseCompletionModal', () => {
         courseId={1}
         isEligible={false}
         onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
         onMaybeLater={onMaybeLater}
+        onCertificateDownloaded={vi.fn()}
       />,
     )
 
@@ -93,20 +112,92 @@ describe('CourseCompletionModal', () => {
     expect(onMaybeLater).toHaveBeenCalledTimes(1)
   })
 
-  it('triggers the existing certificate issue/download flow when Download Certificate is clicked', async () => {
+  it('calls onBackToCourse (not onMaybeLater) when Back to Course is clicked, and stays open otherwise', () => {
+    const onBackToCourse = vi.fn()
+    const onMaybeLater = vi.fn()
+    render(
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={false}
+        onRetake={vi.fn()}
+        onBackToCourse={onBackToCourse}
+        onMaybeLater={onMaybeLater}
+        onCertificateDownloaded={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Course' }))
+    expect(onBackToCourse).toHaveBeenCalledTimes(1)
+    expect(onMaybeLater).not.toHaveBeenCalled()
+  })
+
+  it('calls onBackToCourse (never a navigating callback) when the modal is closed via its X button', () => {
+    const onBackToCourse = vi.fn()
+    const onMaybeLater = vi.fn()
+    render(
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={true}
+        onRetake={vi.fn()}
+        onBackToCourse={onBackToCourse}
+        onMaybeLater={onMaybeLater}
+        onCertificateDownloaded={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onBackToCourse).toHaveBeenCalledTimes(1)
+    expect(onMaybeLater).not.toHaveBeenCalled()
+  })
+
+  it('triggers the existing certificate issue/download flow when Download Certificate is clicked, then calls onCertificateDownloaded', async () => {
     vi.mocked(certificatesApi.issueCertificate).mockResolvedValue({
       id: 1,
       certificate_number: 'SIORIK-2026-000001',
     } as never)
     vi.mocked(certificatesApi.downloadCertificate).mockResolvedValue(undefined)
+    const onCertificateDownloaded = vi.fn()
 
     render(
-      <CourseCompletionModal courseName="AML Fundamentals" courseId={1} isEligible={true} onRetake={vi.fn()} onMaybeLater={vi.fn()} />,
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={true}
+        onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
+        onMaybeLater={vi.fn()}
+        onCertificateDownloaded={onCertificateDownloaded}
+      />,
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Download Certificate/ }))
 
     await waitFor(() => expect(certificatesApi.issueCertificate).toHaveBeenCalledWith(1))
     expect(certificatesApi.downloadCertificate).toHaveBeenCalled()
+    await waitFor(() => expect(onCertificateDownloaded).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not call onCertificateDownloaded when the certificate download fails', async () => {
+    vi.mocked(certificatesApi.issueCertificate).mockRejectedValue(new Error('boom'))
+    const onCertificateDownloaded = vi.fn()
+
+    render(
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        courseId={1}
+        isEligible={true}
+        onRetake={vi.fn()}
+        onBackToCourse={vi.fn()}
+        onMaybeLater={vi.fn()}
+        onCertificateDownloaded={onCertificateDownloaded}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Download Certificate/ }))
+
+    await waitFor(() => expect(screen.getByText(/Could not generate the certificate/)).toBeInTheDocument())
+    expect(onCertificateDownloaded).not.toHaveBeenCalled()
   })
 })

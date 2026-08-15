@@ -3,9 +3,13 @@ import { downloadCertificate, issueCertificate } from '../lib/certificatesApi'
 
 interface CertificateButtonProps {
   courseId: number
+  // Fired only after a successful download (never on error, so a failed
+  // attempt leaves the learner on the button to retry rather than getting
+  // swept away by the caller's post-download navigation).
+  onDownloaded?: () => void
 }
 
-export function CertificateButton({ courseId }: CertificateButtonProps) {
+export function CertificateButton({ courseId, onDownloaded }: CertificateButtonProps) {
   const [certificateId, setCertificateId] = useState<number | null>(null)
   const [isPreparing, setIsPreparing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -21,6 +25,7 @@ export function CertificateButton({ courseId }: CertificateButtonProps) {
       } else {
         await downloadCertificate(certificateId, 'certificate.pdf')
       }
+      onDownloaded?.()
     } catch {
       setError('Could not generate the certificate. Please try again.')
     } finally {
