@@ -463,6 +463,10 @@ class SlideViewSet(viewsets.ModelViewSet):
                     embed_url=element.embed_url,
                     caption=element.caption,
                     align=element.align,
+                    dialogue_scene_id=element.dialogue_scene_id,
+                    dialogue_character_left_id=element.dialogue_character_left_id,
+                    dialogue_character_right_id=element.dialogue_character_right_id,
+                    dialogue_lines=element.dialogue_lines,
                 ).save(edited_by=request.user)
 
         return Response(SlideSerializer(new_slide).data, status=201)

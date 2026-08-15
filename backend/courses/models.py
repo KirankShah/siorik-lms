@@ -288,6 +288,10 @@ class Slide(models.Model):
                 'embed_url': element.embed_url,
                 'caption': element.caption,
                 'align': element.align,
+                'dialogue_scene': element.dialogue_scene_id,
+                'dialogue_character_left': element.dialogue_character_left_id,
+                'dialogue_character_right': element.dialogue_character_right_id,
+                'dialogue_lines': element.dialogue_lines,
             }
             for element in self.elements.order_by('order')
         ]
@@ -309,6 +313,7 @@ class Element(models.Model):
         FILE_DOWNLOAD = 'FILE_DOWNLOAD', 'File download'
         EMBED = 'EMBED', 'Embed'
         PRESENTATION_PDF = 'PRESENTATION_PDF', 'Presentation/PDF'
+        DIALOGUE = 'DIALOGUE', 'Dialogue'
 
     class Align(models.TextChoices):
         LEFT = 'LEFT', 'Left'
@@ -332,6 +337,23 @@ class Element(models.Model):
     caption = models.CharField(max_length=500, blank=True, default='')
     # IMAGE (horizontal placement within the slide)
     align = models.CharField(max_length=10, choices=Align.choices, default=Align.CENTER)
+    # DIALOGUE — references only, never generates: the picked Character/Scene
+    # illustrations are positioned left/right over the background by the
+    # frontend player. SET_NULL rather than PROTECT so deleting a stale
+    # Character/Scene from the illustration pack can't be blocked by content
+    # that references it — it just leaves that side of the dialogue blank.
+    dialogue_scene = models.ForeignKey(
+        'dialogue.Scene', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    dialogue_character_left = models.ForeignKey(
+        'dialogue.Character', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    dialogue_character_right = models.ForeignKey(
+        'dialogue.Character', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    # Ordered list of {"speaker": "LEFT" | "RIGHT", "text": str} — the script
+    # the learner clicks through, one line at a time.
+    dialogue_lines = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ['order']

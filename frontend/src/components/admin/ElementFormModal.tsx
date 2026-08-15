@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { AlignCenter, AlignLeft, AlignRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, Trash2 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { RichTextField } from './RichTextField'
@@ -7,9 +7,11 @@ import { extractEmbedUrl } from '../../lib/embedUtils'
 import { ELEMENT_TYPE_LABEL } from '../../lib/elementTypes'
 import { resolveVideoEmbed } from '../../lib/blocknote/videoProviders'
 import { isLowContrast } from '../../lib/colorContrast'
+import { fetchCharacters, fetchScenes } from '../../lib/dialogueApi'
 import { createElement, updateElement } from '../../lib/slidesApi'
 import type { ElementInput } from '../../lib/slidesApi'
-import type { ElementAlign, ElementType, SlideElement, SlideTemplate } from '../../types/slides'
+import type { Character, Scene } from '../../types/dialogue'
+import type { DialogueLine, ElementAlign, ElementType, SlideElement, SlideTemplate } from '../../types/slides'
 
 // Pre-templates default look is a plain white card (see SlideElementsView) —
 // used as the readability check's background when no template applies.
@@ -53,6 +55,45 @@ export function ElementFormModal({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [colorWarning, setColorWarning] = useState<string | null>(null)
+
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [scenes, setScenes] = useState<Scene[]>([])
+  const [dialogueSceneId, setDialogueSceneId] = useState<number | null>(element?.dialogue_scene ?? null)
+  const [dialogueCharacterLeftId, setDialogueCharacterLeftId] = useState<number | null>(
+    element?.dialogue_character_left ?? null,
+  )
+  const [dialogueCharacterRightId, setDialogueCharacterRightId] = useState<number | null>(
+    element?.dialogue_character_right ?? null,
+  )
+  const [dialogueLines, setDialogueLines] = useState<DialogueLine[]>(element?.dialogue_lines ?? [])
+
+  useEffect(() => {
+    if (elementType !== 'DIALOGUE') return
+    fetchCharacters().then(setCharacters).catch(() => setCharacters([]))
+    fetchScenes().then(setScenes).catch(() => setScenes([]))
+  }, [elementType])
+
+  function addDialogueLine() {
+    setDialogueLines((lines) => [...lines, { speaker: 'LEFT', text: '' }])
+  }
+
+  function updateDialogueLine(index: number, patch: Partial<DialogueLine>) {
+    setDialogueLines((lines) => lines.map((line, i) => (i === index ? { ...line, ...patch } : line)))
+  }
+
+  function removeDialogueLine(index: number) {
+    setDialogueLines((lines) => lines.filter((_, i) => i !== index))
+  }
+
+  function moveDialogueLine(index: number, direction: -1 | 1) {
+    setDialogueLines((lines) => {
+      const target = index + direction
+      if (target < 0 || target >= lines.length) return lines
+      const next = [...lines]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
 
   function handleColorApplied(kind: 'color' | 'background', hex: string) {
     const backgroundCss = template?.background_css ?? DEFAULT_BACKGROUND_CSS
@@ -99,6 +140,12 @@ export function ElementFormModal({
         payload.caption = caption
         if (file) payload.file = file
       }
+      if (elementType === 'DIALOGUE') {
+        payload.dialogue_scene = dialogueSceneId
+        payload.dialogue_character_left = dialogueCharacterLeftId
+        payload.dialogue_character_right = dialogueCharacterRightId
+        payload.dialogue_lines = dialogueLines.filter((line) => line.text.trim() !== '')
+      }
 
       if (element) {
         await updateElement(element.id, payload)
@@ -122,8 +169,10 @@ export function ElementFormModal({
       // clean) doesn't fit the default max-w-lg without cramming, which is
       // what was pushing the color/highlight swatch dropdowns (including the
       // white swatch) outside the modal's visible bounds.
-      widthClassName={elementType === 'TEXT' || elementType === 'QUOTE' ? 'max-w-3xl' : undefined}
-      maxHeightClassName={elementType === 'TEXT' || elementType === 'QUOTE' ? 'max-h-[92vh]' : undefined}
+      widthClassName={elementType === 'TEXT' || elementType === 'QUOTE' || elementType === 'DIALOGUE' ? 'max-w-3xl' : undefined}
+      maxHeightClassName={
+        elementType === 'TEXT' || elementType === 'QUOTE' || elementType === 'DIALOGUE' ? 'max-h-[92vh]' : undefined
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -291,6 +340,134 @@ export function ElementFormModal({
                 placeholder="What learners see on the download button"
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
               />
+            </div>
+          </>
+        )}
+
+        {elementType === 'DIALOGUE' && (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">Scene</label>
+                <select
+                  value={dialogueSceneId ?? ''}
+                  onChange={(e) => setDialogueSceneId(e.target.value ? Number(e.target.value) : null)}
+                  className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Select a scene…</option>
+                  {scenes.map((scene) => (
+                    <option key={scene.id} value={scene.id}>
+                      {scene.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">Left character</label>
+                <select
+                  value={dialogueCharacterLeftId ?? ''}
+                  onChange={(e) => setDialogueCharacterLeftId(e.target.value ? Number(e.target.value) : null)}
+                  className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Select a character…</option>
+                  {characters.map((character) => (
+                    <option key={character.id} value={character.id}>
+                      {character.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">Right character</label>
+                <select
+                  value={dialogueCharacterRightId ?? ''}
+                  onChange={(e) => setDialogueCharacterRightId(e.target.value ? Number(e.target.value) : null)}
+                  className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Select a character…</option>
+                  {characters.map((character) => (
+                    <option key={character.id} value={character.id}>
+                      {character.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {characters.length === 0 && (
+              <p className="text-xs text-amber-600">
+                No characters loaded yet — these are seeded by a platform admin once the illustration pack is uploaded.
+              </p>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-neutral-700">Script</label>
+                <Button variant="ghost" onClick={addDialogueLine}>
+                  Add line
+                </Button>
+              </div>
+              <div className="mt-1 space-y-2">
+                {dialogueLines.length === 0 && <p className="text-xs text-neutral-400">No lines yet.</p>}
+                {dialogueLines.map((line, index) => (
+                  <div key={index} className="flex items-start gap-2 rounded-md border border-neutral-200 p-2">
+                    <div className="inline-flex shrink-0 rounded-md border border-neutral-300 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => updateDialogueLine(index, { speaker: 'LEFT' })}
+                        className={`rounded px-2 py-1 text-xs font-medium transition ${
+                          line.speaker === 'LEFT' ? 'bg-brand-navy text-white' : 'text-neutral-500 hover:bg-neutral-100'
+                        }`}
+                      >
+                        Left
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateDialogueLine(index, { speaker: 'RIGHT' })}
+                        className={`rounded px-2 py-1 text-xs font-medium transition ${
+                          line.speaker === 'RIGHT' ? 'bg-brand-navy text-white' : 'text-neutral-500 hover:bg-neutral-100'
+                        }`}
+                      >
+                        Right
+                      </button>
+                    </div>
+                    <textarea
+                      value={line.text}
+                      onChange={(e) => updateDialogueLine(index, { text: e.target.value })}
+                      rows={2}
+                      placeholder="Line of dialogue…"
+                      className="block w-full flex-1 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    />
+                    <div className="flex shrink-0 flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => moveDialogueLine(index, -1)}
+                        disabled={index === 0}
+                        aria-label="Move up"
+                        className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-30"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveDialogueLine(index, 1)}
+                        disabled={index === dialogueLines.length - 1}
+                        aria-label="Move down"
+                        className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-30"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeDialogueLine(index)}
+                        aria-label="Remove line"
+                        className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </>
         )}

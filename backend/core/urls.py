@@ -31,6 +31,7 @@ urlpatterns = [
     path('api/', include('scenarios.urls')),
     path('api/', include('gamification.urls')),
     path('api/', include('certificates.api_urls')),
+    path('api/', include('dialogue.urls')),
 ]
 
 # Not gated on DEBUG: with USE_S3=False, this is the only thing that serves

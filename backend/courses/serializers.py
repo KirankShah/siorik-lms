@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
 from certificates.services import certificate_ineligibility_reason
+from dialogue.serializers import CharacterSerializer, SceneSerializer
 
 from .models import (
     Course,
@@ -282,6 +283,10 @@ class ElementSerializer(serializers.ModelSerializer):
             'embed_url',
             'caption',
             'align',
+            'dialogue_scene',
+            'dialogue_character_left',
+            'dialogue_character_right',
+            'dialogue_lines',
         ]
 
     def to_representation(self, instance):
@@ -299,6 +304,27 @@ class ElementSerializer(serializers.ModelSerializer):
             token = build_video_stream_token(request.user.id, instance.id)
             stream_path = reverse('element-video-stream', kwargs={'pk': instance.id})
             data['video_file'] = request.build_absolute_uri(f'{stream_path}?token={token}')
+        # DIALOGUE — nest the picked Character/Scene's name+image alongside
+        # the raw ids, so the player never needs a second round-trip to
+        # /characters/ or /scenes/ (which are admin-only anyway).
+        if instance.element_type == Element.ElementType.DIALOGUE:
+            # context=self.context (not the default {}) so the nested
+            # serializers' FileFields build absolute URLs via request — bare
+            # relative /media/... URLs resolve against the frontend's own
+            # origin in the browser, not the backend, and 404.
+            data['dialogue_scene_detail'] = (
+                SceneSerializer(instance.dialogue_scene, context=self.context).data if instance.dialogue_scene else None
+            )
+            data['dialogue_character_left_detail'] = (
+                CharacterSerializer(instance.dialogue_character_left, context=self.context).data
+                if instance.dialogue_character_left
+                else None
+            )
+            data['dialogue_character_right_detail'] = (
+                CharacterSerializer(instance.dialogue_character_right, context=self.context).data
+                if instance.dialogue_character_right
+                else None
+            )
         return data
 
     # Element.save()/delete() write a SlideRevision snapshot on every change —

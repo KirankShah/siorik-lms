@@ -1,3 +1,5 @@
+import type { Character, Scene } from './dialogue'
+
 export type SlideType = 'CONTENT' | 'QUIZ' | 'ASSIGNMENT' | 'SCENARIO'
 
 export type Layout = 'STACKED' | 'IMAGE_LEFT' | 'IMAGE_RIGHT'
@@ -17,8 +19,16 @@ export type ElementType =
   | 'FILE_DOWNLOAD'
   | 'EMBED'
   | 'PRESENTATION_PDF'
+  | 'DIALOGUE'
 
 export type ElementAlign = 'LEFT' | 'CENTER' | 'RIGHT'
+
+export type DialogueSpeaker = 'LEFT' | 'RIGHT'
+
+export interface DialogueLine {
+  speaker: DialogueSpeaker
+  text: string
+}
 
 // A curated background/text/accent theme for CONTENT slides — see
 // backend SlideTemplate. Seeded via migration, not user-creatable.
@@ -66,6 +76,15 @@ export interface SlideElement {
   embed_url: string
   caption: string
   align: ElementAlign
+  dialogue_scene: number | null
+  dialogue_character_left: number | null
+  dialogue_character_right: number | null
+  dialogue_lines: DialogueLine[]
+  // Nested read-only detail for the ids above — only present on DIALOGUE
+  // elements, see backend ElementSerializer.to_representation.
+  dialogue_scene_detail?: Scene | null
+  dialogue_character_left_detail?: Character | null
+  dialogue_character_right_detail?: Character | null
 }
 
 export interface SlideProgress {

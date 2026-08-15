@@ -14,6 +14,14 @@ interface ContentSlidePlayerProps {
   courseTemplateId: number | null
   onEnterFullscreen?: () => void
   isFullscreen?: boolean
+  // Fired whenever the slide's Dialogue-completion state changes — see
+  // SlidePlayer, which folds this into the Next-button gate alongside the
+  // dwell timer. Not called at all until elements have loaded, so a slide
+  // with no Dialogue element never touches the caller's gate (SlidePlayer
+  // defaults it to satisfied). Once elements are known, it's
+  // `true` whenever every DIALOGUE element on the slide has reached its
+  // final line (vacuously true if there are none).
+  onDialogueGateChange?: (satisfied: boolean) => void
 }
 
 export function ContentSlidePlayer({
@@ -21,17 +29,31 @@ export function ContentSlidePlayer({
   courseTemplateId,
   onEnterFullscreen,
   isFullscreen = false,
+  onDialogueGateChange,
 }: ContentSlidePlayerProps) {
   const [elements, setElements] = useState<SlideElement[] | null>(null)
   const [templates, setTemplates] = useState<SlideTemplate[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [completedDialogueIds, setCompletedDialogueIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     setElements(null)
+    setCompletedDialogueIds(new Set())
     fetchElements(slide.id)
       .then(setElements)
       .catch(() => setError('Could not load this slide’s content.'))
   }, [slide.id])
+
+  useEffect(() => {
+    if (!elements) return
+    const dialogueElementIds = elements.filter((e) => e.element_type === 'DIALOGUE').map((e) => e.id)
+    onDialogueGateChange?.(dialogueElementIds.every((id) => completedDialogueIds.has(id)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements, completedDialogueIds])
+
+  function handleDialogueComplete(elementId: number) {
+    setCompletedDialogueIds((prev) => (prev.has(elementId) ? prev : new Set(prev).add(elementId)))
+  }
 
   const effectiveTemplateId = slide.template_override ?? courseTemplateId
 
@@ -75,6 +97,7 @@ export function ContentSlidePlayer({
             title={slide.title || `Slide ${slide.order}`}
             canvasMode
             imageColumnWidth={slide.image_column_width}
+            onDialogueComplete={handleDialogueComplete}
           />
         </SlideCanvas>
       </div>

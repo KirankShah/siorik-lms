@@ -1,4 +1,5 @@
-import { FileDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { CheckCircle2, FileDown } from 'lucide-react'
 import { resolveVideoEmbed } from '../lib/blocknote/videoProviders'
 import type { ElementAlign, SlideElement } from '../types/slides'
 import './richTextContent.css'
@@ -55,6 +56,127 @@ function richTextHtml(richText: string): string {
   return stripEmptyParagraphs(normalizeNonBreakingSpaces(richText))
 }
 
+// DIALOGUE's own interactive click-to-advance renderer — the only
+// stateful case in this file, since it's the only element type with an
+// interaction of its own rather than being purely a passive display block.
+// Shared as-is between the admin preview and the learner-facing player, same
+// as every other element type here.
+function DialogueBlock({
+  element,
+  dominant,
+  coverFill,
+  onComplete,
+}: {
+  element: SlideElement
+  dominant: boolean
+  coverFill: boolean
+  // Fired once the conversation reaches its final line — ContentSlidePlayer
+  // uses this to gate the slide's Next button (see SlidePlayer). Also fired
+  // immediately for an unconfigured Dialogue (no scene/lines set) rather
+  // than leaving Next permanently blocked by an authoring mistake — there's
+  // nothing for the learner to complete in that case.
+  onComplete?: () => void
+}) {
+  const [lineIndex, setLineIndex] = useState(0)
+  const scene = element.dialogue_scene_detail
+  const left = element.dialogue_character_left_detail
+  const right = element.dialogue_character_right_detail
+  const lines = element.dialogue_lines
+  const isConfigured = !!scene && lines.length > 0
+  // Both hooks run unconditionally, ahead of the early return below — a
+  // conditional early return between two hook calls would violate the
+  // rules of hooks (this component would call a different number of hooks
+  // depending on isConfigured).
+  const isLastLine = isConfigured && lineIndex >= lines.length - 1
+
+  useEffect(() => {
+    if (!isConfigured || isLastLine) onComplete?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConfigured, isLastLine])
+
+  if (!isConfigured) {
+    return <p className="text-sm text-neutral-400">Dialogue not configured yet.</p>
+  }
+
+  const currentLine = lines[Math.min(lineIndex, lines.length - 1)]
+  const speakingCharacter = currentLine.speaker === 'LEFT' ? left : right
+
+  function handleAdvance() {
+    setLineIndex((index) => Math.min(index + 1, lines.length - 1))
+  }
+
+  // Large regardless of context (dominant/coverFill/plain admin preview) —
+  // this is the slide's primary interactive content, not a supporting
+  // media block, so it always claims most of the available space rather
+  // than capping at the modest size other element types use.
+  const outerClass = dominant ? 'flex h-full w-full items-center justify-center' : ''
+  const boxClass = coverFill ? 'h-full w-full' : dominant ? 'aspect-video w-[90%] max-h-[90%]' : 'aspect-video w-[90%]'
+
+  const node = (
+    <button
+      type="button"
+      onClick={handleAdvance}
+      disabled={isLastLine}
+      className={`group relative block w-full overflow-hidden rounded-md bg-neutral-200 text-left ${boxClass} ${
+        isLastLine ? 'cursor-default ring-2 ring-emerald-400' : 'cursor-pointer'
+      }`}
+    >
+      <img src={scene.background_image} alt="" className="absolute inset-0 h-full w-full object-cover" />
+
+      {/* Each character gets its own non-overlapping half of the stage,
+          object-contain + object-bottom so a source illustration's own
+          padding/aspect ratio never causes it to shrink away from its
+          corner or overlap the other character. 85% of the scene's
+          height, bottom-anchored, so the character reads as standing in
+          the scene at a natural scale rather than towering over it. */}
+      {left && (
+        <div className="absolute bottom-0 left-0 h-[85%] w-1/2 p-2">
+          <img
+            src={left.avatar_image}
+            alt={left.name}
+            className={`h-full w-full object-contain object-bottom transition-opacity duration-300 ${
+              currentLine.speaker === 'LEFT' ? 'opacity-100' : 'opacity-40'
+            }`}
+          />
+        </div>
+      )}
+      {right && (
+        <div className="absolute bottom-0 right-0 h-[85%] w-1/2 p-2">
+          <img
+            src={right.avatar_image}
+            alt={right.name}
+            className={`h-full w-full object-contain object-bottom transition-opacity duration-300 ${
+              currentLine.speaker === 'RIGHT' ? 'opacity-100' : 'opacity-40'
+            }`}
+          />
+        </div>
+      )}
+
+      <div className="absolute inset-x-4 bottom-4 rounded-lg bg-brand-navy/95 p-3 text-left shadow-lg">
+        <p className="text-xs font-bold text-brand-gold">{speakingCharacter?.name ?? 'Speaker'}</p>
+        <p className="mt-0.5 text-sm font-bold text-white">{currentLine.text}</p>
+        {isLastLine ? (
+          // Deliberately flat — no shadow, no gradient, no border — so it
+          // reads as a status strip, not a button. An embossed/raised
+          // treatment here was tried and rejected: it looked pressable, but
+          // nothing happens if you tap it (this whole block sits inside the
+          // dialogue's own, by-then-disabled <button>).
+          <div className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Conversation is complete — click Next to continue to another slide
+          </div>
+        ) : (
+          <p className="mt-1 text-right text-[10px] font-medium uppercase tracking-wide text-neutral-300">
+            Click to continue
+          </p>
+        )}
+      </div>
+    </button>
+  )
+
+  return outerClass ? <div className={outerClass}>{node}</div> : node
+}
+
 interface ElementPreviewProps {
   element: SlideElement
   // Set only when a SlideTemplate is in effect (course or per-slide override)
@@ -81,6 +203,9 @@ interface ElementPreviewProps {
   // nothing else on the slide competing for space.
   coverFill?: boolean
   dominant?: boolean
+  // DIALOGUE only — see DialogueBlock's onComplete. Unused (and harmless to
+  // omit) everywhere else.
+  onDialogueComplete?: (elementId: number) => void
 }
 
 // Shared read-only renderer for a Slide's elements — used by both the admin
@@ -93,6 +218,7 @@ export function ElementPreview({
   fill = false,
   coverFill = false,
   dominant = false,
+  onDialogueComplete,
 }: ElementPreviewProps) {
   switch (element.element_type) {
     case 'TEXT':
@@ -271,6 +397,16 @@ export function ElementPreview({
         </div>
       ) : (
         <p className="text-sm text-neutral-400">No embed set yet.</p>
+      )
+
+    case 'DIALOGUE':
+      return (
+        <DialogueBlock
+          element={element}
+          dominant={dominant}
+          coverFill={coverFill}
+          onComplete={onDialogueComplete ? () => onDialogueComplete(element.id) : undefined}
+        />
       )
 
     case 'FILE_DOWNLOAD':

@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'gamification',
     'certificates',
     'audit',
+    'dialogue',
 ]
 
 MIDDLEWARE = [

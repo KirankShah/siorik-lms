@@ -36,6 +36,15 @@ export function SlidePlayer({
 }: SlidePlayerProps) {
   const [dwellSeconds, setDwellSeconds] = useState(existingProgress?.time_spent_seconds ?? 0)
   const [isMarkedComplete, setIsMarkedComplete] = useState(!!existingProgress?.completed_at)
+  // null = "ContentSlidePlayer hasn't reported in yet" (still loading
+  // elements, or this isn't even a CONTENT slide). Deliberately NOT
+  // defaulted to true: since ContentSlidePlayer's report only arrives
+  // after its elements fetch resolves, a same-tick default-true would let
+  // a slide with estimated_minutes: 0 (dwellSatisfied instantly true) fire
+  // the completion write before we even know whether the slide has an
+  // unfinished Dialogue on it. Only an explicit `true` from
+  // onDialogueGateChange counts as satisfied.
+  const [dialogueGateSatisfied, setDialogueGateSatisfied] = useState<boolean | null>(null)
   const unsyncedRef = useRef(0)
   const completeSentRef = useRef(!!existingProgress?.completed_at)
 
@@ -88,27 +97,41 @@ export function SlidePlayer({
   const requiredSeconds = slide.estimated_minutes * 60
   const dwellSatisfied = requiredSeconds === 0 || dwellSeconds >= requiredSeconds
 
-  // CONTENT slides auto-complete once the dwell requirement is met; QUIZ/
-  // ASSIGNMENT/SCENARIO slides only complete via explicit submission
-  // (handleSubmitted).
+  // CONTENT slides auto-complete once the dwell requirement is met AND (if
+  // the slide has one — see ContentSlidePlayer.onDialogueGateChange) its
+  // Dialogue has actually been read to the end; QUIZ/ASSIGNMENT/SCENARIO
+  // slides only complete via explicit submission (handleSubmitted). Gating
+  // the completion write itself on dialogueGateSatisfied — not just the
+  // canAdvance check below — matters: isMarkedComplete is an unconditional
+  // OR-escape once true (so raising estimated_minutes later can't re-lock a
+  // slide someone already finished), and it would silently defeat the
+  // dialogue gate on this very same visit the moment dwell time elapsed if
+  // it could flip true before the dialogue was actually read.
+  const dialogueGateReady = dialogueGateSatisfied === true
+
   useEffect(() => {
-    if (slide.slide_type === 'CONTENT' && dwellSatisfied && !completeSentRef.current) {
+    if (slide.slide_type === 'CONTENT' && dwellSatisfied && dialogueGateReady && !completeSentRef.current) {
       void flush(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dwellSatisfied, slide.slide_type])
+  }, [dwellSatisfied, dialogueGateReady, slide.slide_type])
 
-  const canAdvance = slide.slide_type === 'CONTENT' ? dwellSatisfied || isMarkedComplete : isMarkedComplete
+  const canAdvance =
+    slide.slide_type === 'CONTENT' ? (dwellSatisfied && dialogueGateReady) || isMarkedComplete : isMarkedComplete
 
-  // CONTENT's gate already explains itself via the dwell-timer countdown
-  // text (secondsRemaining) — only QUIZ/SCENARIO get a tooltip reason here,
-  // since those are the two types this gate is meant to explain per the
-  // ticket. ASSIGNMENT shares the same isMarkedComplete gate but has no
-  // tooltip copy of its own yet.
+  // CONTENT's dwell-only gate already explains itself via the dwell-timer
+  // countdown text (secondsRemaining) — but once dwell time is satisfied
+  // and only the Dialogue is left unfinished, that countdown reads 0 with
+  // no other explanation, so it gets a tooltip reason of its own here too.
+  // QUIZ/SCENARIO get one for the same reason. ASSIGNMENT shares the same
+  // isMarkedComplete gate but has no tooltip copy of its own yet.
   let nextDisabledReason: string | undefined
   if (!canAdvance) {
     if (slide.slide_type === 'QUIZ') nextDisabledReason = 'Submit your answer to continue.'
     else if (slide.slide_type === 'SCENARIO') nextDisabledReason = 'Reach an ending to continue.'
+    else if (slide.slide_type === 'CONTENT' && dwellSatisfied && !dialogueGateReady) {
+      nextDisabledReason = 'Finish the conversation to continue.'
+    }
   }
 
   useEffect(() => {
@@ -134,6 +157,7 @@ export function SlidePlayer({
         courseTemplateId={courseTemplateId}
         onEnterFullscreen={onEnterFullscreen}
         isFullscreen={isFullscreen}
+        onDialogueGateChange={setDialogueGateSatisfied}
       />
     )
   }

@@ -1,5 +1,15 @@
 import { apiFetch } from './apiClient'
-import type { ElementAlign, ElementType, ImageColumnWidth, Layout, Slide, SlideElement, SlideSummary, SlideType } from '../types/slides'
+import type {
+  DialogueLine,
+  ElementAlign,
+  ElementType,
+  ImageColumnWidth,
+  Layout,
+  Slide,
+  SlideElement,
+  SlideSummary,
+  SlideType,
+} from '../types/slides'
 
 export interface SlideInput {
   lesson: number
@@ -50,6 +60,10 @@ export interface ElementInput {
   align?: ElementAlign
   file?: File | null
   video_file?: File | null
+  dialogue_scene?: number | null
+  dialogue_character_left?: number | null
+  dialogue_character_right?: number | null
+  dialogue_lines?: DialogueLine[]
 }
 
 function buildElementFormData(input: Partial<ElementInput>): FormData {

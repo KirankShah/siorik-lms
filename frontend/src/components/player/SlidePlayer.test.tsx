@@ -6,14 +6,17 @@ import { SlideNavFooter } from './SlideNavFooter'
 import * as coursesApi from '../../lib/coursesApi'
 import * as quizApi from '../../lib/quizApi'
 import * as scenariosApi from '../../lib/scenariosApi'
+import * as slidesApi from '../../lib/slidesApi'
 import type { Enrollment } from '../../types/courses'
 import type { QuizDetail } from '../../types/quiz'
 import type { ScenarioNode } from '../../types/scenarios'
-import type { SlideSummary } from '../../types/slides'
+import type { SlideElement, SlideSummary } from '../../types/slides'
 
 vi.mock('../../lib/coursesApi')
 vi.mock('../../lib/quizApi')
 vi.mock('../../lib/scenariosApi')
+vi.mock('../../lib/slidesApi')
+vi.mock('../../lib/slideTemplatesApi')
 
 const baseSlide: Omit<SlideSummary, 'slide_type'> = {
   id: 1,
@@ -167,6 +170,67 @@ describe('Next-button gating on QUIZ and SCENARIO slides', () => {
     expect(nextButton.closest('[title]')).toHaveAttribute('title', 'Reach an ending to continue.')
 
     fireEvent.click(await screen.findByRole('button', { name: 'Report it' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled())
+  })
+})
+
+describe('Next-button gating on a CONTENT slide with a Dialogue element', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(coursesApi.saveSlideProgress).mockResolvedValue(makeEnrollment())
+  })
+
+  it('blocks Next until the dialogue reaches its final line, even though dwell time (estimated_minutes: 0) is already satisfied', async () => {
+    const contentSlide: SlideSummary = { ...baseSlide, slide_type: 'CONTENT', estimated_minutes: 0 }
+    const dialogueElement: SlideElement = {
+      id: 1,
+      slide: contentSlide.id,
+      order: 1,
+      element_type: 'DIALOGUE',
+      rich_text: '',
+      file: null,
+      video_url: '',
+      video_file: null,
+      embed_url: '',
+      caption: '',
+      align: 'CENTER',
+      dialogue_scene: 1,
+      dialogue_character_left: null,
+      dialogue_character_right: null,
+      dialogue_lines: [
+        { speaker: 'LEFT', text: 'Hi' },
+        { speaker: 'RIGHT', text: 'Hello' },
+      ],
+      dialogue_scene_detail: { id: 1, name: 'Scene', scene_type: 'FRONT_OFFICE', background_image: 'http://x/scene.png' },
+      dialogue_character_left_detail: null,
+      dialogue_character_right_detail: null,
+    }
+    vi.mocked(slidesApi.fetchElements).mockResolvedValue([dialogueElement])
+
+    render(<Harness slide={contentSlide} />)
+
+    const nextButton = await screen.findByRole('button', { name: /Next/ })
+    await waitFor(() => expect(nextButton).toBeDisabled())
+    expect(nextButton.closest('[title]')).toHaveAttribute('title', 'Finish the conversation to continue.')
+
+    const firstLine = await screen.findByText('Hi')
+    fireEvent.click(firstLine.closest('button')!)
+
+    // Exact-string match (not the loose /Next/ regex used elsewhere in this
+    // file) — once the dialogue reaches its last line, its own completion
+    // copy ("...use Next below to continue") also matches /Next/, making a
+    // loose query ambiguous.
+    const nextButtonAfter = await screen.findByRole('button', { name: 'Next →' })
+    await waitFor(() => expect(nextButtonAfter).toBeEnabled())
+    expect(nextButtonAfter.closest('[title]')).toBeNull()
+  })
+
+  it('never gates Next on a CONTENT slide with no Dialogue element (plain dwell-time gating only)', async () => {
+    const contentSlide: SlideSummary = { ...baseSlide, slide_type: 'CONTENT', estimated_minutes: 0 }
+    vi.mocked(slidesApi.fetchElements).mockResolvedValue([])
+
+    render(<Harness slide={contentSlide} />)
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled())
   })

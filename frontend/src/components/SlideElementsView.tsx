@@ -8,7 +8,7 @@ import type { ElementType, ImageColumnWidth, Layout, SlideElement, SlideTemplate
 // "dominant" (large, centered) rather than at its normal capped size — see
 // CanvasStackedContent. Only meaningful in canvasMode; the admin preview
 // never sizes anything this way.
-const DOMINANT_ELEMENT_TYPES: ElementType[] = ['IMAGE', 'VIDEO_AUDIO', 'EMBED', 'BREAKOUT_IMAGE']
+const DOMINANT_ELEMENT_TYPES: ElementType[] = ['IMAGE', 'VIDEO_AUDIO', 'EMBED', 'BREAKOUT_IMAGE', 'DIALOGUE']
 
 // Literal, complete class strings (not built from an interpolated number) so
 // Tailwind's static scanner can actually find and generate them — a
@@ -42,6 +42,9 @@ interface SlideElementsViewProps {
   // docked image column can grow (see Slide.image_column_width). Defaults
   // to STANDARD, matching the backend field's own default.
   imageColumnWidth?: ImageColumnWidth
+  // Forwarded to every ElementPreview — see its own prop doc. Only
+  // meaningful for DIALOGUE elements; harmless to omit everywhere else.
+  onDialogueComplete?: (elementId: number) => void
 }
 
 // Shared multi-element layout + template renderer — sits on top of
@@ -58,6 +61,7 @@ export function SlideElementsView({
   title,
   canvasMode = false,
   imageColumnWidth = 'STANDARD',
+  onDialogueComplete,
 }: SlideElementsViewProps) {
   const effectiveLayout = resolveEffectiveLayout(layout, elements)
   const textColor = template?.text_color
@@ -73,6 +77,7 @@ export function SlideElementsView({
         accentColor={accentColor}
         title={title}
         imageColumnWidth={imageColumnWidth}
+        onDialogueComplete={onDialogueComplete}
       />
     )
   }
@@ -97,7 +102,13 @@ export function SlideElementsView({
     ) : effectiveLayout === 'STACKED' ? (
       <div className={`space-y-6 ${widthClass}`}>
         {elements.map((element) => (
-          <ElementPreview key={element.id} element={element} textColor={textColor} accentColor={accentColor} />
+          <ElementPreview
+            key={element.id}
+            element={element}
+            textColor={textColor}
+            accentColor={accentColor}
+            onDialogueComplete={onDialogueComplete}
+          />
         ))}
       </div>
     ) : (
@@ -118,7 +129,13 @@ export function SlideElementsView({
         const textColumn = (
           <div className="min-w-0 flex-1 space-y-6">
             {restElements.map((element) => (
-              <ElementPreview key={element.id} element={element} textColor={textColor} accentColor={accentColor} />
+              <ElementPreview
+                key={element.id}
+                element={element}
+                textColor={textColor}
+                accentColor={accentColor}
+                onDialogueComplete={onDialogueComplete}
+              />
             ))}
           </div>
         )
@@ -171,6 +188,7 @@ interface CanvasBodyProps {
   accentColor?: string
   title?: string
   imageColumnWidth: ImageColumnWidth
+  onDialogueComplete?: (elementId: number) => void
 }
 
 // canvasMode=true's root: a full-height (fills SlideCanvas exactly) flex
@@ -178,7 +196,16 @@ interface CanvasBodyProps {
 // any, wraps the whole thing so it covers the entire canvas rather than
 // just the content's own height, the way the non-canvas p-6 box only ever
 // covered its content.
-function CanvasBody({ elements, effectiveLayout, template, textColor, accentColor, title, imageColumnWidth }: CanvasBodyProps) {
+function CanvasBody({
+  elements,
+  effectiveLayout,
+  template,
+  textColor,
+  accentColor,
+  title,
+  imageColumnWidth,
+  onDialogueComplete,
+}: CanvasBodyProps) {
   // Only fade toward a plain, known color — template.background_css can be
   // an arbitrary CSS `background` value (gradient, image, ...) that can't be
   // reused as a linear-gradient() color stop, so templated slides fall back
@@ -195,7 +222,13 @@ function CanvasBody({ elements, effectiveLayout, template, textColor, accentColo
     <div className="flex h-full w-full flex-col">
       {heading}
       {effectiveLayout === 'STACKED' ? (
-        <CanvasStackedContent elements={elements} textColor={textColor} accentColor={accentColor} fadeColor={fadeColor} />
+        <CanvasStackedContent
+          elements={elements}
+          textColor={textColor}
+          accentColor={accentColor}
+          fadeColor={fadeColor}
+          onDialogueComplete={onDialogueComplete}
+        />
       ) : (
         <CanvasSplitContent
           effectiveLayout={effectiveLayout}
@@ -205,6 +238,7 @@ function CanvasBody({ elements, effectiveLayout, template, textColor, accentColo
           fadeColor={fadeColor}
           columnBackground={template?.background_css ?? '#ffffff'}
           imageColumnWidth={imageColumnWidth}
+          onDialogueComplete={onDialogueComplete}
         />
       )}
     </div>
@@ -224,6 +258,7 @@ interface CanvasStackedContentProps {
   textColor?: string
   accentColor?: string
   fadeColor: string | null
+  onDialogueComplete?: (elementId: number) => void
 }
 
 // STACKED, canvasMode: the whole region below the heading scrolls as one
@@ -232,7 +267,7 @@ interface CanvasStackedContentProps {
 // which clips overflowing content at the top in some browsers instead of
 // letting it scroll into view). A lone media element renders large/centered
 // instead of at its normal small capped size, since it's the whole slide.
-function CanvasStackedContent({ elements, textColor, accentColor, fadeColor }: CanvasStackedContentProps) {
+function CanvasStackedContent({ elements, textColor, accentColor, fadeColor, onDialogueComplete }: CanvasStackedContentProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const { hasOverflow, atBottom } = useScrollOverflow(scrollRef, contentRef)
@@ -251,12 +286,24 @@ function CanvasStackedContent({ elements, textColor, accentColor, fadeColor }: C
           </div>
         ) : dominantElement ? (
           <div ref={contentRef} className="flex h-full items-center justify-center px-6 py-6">
-            <ElementPreview element={dominantElement} textColor={textColor} accentColor={accentColor} dominant />
+            <ElementPreview
+              element={dominantElement}
+              textColor={textColor}
+              accentColor={accentColor}
+              dominant
+              onDialogueComplete={onDialogueComplete}
+            />
           </div>
         ) : (
           <div ref={contentRef} className="m-auto w-full max-w-3xl space-y-6 px-6 py-6">
             {elements.map((element) => (
-              <ElementPreview key={element.id} element={element} textColor={textColor} accentColor={accentColor} />
+              <ElementPreview
+                key={element.id}
+                element={element}
+                textColor={textColor}
+                accentColor={accentColor}
+                onDialogueComplete={onDialogueComplete}
+              />
             ))}
           </div>
         )}
@@ -281,6 +328,7 @@ interface CanvasSplitContentProps {
   // a border instead of reading as a gap or glitch.
   columnBackground: string
   imageColumnWidth: ImageColumnWidth
+  onDialogueComplete?: (elementId: number) => void
 }
 
 // IMAGE_LEFT/IMAGE_RIGHT, canvasMode: a fixed-height row. The image column
@@ -294,6 +342,7 @@ function CanvasSplitContent({
   fadeColor,
   columnBackground,
   imageColumnWidth,
+  onDialogueComplete,
 }: CanvasSplitContentProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -343,7 +392,13 @@ function CanvasSplitContent({
         ) : (
           <div ref={contentRef} className="space-y-6 px-6 py-6">
             {restElements.map((element) => (
-              <ElementPreview key={element.id} element={element} textColor={textColor} accentColor={accentColor} />
+              <ElementPreview
+                key={element.id}
+                element={element}
+                textColor={textColor}
+                accentColor={accentColor}
+                onDialogueComplete={onDialogueComplete}
+              />
             ))}
           </div>
         )}

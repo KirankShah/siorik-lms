@@ -1,4 +1,4 @@
-import { FileDown, FileText, Image, Images, Link, Quote, Type, Video } from 'lucide-react'
+import { FileDown, FileText, Image, Images, Link, MessagesSquare, Quote, Type, Video } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { ElementType } from '../types/slides'
 
@@ -11,6 +11,7 @@ export const ELEMENT_TYPE_LABEL: Record<ElementType, string> = {
   FILE_DOWNLOAD: 'File download',
   EMBED: 'Embed',
   PRESENTATION_PDF: 'Presentation or PDF',
+  DIALOGUE: 'Dialogue',
 }
 
 export const ELEMENT_TYPE_ICON: Record<ElementType, LucideIcon> = {
@@ -22,6 +23,7 @@ export const ELEMENT_TYPE_ICON: Record<ElementType, LucideIcon> = {
   FILE_DOWNLOAD: FileDown,
   EMBED: Link,
   PRESENTATION_PDF: FileText,
+  DIALOGUE: MessagesSquare,
 }
 
 export const ELEMENT_TYPES: ElementType[] = [
@@ -33,4 +35,5 @@ export const ELEMENT_TYPES: ElementType[] = [
   'FILE_DOWNLOAD',
   'EMBED',
   'PRESENTATION_PDF',
+  'DIALOGUE',
 ]
