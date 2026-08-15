@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import { WatermarkOverlay } from './WatermarkOverlay'
 
 interface SlideCanvasProps {
   fullscreen: boolean
@@ -34,7 +33,6 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
           }}
         >
           {children}
-          <WatermarkOverlay />
         </div>
       </div>
     )
@@ -52,7 +50,6 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
       style={{ aspectRatio: '16 / 9', width: '90%' }}
     >
       {children}
-      <WatermarkOverlay />
     </div>
   )
 }

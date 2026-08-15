@@ -6,8 +6,7 @@ import type { ClipboardEvent, MouseEvent, ReactNode } from 'react'
 // with devtools already open (or who just disables JavaScript) bypasses
 // every check below trivially. This only raises the bar against casual
 // right-click "Save As"/copy-paste and an opportunistic "view source" —
-// it deters, it does not prevent. Pair with WatermarkOverlay for actual
-// traceability if content leaks anyway.
+// it deters, it does not prevent.
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
