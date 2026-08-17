@@ -119,3 +119,40 @@
 .ql-content li.ql-empty-list-wrapper {
   list-style: none;
 }
+
+/* Tables authored via RichTextField's table-better module. quill-table-better
+   ships its own editor chrome (grid lines, header shading, the drag-resize
+   handle, floating menus) scoped to `.ql-editor` inside the live authoring
+   instance — never present here, since this is plain
+   dangerouslySetInnerHTML of the saved HTML (ElementPreview etc.), not a
+   mounted Quill instance. Cells do carry some inline styles from the module
+   itself (e.g. a `<col width>` per column), but not borders/padding, so
+   without an equivalent scoped to `.ql-content` a table renders with visible
+   column widths but no grid at all the moment the same HTML is read back
+   outside the editor. table-layout: fixed matches the editor's own
+   colgroup-driven column widths instead of letting cell content override
+   them. */
+.ql-content table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0.5em 0;
+}
+.ql-content td,
+.ql-content th {
+  border: 1px solid var(--color-neutral-300, #cbd5e1);
+  padding: 6px 8px;
+  vertical-align: top;
+  word-wrap: break-word;
+}
+.ql-content th {
+  background: var(--color-neutral-100, #f1f5f9);
+  font-weight: 600;
+  text-align: left;
+}
+/* Cell content is wrapped in a <p class="ql-table-block"> per line by the
+   module — collapse its default block margin so cell padding alone controls
+   spacing instead of doubling up. */
+.ql-content .ql-table-block {
+  margin: 0;
+}

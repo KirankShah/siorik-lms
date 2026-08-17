@@ -19,6 +19,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "lucide-react": "^1.25.0",
     "quill": "^2.0.3",
+    "quill-table-better": "^1.2.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1"

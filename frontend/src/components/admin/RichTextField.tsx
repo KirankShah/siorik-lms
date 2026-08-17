@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import Quill from 'quill'
+import QuillTableBetter from 'quill-table-better'
 import 'quill/dist/quill.snow.css'
+import 'quill-table-better/dist/quill-table-better.css'
 import './richTextField.css'
 
 interface RichTextFieldProps {
@@ -39,9 +41,24 @@ const TOOLBAR_MODULES = [
   [{ align: [] }],
   [{ list: 'ordered' }, { list: 'bullet' }],
   [{ indent: '-1' }, { indent: '+1' }],
+  ['table-better'],
   ['link'],
   ['clean'],
 ]
+
+// quill-table-better's global module registration — like the icon patch
+// below, done once at module scope rather than per-mount. Registering it
+// unconditionally is safe even for callers that never insert a table: it
+// only adds a "table-better" format/module/toolbar-button, it doesn't
+// change any existing format's behavior.
+Quill.register({ 'modules/table-better': QuillTableBetter }, true)
+
+// Minimal surface of quill-table-better's module instance actually used
+// here (the package ships its own .d.ts, but exports the class itself as
+// the default export rather than a named instance type).
+interface TableBetterModule {
+  deleteTableTemporary: (source?: string) => void
+}
 
 // Quill's stock "color"/"background" toolbar icons are both a bare "A" glyph
 // (one plain, one with a faint paint-texture behind it) — easy to mistake for
@@ -74,6 +91,7 @@ const CONTROL_LABELS: Record<string, string> = {
   background: 'Highlight color',
   link: 'Insert link',
   clean: 'Clear formatting',
+  'table-better': 'Insert table',
 }
 
 // Quill's toolbar pickers (font/size/color/background/align) open a dropdown
@@ -133,6 +151,42 @@ function repositionPickerDropdown(picker: HTMLElement) {
 
   const maxLeft = window.innerWidth - naturalWidth - 8
   options.style.left = `${Math.max(8, Math.min(labelRect.left, maxLeft))}px`
+}
+
+// quill-table-better's insert-table size grid (`.ql-table-select-container`,
+// appended as a child of the `.ql-table-better` toolbar button) has the same
+// clipping problem as the pickers above, for the same reason: it's
+// `position: absolute` with no explicit `left`, so it renders flush against
+// its button's left edge regardless of how much room the toolbar actually
+// has to that button's right — fine near the toolbar's start, cut off by the
+// Edit-element Modal's edge for a button placed further along. `left` isn't
+// set in the stylesheet at all (only `top`), so unlike repositionPickerDropdown
+// there's no min-width-against-new-containing-block trap to guard against —
+// the grid's width is a fixed 190px, not a percentage.
+function repositionTableSelectGrid(anchor: HTMLElement, grid: HTMLElement) {
+  grid.style.position = ''
+  grid.style.top = ''
+  grid.style.bottom = ''
+  grid.style.left = ''
+
+  const anchorRect = anchor.getBoundingClientRect()
+  const naturalRect = grid.getBoundingClientRect()
+  const naturalHeight = naturalRect.height
+  const naturalWidth = naturalRect.width
+
+  grid.style.position = 'fixed'
+
+  const opensUpward = anchorRect.bottom + naturalHeight + 4 > window.innerHeight
+  if (opensUpward) {
+    grid.style.top = ''
+    grid.style.bottom = `${window.innerHeight - anchorRect.top + 4}px`
+  } else {
+    grid.style.top = `${anchorRect.bottom + 4}px`
+    grid.style.bottom = ''
+  }
+
+  const maxLeft = window.innerWidth - naturalWidth - 8
+  grid.style.left = `${Math.max(8, Math.min(anchorRect.left, maxLeft))}px`
 }
 
 function labelForControl(el: Element): string | null {
@@ -265,10 +319,33 @@ export function RichTextField({
     const quill = new Quill(editorHost, {
       theme: 'snow',
       placeholder,
-      modules: { toolbar: TOOLBAR_MODULES },
+      modules: {
+        toolbar: TOOLBAR_MODULES,
+        // Quill's own experimental table module is unused — table-better
+        // registers its own competing table format/blots.
+        table: false,
+        'table-better': { toolbarTable: true },
+        // Deep-merged with Quill's default keyboard bindings (Tab/Shift+Tab
+        // list indent, etc. — see the mount-only comment below), not a
+        // replacement of them, so table-better's own bindings (Tab to move
+        // between cells, Ctrl+Backspace/Delete to clear a selected
+        // row/column) layer on top rather than override.
+        keyboard: { bindings: QuillTableBetter.keyboardBindings },
+      },
     })
 
-    quill.clipboard.dangerouslyPasteHTML(initialHtml, Quill.sources.SILENT)
+    // dangerouslyPasteHTML's single-argument form goes through
+    // quill.setContents(), which quill-table-better's own README flags as
+    // broken for table content ("setContents causes the table to not
+    // display properly, replace with updateContents") — confirmed against
+    // the installed quill package: dangerouslyPasteHTML(html, source) calls
+    // setContents(delta, source) whenever the first argument is a string.
+    // Converting the HTML and applying it via updateContents (the package's
+    // documented fix, adapted to load silently like the call this replaces)
+    // avoids that bug while behaving identically for non-table content.
+    const initialDelta = quill.clipboard.convert({ html: initialHtml })
+    quill.updateContents(initialDelta, Quill.sources.SILENT)
+    quill.setSelection(0, Quill.sources.SILENT)
 
     const toolbarEl = (quill.getModule('toolbar') as { container: HTMLElement }).container
     toolbarEl.querySelectorAll('button, .ql-picker').forEach((el) => {
@@ -320,13 +397,39 @@ export function RichTextField({
       }
     })
     pickers.forEach((picker) => pickerObserver.observe(picker, { attributes: true, attributeFilter: ['class'] }))
+
+    // Same re-anchoring, applied to the table module's own insert-table grid
+    // — see repositionTableSelectGrid's comment. Shown/hidden via `ql-hidden`
+    // toggling on the grid itself, not the pickers' `ql-expanded` convention,
+    // so it needs its own observer rather than folding into pickerObserver.
+    const tableButton = toolbarEl.querySelector<HTMLElement>('button.ql-table-better')
+    const tableGrid = toolbarEl.querySelector<HTMLElement>('.ql-table-select-container')
+    let tableGridOpen = false
+    const tableGridObserver = tableButton && tableGrid
+      ? new MutationObserver(() => {
+          tableGridOpen = !tableGrid.classList.contains('ql-hidden')
+          if (tableGridOpen) repositionTableSelectGrid(tableButton, tableGrid)
+        })
+      : null
+    tableGridObserver?.observe(tableGrid!, { attributes: true, attributeFilter: ['class'] })
+
     function handleViewportChange() {
       if (openPicker) repositionPickerDropdown(openPicker)
+      if (tableGridOpen && tableButton && tableGrid) repositionTableSelectGrid(tableButton, tableGrid)
     }
     window.addEventListener('resize', handleViewportChange)
 
     function handleTextChange(_delta: unknown, _oldDelta: unknown, source: string) {
       if (source !== Quill.sources.USER) return
+      // quill-table-better's README: call this before reading HTML/Delta out
+      // to send elsewhere ("When you need to submit data to the server") —
+      // it clears leftover internal table-creation state that otherwise
+      // leaks into the exported markup. onChange here *is* that boundary
+      // (the parent persists whatever HTML it's given), and the call is a
+      // cheap no-op outside of table editing, so it's safe to run on every
+      // keystroke rather than gating it on "is there a table nearby."
+      const tableModule = quill.getModule('table-better') as TableBetterModule
+      tableModule.deleteTableTemporary(Quill.sources.SILENT)
       const html = markPhantomListWrappers(quill.getSemanticHTML())
       onChangeRef.current(patchListItemAlignment(html, quill.getContents()))
     }
@@ -336,6 +439,7 @@ export function RichTextField({
     return () => {
       quill.off('text-change', handleTextChange)
       pickerObserver.disconnect()
+      tableGridObserver?.disconnect()
       window.removeEventListener('resize', handleViewportChange)
       host.innerHTML = ''
     }

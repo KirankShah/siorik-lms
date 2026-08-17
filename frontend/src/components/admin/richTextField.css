@@ -1,16 +1,27 @@
 /* Scoped chrome for the shared Quill instance — keeps the editor visually in
    line with the app's rounded/bordered form-field convention without
-   reskinning Quill's own toolbar icons. */
+   reskinning Quill's own toolbar icons. No `overflow: hidden` here (a
+   previous version had it, for the toolbar's tinted background to respect
+   the wrapper's rounded corners): the table-better module's own floating UI
+   (its insert-table size grid, the cell-selection menu bar, the table/cell
+   properties form) is `position: absolute` against ancestors inside this
+   wrapper, so clipping here would cut those off inside the Edit-element
+   Modal's scrollable body — the same category of bug documented in detail
+   on repositionPickerDropdown in RichTextField.tsx for Quill's own pickers,
+   just not fixable the same way since it's a third-party module's internal
+   DOM. Radius on the toolbar alone (below) covers the one visible seam this
+   otherwise created. */
 .rich-text-field-quill {
   border-radius: 0.375rem;
   border: 1px solid var(--color-neutral-300, #cbd5e1);
-  overflow: hidden;
 }
 
 .rich-text-field-quill .ql-toolbar.ql-snow {
   border: none;
   border-bottom: 1px solid var(--color-neutral-200, #e2e8f0);
   background: var(--color-neutral-50, #f8fafc);
+  border-top-left-radius: 0.375rem;
+  border-top-right-radius: 0.375rem;
 }
 
 .rich-text-field-quill .ql-container.ql-snow {
