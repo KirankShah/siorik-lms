@@ -3,14 +3,6 @@ import type { ReactNode } from 'react'
 interface SlideCanvasProps {
   fullscreen: boolean
   children: ReactNode
-  // Fullscreen only. Shrinks the 80vh budget below by this many px so a
-  // fixed-height bar docked below the canvas (currently only
-  // player/NarrationPlayer, via ContentSlidePlayer) has genuine room in the
-  // fullscreen overlay's non-scrolling content well instead of forcing the
-  // canvas box to overflow it and get clipped — see
-  // NarrationPlayer.NARRATION_BAR_FULLSCREEN_RESERVE_PX. 0 (the default)
-  // reproduces the previous behavior exactly.
-  bottomInsetPx?: number
 }
 
 // Fixed 16:9 slide frame for the learner-facing CONTENT player — standard
@@ -19,9 +11,8 @@ interface SlideCanvasProps {
 // same canvas box regardless of how much content it holds; layout/scroll
 // behavior inside it is SlideElementsView's job (see its canvasMode prop),
 // this component only owns the box's size, position, and clipping.
-export function SlideCanvas({ fullscreen, children, bottomInsetPx = 0 }: SlideCanvasProps) {
+export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
   if (fullscreen) {
-    const heightBudget = bottomInsetPx > 0 ? `calc(80vh - ${bottomInsetPx}px)` : '80vh'
     return (
       // No manual padding here on purpose: max-width/max-height cap the box
       // to 80% of the viewport and this flex centers it, so the leftover
@@ -33,13 +24,12 @@ export function SlideCanvas({ fullscreen, children, bottomInsetPx = 0 }: SlideCa
           className="slide-canvas relative overflow-hidden rounded-lg border border-black/10 bg-white shadow-lg"
           style={{
             aspectRatio: '16 / 9',
-            // Fit the largest 16:9 box inside 80vw x heightBudget: whichever
-            // of the two caps is tighter for this viewport wins, and the
-            // other dimension follows from the ratio — plain
-            // max-width/max-height can't do this because they leave the
-            // *other* axis unconstrained.
-            width: `min(80vw, calc(${heightBudget} * 16 / 9))`,
-            height: `min(${heightBudget}, calc(80vw * 9 / 16))`,
+            // Fit the largest 16:9 box inside 80vw x 80vh: whichever of the
+            // two caps is tighter for this viewport wins, and the other
+            // dimension follows from the ratio — plain max-width/max-height
+            // can't do this because they leave the *other* axis unconstrained.
+            width: 'min(80vw, calc(80vh * 16 / 9))',
+            height: 'min(80vh, calc(80vw * 9 / 16))',
           }}
         >
           {children}

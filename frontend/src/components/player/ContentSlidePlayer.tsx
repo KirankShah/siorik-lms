@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Download, Maximize } from 'lucide-react'
-import { NARRATION_BAR_FULLSCREEN_RESERVE_PX, NarrationPlayer } from './NarrationPlayer'
+import { NarrationMascot } from './NarrationMascot'
 import { SlideCanvas } from './SlideCanvas'
 import { SlideElementsView } from '../SlideElementsView'
 import { Button } from '../ui/Button'
@@ -103,10 +103,7 @@ export function ContentSlidePlayer({
           which also resets the fixed-canvas sizing/scroll/crop below so the
           PDF gets full flowing content instead of a clipped 16:9 snapshot. */}
       <div className={`print-target w-full ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
-        <SlideCanvas
-          fullscreen={isFullscreen}
-          bottomInsetPx={isFullscreen && hasNarration ? NARRATION_BAR_FULLSCREEN_RESERVE_PX : 0}
-        >
+        <SlideCanvas fullscreen={isFullscreen}>
           <SlideElementsView
             elements={elements}
             layout={slide.layout}
@@ -119,17 +116,13 @@ export function ContentSlidePlayer({
         </SlideCanvas>
       </div>
 
-      {/* Supplementary aid — never touches SlidePlayer's dwell timer or
-          completion gating. Rendered here (not inside SlideCanvas/
-          SlideElementsView) so it never becomes part of the PDF export and
-          never overlaps slide content, but still renders through this same
+      {/* Fixed-position, so it never shifts other slide content and is
+          unaffected by the fullscreen overlay's clipped, non-scrolling
+          content well — never touches SlidePlayer's dwell timer or
+          completion gating either. Still renders through this same
           ContentSlidePlayer tree the standard and fullscreen views both
           already share (see CourseDetailPage's single slidePlayerNode). */}
-      {hasNarration && (
-        <div className={`no-print mx-auto w-full max-w-3xl ${isFullscreen ? 'mt-2 shrink-0' : 'mt-4'}`}>
-          <NarrationPlayer narrations={narrations} />
-        </div>
-      )}
+      {hasNarration && <NarrationMascot slideId={slide.id} narrations={narrations} template={template} />}
     </div>
   )
 }

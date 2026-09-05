@@ -6,19 +6,15 @@ import type { SlideNarration } from '../../types/narration'
 
 interface NarrationPlayerProps {
   narrations: SlideNarration[]
+  // Reported on every play/pause/end so a host component (NarrationMascot)
+  // can key other behavior — e.g. suppressing its idle-peek animation — off
+  // of "is audio actually playing" even while this player is hidden rather
+  // than unmounted (closing the mascot's panel doesn't stop playback).
+  onPlayingChange?: (isPlaying: boolean) => void
 }
 
 const LANGUAGE_LABEL: Record<NarrationLanguage, string> = { en: 'English', ne: 'Nepali' }
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5]
-
-// Fixed collapsed-bar height (h-12, 48px) + the mt-2 gap above it (8px) +
-// slack for the optional single-line fallback note below it (~18px) —
-// ContentSlidePlayer subtracts this from SlideCanvas's fullscreen budget so
-// the bar (and, when shown, the fallback note) never eats into the canvas
-// box. The transcript panel pops up `absolute` above the bar instead of
-// pushing layout, so it never needs to be accounted for here regardless of
-// script length.
-export const NARRATION_BAR_FULLSCREEN_RESERVE_PX = 74
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds)) return '0:00'
@@ -28,13 +24,10 @@ function formatTime(seconds: number): string {
   return `${minutes}:${secs.toString().padStart(2, '0')}`
 }
 
-// Supplementary aid, rendered whenever a CONTENT slide has at least one
-// SlideNarration — never touches SlidePlayer's dwell timer or completion
-// gating. Lives inside ContentSlidePlayer, so it renders through the exact
-// same component tree the standard and fullscreen views both already share
-// (see ContentSlidePlayer/CourseDetailPage — there's only one slidePlayerNode,
-// reused as-is by both).
-export function NarrationPlayer({ narrations }: NarrationPlayerProps) {
+// The audio transport + transcript toggle shown inside NarrationMascot's
+// popover panel once a learner clicks the mascot. Supplementary aid — never
+// touches SlidePlayer's dwell timer or completion gating.
+export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayerProps) {
   const { user, updateNarrationLanguage } = useAuth()
   const preferredLanguage: NarrationLanguage = user?.preferred_narration_language ?? 'en'
   const bothAvailable = narrations.length === 2
@@ -52,6 +45,11 @@ export function NarrationPlayer({ narrations }: NarrationPlayerProps) {
 
   const activeNarration = narrations.find((n) => n.language === selectedLanguage) ?? narrations[0]
   const isFallback = !bothAvailable && selectedLanguage !== preferredLanguage
+
+  useEffect(() => {
+    onPlayingChange?.(isPlaying)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying])
 
   // A slide switch (new narrations array) re-resolves the preferred/fallback
   // language and resets the transport — a manual toggle click (below) is the

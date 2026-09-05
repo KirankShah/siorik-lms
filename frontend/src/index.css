@@ -41,6 +41,20 @@ body {
   margin: 0;
 }
 
+/* Narration mascot's idle "peek" — a brief hop/tilt on the character art
+   itself (see player/NarrationMascot.tsx). transform-only so it never
+   affects layout or shifts surrounding slide content. */
+@keyframes mascot-peek {
+  0% { transform: translateY(0) rotate(0deg); }
+  30% { transform: translateY(-8px) rotate(-6deg); }
+  55% { transform: translateY(0) rotate(4deg); }
+  80% { transform: translateY(-3px) rotate(-2deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+.mascot-peek {
+  animation: mascot-peek 700ms ease-in-out;
+}
+
 /* "Download as PDF" on a Content page — print (or "Save as PDF") only the
    element marked .print-target, hiding the rest of the app chrome. */
 @media print {
