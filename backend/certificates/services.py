@@ -149,11 +149,21 @@ def _build_verification_url(token):
     return f'{base_url}/verify/{token}/'
 
 
-def _resolve_template(course):
-    template = course.certificate_template or CertificateTemplate.objects.filter(is_default=True).first()
+def _resolve_template(course, user):
+    """
+    Three-tier fallback: the course's own explicit override, else the
+    learner's own organization's template, else the platform-level default —
+    see CertificateTemplate's own docstring for the full reasoning.
+    """
+    template = course.certificate_template
+    if template is None and user.organization_id is not None:
+        template = CertificateTemplate.objects.filter(organization_id=user.organization_id).first()
+    if template is None:
+        template = CertificateTemplate.objects.filter(organization__isnull=True, is_default=True).first()
     if template is None:
         raise CertificateIssuanceError(
-            'No certificate template is configured for this course, and no platform default CertificateTemplate exists.'
+            'No certificate template is configured for this course or organization, and no platform default '
+            'CertificateTemplate exists.'
         )
     return template
 
@@ -193,7 +203,7 @@ def _draw_field(draw, image_width, image_height, text, x_percent, y_percent, fon
 
 def _render_certificate_pdf(certificate):
     course = certificate.course
-    template = _resolve_template(course)
+    template = _resolve_template(course, certificate.user)
 
     image = Image.open(io.BytesIO(_read_field_bytes(template.background_image))).convert('RGB')
     draw = ImageDraw.Draw(image)

@@ -9,6 +9,7 @@ export interface LeaderboardEntry {
   courses_completed_count: number
   average_quiz_score: string
   certificates_earned_count: number
+  level_assessments_passed_count: number
   updated_at: string
 }
 

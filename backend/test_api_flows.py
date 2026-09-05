@@ -11,6 +11,7 @@ from unittest.mock import patch
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
@@ -28,6 +29,7 @@ from certificates.services import (
     MIN_AUTO_SHRINK_FONT_SIZE,
     CertificateIssuanceError,
     _fit_font,
+    _resolve_template,
     certificate_ineligibility_reason,
     generate_certificate,
 )
@@ -44,8 +46,13 @@ from courses.models import (
     SlideProgress,
 )
 from courses.video_streaming import build_video_stream_token
-from gamification.models import Badge, UserBadge
-from gamification.services import award_badges_for_level_assessment_attempt
+from gamification.models import Badge, LeaderboardEntry, UserBadge
+from gamification.services import (
+    COURSE_COMPLETION_POINTS,
+    LEVEL_ASSESSMENT_PASS_POINTS,
+    award_badges_for_level_assessment_attempt,
+    recalculate_leaderboard_entry,
+)
 from levelassessments.models import (
     AssessmentLevel,
     LevelAssessmentAnswer,
@@ -1679,6 +1686,32 @@ class CertificateTemplateRenderingTests(BaseAPITestCase):
         pdf_bytes = certificate.pdf_file.read()
         self.assertTrue(pdf_bytes.startswith(b'%PDF'))
 
+    def test_learners_organization_template_used_when_no_course_override_exists(self):
+        make_test_certificate_template(name='Acme template', organization=self.org)
+
+        certificate = generate_certificate(self.learner, self.published_org_course)
+
+        self.assertEqual(certificate.pdf_file.read()[:4], b'%PDF')
+        # Confirms the org template — not the seeded platform default — was
+        # actually the one resolved, not just that *a* PDF rendered.
+        self.assertEqual(_resolve_template(self.published_org_course, self.learner).organization_id, self.org.id)
+
+    def test_course_override_still_wins_over_the_learners_organization_template(self):
+        make_test_certificate_template(name='Acme template', organization=self.org)
+        course_template = make_test_certificate_template(name='Course-specific template')
+        self.published_org_course.certificate_template = course_template
+        self.published_org_course.save()
+
+        resolved = _resolve_template(self.published_org_course, self.learner)
+        self.assertEqual(resolved.id, course_template.id)
+
+    def test_platform_default_used_when_learner_has_no_organization(self):
+        self.learner.organization = None
+        self.learner.save()
+
+        resolved = _resolve_template(self.published_org_course, self.learner)
+        self.assertTrue(resolved.is_default)
+
     def test_saving_a_new_default_template_unsets_the_previous_one(self):
         original_default = CertificateTemplate.objects.get(is_default=True)
         new_default = make_test_certificate_template(name='New default', is_default=True)
@@ -1734,24 +1767,111 @@ class CertificateTemplateViewSetTests(BaseAPITestCase):
         response = self.client.get('/api/certificate-templates/')
         self.assertEqual(response.status_code, 403)
 
-    def test_instructor_can_list_certificate_templates(self):
+    def test_instructor_cannot_see_the_platform_default_template(self):
+        # Org-scoped now: the platform-level template is a platform-wide
+        # branding asset, not an individual organization's to see or manage.
         self.auth_as(self.instructor)
         response = self.client.get('/api/certificate-templates/')
         self.assertEqual(response.status_code, 200)
-        self.assertGreaterEqual(len(response.data), 1)
+        self.assertEqual(len(response.data), 0)
 
-    def test_instructor_can_update_calibration_fields(self):
-        template = CertificateTemplate.objects.get(is_default=True)
+    def test_instructor_sees_and_can_update_only_their_own_organizations_template(self):
+        own_template = make_test_certificate_template(name='Acme template', organization=self.org)
+        make_test_certificate_template(name='Other Bank template', organization=self.other_org)
+
         self.auth_as(self.instructor)
+        listing = self.client.get('/api/certificate-templates/')
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual([t['id'] for t in listing.data], [own_template.id])
+
         response = self.client.patch(
-            f'/api/certificate-templates/{template.id}/',
+            f'/api/certificate-templates/{own_template.id}/',
             {'staff_name_x_percent': 42.5, 'staff_name_text_align': 'LEFT'},
             format='json',
         )
         self.assertEqual(response.status_code, 200)
-        template.refresh_from_db()
-        self.assertEqual(template.staff_name_x_percent, 42.5)
-        self.assertEqual(template.staff_name_text_align, 'LEFT')
+        own_template.refresh_from_db()
+        self.assertEqual(own_template.staff_name_x_percent, 42.5)
+
+    def test_instructor_cannot_access_another_organizations_template(self):
+        other_template = make_test_certificate_template(name='Other Bank template', organization=self.other_org)
+        self.auth_as(self.instructor)
+        response = self.client.get(f'/api/certificate-templates/{other_template.id}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_platform_admin_sees_every_organizations_template_and_the_platform_default(self):
+        make_test_certificate_template(name='Acme template', organization=self.org)
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/certificate-templates/')
+        self.assertEqual(response.status_code, 200)
+        # The seeded platform default (organization=None) plus the one just created.
+        self.assertEqual(len(response.data), 2)
+
+    def test_instructor_can_create_a_template_for_their_own_organization(self):
+        image_buffer = io.BytesIO()
+        Image.new('RGB', (400, 300), color='white').save(image_buffer, format='PNG')
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/certificate-templates/',
+            {
+                'name': 'Acme certificate',
+                'organization': self.org.id,
+                'background_image': SimpleUploadedFile('bg.png', image_buffer.getvalue(), content_type='image/png'),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['organization'], self.org.id)
+        self.assertFalse(response.data['is_default'])
+
+    def test_instructor_cannot_create_a_template_for_a_different_organization(self):
+        image_buffer = io.BytesIO()
+        Image.new('RGB', (400, 300), color='white').save(image_buffer, format='PNG')
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/certificate-templates/',
+            {
+                'name': 'Sneaky',
+                'organization': self.other_org.id,
+                'background_image': SimpleUploadedFile('bg.png', image_buffer.getvalue(), content_type='image/png'),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_instructor_cannot_create_the_platform_default_template(self):
+        image_buffer = io.BytesIO()
+        Image.new('RGB', (400, 300), color='white').save(image_buffer, format='PNG')
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            '/api/certificate-templates/',
+            {'name': 'Sneaky platform template', 'background_image': SimpleUploadedFile('bg.png', image_buffer.getvalue(), content_type='image/png')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_cannot_mark_an_organization_scoped_template_as_default(self):
+        image_buffer = io.BytesIO()
+        Image.new('RGB', (400, 300), color='white').save(image_buffer, format='PNG')
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            '/api/certificate-templates/',
+            {
+                'name': 'Bad combo',
+                'organization': self.org.id,
+                'is_default': True,
+                'background_image': SimpleUploadedFile('bg.png', image_buffer.getvalue(), content_type='image/png'),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('is_default', response.data)
+
+    def test_only_one_template_allowed_per_organization(self):
+        make_test_certificate_template(name='First', organization=self.org)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                make_test_certificate_template(name='Second', organization=self.org)
 
     def test_unauthenticated_request_is_rejected(self):
         self.client.credentials()
@@ -3102,3 +3222,152 @@ class LevelAssessmentBadgeIntegrationTests(BaseAPITestCase):
         earned = set(UserBadge.objects.filter(user=self.learner).values_list('badge__key', flat=True))
         self.assertIn('first_strike', earned)
         self.assertIn('perfect_score', earned)
+
+
+class LeaderboardLevelAssessmentPointsTests(TestCase):
+    """
+    gamification.services.recalculate_leaderboard_entry's level-assessment
+    contribution — exercised directly against manually-built attempts so the
+    exact pass/fail/retake history is under test control.
+    """
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-points')
+        self.user = User.objects.create_user(
+            email='points@example.com', password='pw', role=User.Role.LEARNER, organization=self.org,
+        )
+        self.level_a = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=1,
+        )
+        self.level_b = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1,
+        )
+
+    def make_attempt(self, level, passed):
+        return LevelAssessmentAttempt.objects.create(
+            user=self.user, assessment_level=level, questions_drawn=[], submitted_at=timezone.now(), passed=passed,
+        )
+
+    def test_a_passed_level_assessment_is_worth_more_than_a_single_course_completion(self):
+        # The task's explicit requirement: weighted above, not equal to, an
+        # ordinary course completion, reflecting its higher-stakes status.
+        self.assertGreater(LEVEL_ASSESSMENT_PASS_POINTS, COURSE_COMPLETION_POINTS)
+
+    def test_passed_level_assessment_awards_configured_points(self):
+        self.make_attempt(self.level_a, passed=True)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
+        self.assertEqual(entry.level_assessments_passed_count, 1)
+
+    def test_failed_attempt_awards_no_points(self):
+        self.make_attempt(self.level_a, passed=False)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, 0)
+        self.assertEqual(entry.level_assessments_passed_count, 0)
+
+    def test_retaking_an_already_passed_level_does_not_double_count(self):
+        self.make_attempt(self.level_a, passed=False)
+        self.make_attempt(self.level_a, passed=True)
+        self.make_attempt(self.level_a, passed=True)  # retake after already having passed
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
+        self.assertEqual(entry.level_assessments_passed_count, 1)
+
+    def test_passing_two_distinct_levels_counts_both(self):
+        self.make_attempt(self.level_a, passed=True)
+        self.make_attempt(self.level_b, passed=True)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS * 2)
+        self.assertEqual(entry.level_assessments_passed_count, 2)
+
+    def test_combines_with_course_completion_points(self):
+        course = Course.objects.create(
+            title='Compliance 101', slug='compliance-101-points', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION,
+        )
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+        self.make_attempt(self.level_a, passed=True)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, COURSE_COMPLETION_POINTS + LEVEL_ASSESSMENT_PASS_POINTS)
+
+
+class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):
+    """Confirms level assessment points flow through the real submit endpoint, and that the
+    leaderboard stays organization-scoped (Phase 25's original hard requirement) once they do."""
+
+    def setUp(self):
+        super().setUp()
+        self.level = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.question = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q1?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        self.correct_choice = LevelChoice.objects.create(question=self.question, choice_text='Correct', is_correct=True)
+        LevelChoice.objects.create(question=self.question, choice_text='Wrong', is_correct=False)
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+
+    def test_passing_updates_leaderboard_points_through_the_submit_endpoint(self):
+        self.auth_as(self.learner)
+        start_response = self.client.post('/api/level-attempts/start/')
+        attempt_id = start_response.data['id']
+
+        submit_response = self.client.post(
+            f'/api/level-attempts/{attempt_id}/submit/',
+            {'answers': [{'question': self.question.id, 'selected_choices': [self.correct_choice.id]}]},
+            format='json',
+        )
+
+        self.assertEqual(submit_response.status_code, 200)
+        entry = LeaderboardEntry.objects.get(user=self.learner)
+        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
+        self.assertEqual(entry.level_assessments_passed_count, 1)
+
+    def test_leaderboard_endpoint_stays_organization_scoped_after_a_level_assessment_pass(self):
+        # A learner in a *different* organization passes their own level
+        # assessment — its points must never surface in self.org's leaderboard.
+        other_level = AssessmentLevel.objects.create(
+            organization=self.other_org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        )
+        other_question_set = QuestionSet.objects.create(assessment_level=other_level, label='Set 1')
+        other_question = LevelQuestion.objects.create(
+            question_set=other_question_set, question_text='Q?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        other_correct = LevelChoice.objects.create(question=other_question, choice_text='Correct', is_correct=True)
+        LevelChoice.objects.create(question=other_question, choice_text='Wrong', is_correct=False)
+
+        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.other_org_learner.save()
+        self.auth_as(self.other_org_learner)
+        start_response = self.client.post('/api/level-attempts/start/')
+        self.client.post(
+            f'/api/level-attempts/{start_response.data["id"]}/submit/',
+            {'answers': [{'question': other_question.id, 'selected_choices': [other_correct.id]}]},
+            format='json',
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/leaderboard/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.other_org_learner.id, [row['user_id'] for row in response.data])
+        # And confirm the other org's entry really was created with points —
+        # this is a scoping check, not a "nothing happened" false negative.
+        other_entry = LeaderboardEntry.objects.get(user=self.other_org_learner)
+        self.assertEqual(other_entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
+        self.assertEqual(other_entry.organization_id, self.other_org.id)

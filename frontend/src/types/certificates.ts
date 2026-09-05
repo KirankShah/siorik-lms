@@ -18,6 +18,8 @@ export type TextAlign = 'LEFT' | 'CENTER' | 'RIGHT'
 export interface CertificateTemplate {
   id: number
   name: string
+  // Null means this is the platform-level template — see is_default below.
+  organization: number | null
   background_image: string
   is_default: boolean
 
@@ -54,6 +56,7 @@ export type CertificateTemplateFieldName = 'staff_name' | 'course_name' | 'issue
 
 export interface CertificateTemplateInput {
   name?: string
+  organization?: number | null
   background_image?: File
   is_default?: boolean
 

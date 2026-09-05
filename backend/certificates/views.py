@@ -11,6 +11,7 @@ from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 from courses.permissions import visible_courses_for_user
 
 from .models import Certificate, CertificateTemplate
+from .permissions import editable_certificate_templates_for_user
 from .serializers import CertificateSerializer, CertificateTemplateSerializer
 from .services import CertificateIssuanceError, generate_certificate
 
@@ -52,13 +53,18 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
 class CertificateTemplateViewSet(viewsets.ModelViewSet):
     """
     Admin-only CRUD for branded certificate backgrounds and their calibrated
-    text/QR positions — used by the frontend calibration tool. Not org-scoped:
-    templates are shared platform-wide branding assets, same as SlideTemplate.
+    text/QR positions — used by the frontend calibration tool. Org-scoped
+    same as course content: an ORG_ADMIN/INSTRUCTOR only sees/manages their
+    own organization's template; PLATFORM_ADMIN sees every organization's
+    plus the platform-level one. See CertificateTemplateSerializer.validate
+    for the write-side enforcement of that same boundary.
     """
 
-    permission_classes = [IsAdminRole]
-    queryset = CertificateTemplate.objects.all()
+    permission_classes = [IsAuthenticated, IsAdminRole]
     serializer_class = CertificateTemplateSerializer
+
+    def get_queryset(self):
+        return editable_certificate_templates_for_user(self.request.user).select_related('organization')
 
 
 # Intentionally public and unauthenticated — this is the link anyone (e.g. an

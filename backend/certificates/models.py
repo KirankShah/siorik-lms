@@ -1,9 +1,11 @@
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 
+from accounts.models import Organization
 from accounts.validators import validate_image_size
 from courses.models import Course
 
@@ -39,9 +41,18 @@ class CertificateTemplate(models.Model):
     the same convention assessments.HotspotRegion uses, so a template still
     lines up correctly regardless of the background image's actual resolution.
 
-    generate_certificate() resolves a course's template via
-    Course.certificate_template, falling back to whichever row here has
-    is_default=True (see save() below, which enforces at most one default).
+    `organization` is null for a platform-level template (an organization's
+    own template lets it use its own logo/signature background, calibrated
+    independently of the platform default), and at most one
+    CertificateTemplate may exist per non-null organization (see Meta.constraints)
+    — an org calibrates *the* template for itself, not a named list of them.
+
+    generate_certificate() resolves a course's template in three tiers: the
+    course's own explicit Course.certificate_template override, else the
+    learner's own organization's template (organization=user.organization),
+    else whichever platform-level (organization=None) row has is_default=True
+    (see save() below, which enforces at most one such default). See
+    certificates.services._resolve_template.
     """
 
     class TextAlign(models.TextChoices):
@@ -50,10 +61,18 @@ class CertificateTemplate(models.Model):
         RIGHT = 'RIGHT', 'Right'
 
     name = models.CharField(max_length=100)
+    # Null means this is a platform-level template (see is_default below) —
+    # not tied to any one organization's own branding.
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, null=True, blank=True, related_name='certificate_templates',
+    )
     background_image = models.ImageField(upload_to='certificate_templates/backgrounds/', validators=[validate_image_size])
     is_default = models.BooleanField(
         default=False,
-        help_text='The platform-wide fallback used by any course without its own certificate_template set.',
+        help_text=(
+            'The platform-wide fallback used by any course/organization without their own certificate template. '
+            'Only meaningful (and only settable) on a platform-level template — organization must be empty.'
+        ),
     )
 
     staff_name_x_percent = models.FloatField(default=50.0, validators=PERCENT_VALIDATORS)
@@ -86,9 +105,26 @@ class CertificateTemplate(models.Model):
 
     class Meta:
         ordering = ['-is_default', 'name']
+        constraints = [
+            # An organization calibrates *the* template for itself — not a
+            # named list of several — so at most one row per non-null
+            # organization. Platform-level (organization=None) rows are
+            # unrestricted in count; is_default picks out which one of those
+            # is the fallback (enforced in save() below).
+            models.UniqueConstraint(
+                fields=['organization'],
+                condition=models.Q(organization__isnull=False),
+                name='one_certificate_template_per_organization',
+            ),
+        ]
 
     def __str__(self):
-        return f'{self.name} (default)' if self.is_default else self.name
+        label = f'{self.name} — {self.organization.name}' if self.organization_id else self.name
+        return f'{label} (default)' if self.is_default else label
+
+    def clean(self):
+        if self.is_default and self.organization_id is not None:
+            raise ValidationError('Only a platform-level template (no organization) can be the default.')
 
     def save(self, *args, **kwargs):
         if self.is_default:

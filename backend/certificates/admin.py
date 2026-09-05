@@ -20,6 +20,6 @@ class CertificateAdmin(admin.ModelAdmin):
 
 @admin.register(CertificateTemplate)
 class CertificateTemplateAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_default', 'created_at', 'updated_at')
-    list_filter = ('is_default',)
-    search_fields = ('name',)
+    list_display = ('name', 'organization', 'is_default', 'created_at', 'updated_at')
+    list_filter = ('is_default', 'organization')
+    search_fields = ('name', 'organization__name')

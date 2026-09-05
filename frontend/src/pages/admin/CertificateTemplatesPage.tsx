@@ -5,13 +5,44 @@ import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { fetchCertificateTemplates, updateCertificateTemplate } from '../../lib/certificatesApi'
+import { useAuth } from '../../context/AuthContext'
+import { fetchOrganizations } from '../../lib/accountsApi'
+import {
+  createCertificateTemplate,
+  fetchCertificateTemplates,
+  updateCertificateTemplate,
+} from '../../lib/certificatesApi'
+import { isPlatformAdminRole } from '../../lib/roles'
+import type { Organization } from '../../types/auth'
 import type {
   CertificateTemplate,
   CertificateTemplateFieldName,
   CertificateTemplateInput,
   TextAlign,
 } from '../../types/certificates'
+
+// The template calibration "slot" the admin is working on — a specific
+// organization's own template, or the platform-level one (organization null).
+// A PLATFORM_ADMIN can switch between every slot; an ORG_ADMIN/INSTRUCTOR is
+// locked to their own organization's slot (see visibleSlots below).
+interface TemplateSlot {
+  key: string
+  label: string
+  organizationId: number | null
+}
+
+const PLATFORM_SLOT: TemplateSlot = { key: 'platform', label: 'Platform Default', organizationId: null }
+
+function findTemplateForSlot(templates: CertificateTemplate[], slot: TemplateSlot): CertificateTemplate | null {
+  if (slot.organizationId === null) {
+    return (
+      templates.find((t) => t.organization === null && t.is_default) ??
+      templates.find((t) => t.organization === null) ??
+      null
+    )
+  }
+  return templates.find((t) => t.organization === slot.organizationId) ?? null
+}
 
 const FIELD_LABELS: Record<CertificateTemplateFieldName, string> = {
   staff_name: 'Staff name',
@@ -91,8 +122,12 @@ function draftFromTemplate(template: CertificateTemplate): Draft {
 }
 
 export function CertificateTemplatesPage() {
+  const { user } = useAuth()
+  const isPlatformAdmin = isPlatformAdminRole(user?.role)
+
+  const [organizations, setOrganizations] = useState<Organization[] | null>(null)
   const [templates, setTemplates] = useState<CertificateTemplate[] | null>(null)
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedSlotKey, setSelectedSlotKey] = useState<string>(PLATFORM_SLOT.key)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [activeTarget, setActiveTarget] = useState<ActiveTarget>('staff_name')
   const [isSaving, setIsSaving] = useState(false)
@@ -101,6 +136,13 @@ export function CertificateTemplatesPage() {
   const [naturalWidth, setNaturalWidth] = useState<number | null>(null)
   const [containerWidth, setContainerWidth] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Shown instead of the calibration UI when the selected slot has no
+  // template yet — an org (or the platform) uploads its own background image
+  // to create one before there's anything to calibrate.
+  const [newTemplateName, setNewTemplateName] = useState('')
+  const [newTemplateFile, setNewTemplateFile] = useState<File | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
 
   // Scales a field's font_size (defined in px at the background image's own
   // native resolution) down to the size it should render at in this preview,
@@ -115,28 +157,52 @@ export function CertificateTemplatesPage() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  // Only a PLATFORM_ADMIN can switch organizations — an ORG_ADMIN/INSTRUCTOR
+  // is locked to their own org's slot (see `slots` below), so there's no need
+  // to fetch the full organization list for them.
+  useEffect(() => {
+    if (isPlatformAdmin) {
+      fetchOrganizations()
+        .then(setOrganizations)
+        .catch(() => setOrganizations([]))
+    }
+  }, [isPlatformAdmin])
+
   useEffect(() => {
     fetchCertificateTemplates()
-      .then((list) => {
-        setTemplates(list)
-        const defaultTemplate = list.find((t) => t.is_default) ?? list[0]
-        if (defaultTemplate) {
-          setSelectedId(defaultTemplate.id)
-          setDraft(draftFromTemplate(defaultTemplate))
-        }
-      })
+      .then(setTemplates)
       .catch(() => setError('Could not load certificate templates.'))
   }, [])
 
-  const selectedTemplate = templates?.find((t) => t.id === selectedId) ?? null
+  const slots: TemplateSlot[] = isPlatformAdmin
+    ? [PLATFORM_SLOT, ...(organizations ?? []).map((org) => ({ key: String(org.id), label: org.name, organizationId: org.id }))]
+    : user?.organization
+      ? [{ key: String(user.organization.id), label: user.organization.name, organizationId: user.organization.id }]
+      : []
 
-  function handleSelectTemplate(id: number) {
-    const template = templates?.find((t) => t.id === id)
-    if (!template) return
-    setSelectedId(id)
-    setDraft(draftFromTemplate(template))
+  // Falls back to the only slot a non-admin has, without waiting on a
+  // separate effect to catch up to `user` loading.
+  const selectedSlot = slots.find((slot) => slot.key === selectedSlotKey) ?? slots[0] ?? null
+  const selectedTemplate = templates && selectedSlot ? findTemplateForSlot(templates, selectedSlot) : null
+
+  // Populates the draft once the selected slot's template first resolves
+  // (initial load, or the fetch completing after a slot switch); handleSave/
+  // handleSelectSlot/handleCreate all set it explicitly themselves too.
+  useEffect(() => {
+    if (selectedTemplate && !draft) {
+      setDraft(draftFromTemplate(selectedTemplate))
+    }
+  }, [selectedTemplate, draft])
+
+  function handleSelectSlot(key: string) {
+    setSelectedSlotKey(key)
     setSuccess(false)
     setError(null)
+    setNewTemplateName('')
+    setNewTemplateFile(null)
+    const slot = slots.find((s) => s.key === key)
+    const template = templates && slot ? findTemplateForSlot(templates, slot) : null
+    setDraft(template ? draftFromTemplate(template) : null)
   }
 
   function handleImageClick(e: ReactMouseEvent) {
@@ -165,26 +231,52 @@ export function CertificateTemplatesPage() {
     }
   }
 
+  async function handleCreate() {
+    if (!selectedSlot || !newTemplateFile) return
+    setIsCreating(true)
+    setError(null)
+    try {
+      const created = await createCertificateTemplate({
+        name: newTemplateName.trim() || selectedSlot.label,
+        organization: selectedSlot.organizationId,
+        background_image: newTemplateFile,
+        // This tool only manages one "Platform Default" slot, so a new
+        // platform-level template created here is automatically it.
+        is_default: selectedSlot.organizationId === null,
+      })
+      setTemplates((prev) => [...(prev ?? []), created])
+      setDraft(draftFromTemplate(created))
+      setNewTemplateName('')
+      setNewTemplateFile(null)
+    } catch {
+      setError('Could not create the certificate template.')
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-neutral-900">Certificate template calibration</h1>
-        {templates && templates.length > 1 && (
+        {isPlatformAdmin && slots.length > 1 && (
           <select
             className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-            value={selectedId ?? ''}
-            onChange={(e) => handleSelectTemplate(Number(e.target.value))}
+            value={selectedSlotKey}
+            onChange={(e) => handleSelectSlot(e.target.value)}
           >
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-                {t.is_default ? ' (default)' : ''}
+            {slots.map((slot) => (
+              <option key={slot.key} value={slot.key}>
+                {slot.label}
               </option>
             ))}
           </select>
         )}
       </div>
       <p className="mt-1 text-sm text-neutral-500">
+        {isPlatformAdmin
+          ? "Each organization calibrates its own certificate independently of the platform default — select which one to work on above. "
+          : `Calibrating ${selectedSlot?.label ?? 'your organization'}'s own certificate, independent of the platform default. `}
         Select which field you're placing below, then click on the certificate image to set its position. Position is
         stored as a percentage of the image's own dimensions, so it stays aligned at any resolution.
       </p>
@@ -201,8 +293,42 @@ export function CertificateTemplatesPage() {
       )}
 
       {!templates && !error && <p className="mt-6 text-sm text-neutral-400">Loading…</p>}
-      {templates && templates.length === 0 && (
-        <p className="mt-6 text-sm text-neutral-400">No certificate templates exist yet.</p>
+      {templates && !selectedSlot && (
+        <p className="mt-6 text-sm text-neutral-400">
+          You don't belong to an organization, so there's no certificate template for you to manage.
+        </p>
+      )}
+
+      {templates && selectedSlot && !selectedTemplate && (
+        <Card className="mt-6 max-w-md p-4">
+          <h2 className="text-sm font-semibold text-neutral-900">No certificate template yet for {selectedSlot.label}</h2>
+          <p className="mt-1 text-sm text-neutral-500">
+            Upload {selectedSlot.organizationId === null ? 'the platform-wide' : "this organization's own"} certificate
+            background image — logo, signature, and all — to start calibrating one, independent of{' '}
+            {selectedSlot.organizationId === null ? 'any organization template' : 'the platform default'}.
+          </p>
+          <div className="mt-4 space-y-3">
+            <Input
+              id="new-template-name"
+              label="Template name"
+              placeholder={selectedSlot.label}
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value)}
+            />
+            <div>
+              <label className="block text-sm font-medium text-neutral-700">Certificate background image</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setNewTemplateFile(e.target.files?.[0] ?? null)}
+                className="mt-1 text-sm"
+              />
+            </div>
+            <Button onClick={() => void handleCreate()} disabled={!newTemplateFile || isCreating}>
+              {isCreating ? 'Creating…' : 'Create Template'}
+            </Button>
+          </div>
+        </Card>
       )}
 
       {selectedTemplate && draft && (
