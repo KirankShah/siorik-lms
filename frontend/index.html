@@ -8,6 +8,18 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Siorik LMS</title>
+    <!-- Nepali narration script/UI text (Devanagari) isn't guaranteed to be
+         covered by every visitor's OS-installed fonts — without this, some
+         browsers render it as blank/tofu boxes. Noto Sans Devanagari has
+         explicit Devanagari coverage; it's appended after the default sans
+         stack in index.css, so it only kicks in for glyphs the base fonts
+         don't already cover. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

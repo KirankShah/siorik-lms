@@ -39,6 +39,16 @@
 
 body {
   margin: 0;
+  /* Same default Latin stack Tailwind's preflight would otherwise pick, with
+     Noto Sans Devanagari (loaded in index.html) appended so Nepali text
+     (narration transcripts, any Devanagari-script content) reliably renders
+     instead of depending on whatever font the visitor's OS happens to have
+     for that Unicode range — browsers only reach for a later font in the
+     list for characters the earlier ones don't cover, so this doesn't
+     change how Latin text looks anywhere in the app. */
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif,
+    'Noto Sans Devanagari';
 }
 
 /* Narration mascot's idle "peek" — a brief hop/tilt on the character art
