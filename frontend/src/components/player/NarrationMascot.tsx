@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import greetingHappy from '../../assets/greeting-happy.png'
 import mascotIdle from '../../assets/greeting-neutral.png'
 import { NarrationPlayer } from './NarrationPlayer'
@@ -37,48 +36,48 @@ function isLightHexColor(hex: string): boolean {
   return (r * 299 + g * 587 + b * 114) / 1000 > 150
 }
 
-// Floating, mascot-triggered entry point to the narration player (Part 3) —
-// fixed-position so it never shifts other slide content and is unaffected
-// by the fullscreen overlay's clipped, non-scrolling content well. Visible
-// only on CONTENT slides with at least one SlideNarration (ContentSlidePlayer
-// only renders this when narrations is non-empty).
+// Floating, mascot-triggered entry point to the narration player — just the
+// icon/badge/speech-bubble; the player itself is a Modal (NarrationPlayer),
+// not a docked panel, so it never competes with the mascot or slide content
+// for layout space. Fixed-position so it never shifts other slide content
+// and is unaffected by the fullscreen overlay's clipped, non-scrolling
+// content well. Visible only on CONTENT slides with at least one
+// SlideNarration (ContentSlidePlayer only renders this when narrations is
+// non-empty).
 export function NarrationMascot({ slideId, narrations, template }: NarrationMascotProps) {
   const [bubbleVisible, setBubbleVisible] = useState(true)
   const [panelOpen, setPanelOpen] = useState(false)
-  const [hasOpenedPanel, setHasOpenedPanel] = useState(false)
-  const [isPlaying, setIsPlaying] = useState(false)
   const [isPeeking, setIsPeeking] = useState(false)
   const [isHovering, setIsHovering] = useState(false)
 
   const bubbleVisibleRef = useRef(bubbleVisible)
   const panelOpenRef = useRef(panelOpen)
-  const isPlayingRef = useRef(isPlaying)
   const isHoveringRef = useRef(isHovering)
   bubbleVisibleRef.current = bubbleVisible
   panelOpenRef.current = panelOpen
-  isPlayingRef.current = isPlaying
   isHoveringRef.current = isHovering
 
   // A fresh slide load: greet, then auto-dismiss into the small persistent icon.
   useEffect(() => {
     setBubbleVisible(true)
     setPanelOpen(false)
-    setHasOpenedPanel(false)
-    setIsPlaying(false)
     const timer = window.setTimeout(() => setBubbleVisible(false), BUBBLE_AUTO_DISMISS_MS)
     return () => window.clearTimeout(timer)
   }, [slideId])
 
   // Idle peek every 15-20s, skipped (and rescheduled) whenever the bubble is
-  // showing (greeting or hover), the panel is open, or audio is playing —
-  // checked at fire time via refs so this scheduling loop doesn't need to
-  // restart on every state change, just on slide change.
+  // showing (greeting or hover) or the panel is open — the panel can only
+  // ever be open while audio might be playing (NarrationPlayer unmounts,
+  // stopping playback, whenever it closes), so gating on panelOpen alone
+  // covers "audio playing" too. Checked at fire time via refs so this
+  // scheduling loop doesn't need to restart on every state change, just on
+  // slide change.
   useEffect(() => {
     let timeoutId: number
     function scheduleNext() {
       const delay = PEEK_MIN_DELAY_MS + Math.random() * (PEEK_MAX_DELAY_MS - PEEK_MIN_DELAY_MS)
       timeoutId = window.setTimeout(() => {
-        if (!bubbleVisibleRef.current && !panelOpenRef.current && !isPlayingRef.current && !isHoveringRef.current) {
+        if (!bubbleVisibleRef.current && !panelOpenRef.current && !isHoveringRef.current) {
           setIsPeeking(true)
           window.setTimeout(() => setIsPeeking(false), PEEK_DURATION_MS)
         }
@@ -91,7 +90,6 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
 
   function handleMascotClick() {
     setBubbleVisible(false)
-    setHasOpenedPanel(true)
     setPanelOpen((v) => !v)
   }
 
@@ -130,27 +128,6 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
           </div>
         )}
 
-        {hasOpenedPanel && (
-          <div
-            className={`absolute right-0 bottom-full mb-4 w-96 max-w-[90vw] rounded-lg border border-neutral-200 bg-white shadow-2xl ${panelOpen ? '' : 'hidden'}`}
-          >
-            <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
-              <span className="text-sm font-semibold text-neutral-700">Narration</span>
-              <button
-                type="button"
-                onClick={() => setPanelOpen(false)}
-                aria-label="Close narration player"
-                className="text-neutral-400 transition hover:text-neutral-700"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="p-4">
-              <NarrationPlayer narrations={narrations} onPlayingChange={setIsPlaying} />
-            </div>
-          </div>
-        )}
-
         <button
           type="button"
           onClick={handleMascotClick}
@@ -165,6 +142,8 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
           />
         </button>
       </div>
+
+      {panelOpen && <NarrationPlayer narrations={narrations} onClose={() => setPanelOpen(false)} />}
     </div>
   )
 }

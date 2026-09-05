@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 
@@ -18,6 +19,18 @@ export function Modal({
   widthClassName = 'max-w-lg',
   maxHeightClassName = 'max-h-[85vh]',
 }: ModalProps) {
+  // Escape closes any modal in the app the same way its own X button does —
+  // every caller already passes the same handler to both, so this adds no
+  // new way for a modal to close, just a standard extra path to the
+  // existing one.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   return (
     // z-[110]: a dialog must always sit above every other overlay in the
     // app, including FullscreenSlideOverlay's z-[100] — otherwise a modal

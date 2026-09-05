@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Pause, Play } from 'lucide-react'
+import { Pause, Play } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../ui/Modal'
 import type { NarrationLanguage } from '../../types/auth'
@@ -7,11 +7,7 @@ import type { SlideNarration } from '../../types/narration'
 
 interface NarrationPlayerProps {
   narrations: SlideNarration[]
-  // Reported on every play/pause/end so a host component (NarrationMascot)
-  // can key other behavior — e.g. suppressing its idle-peek animation — off
-  // of "is audio actually playing" even while this player is hidden rather
-  // than unmounted (closing the mascot's panel doesn't stop playback).
-  onPlayingChange?: (isPlaying: boolean) => void
+  onClose: () => void
 }
 
 const LANGUAGE_LABEL: Record<NarrationLanguage, string> = { en: 'English', ne: 'Nepali' }
@@ -41,10 +37,15 @@ function splitIntoSentences(text: string): string[] {
     .filter(Boolean)
 }
 
-// The audio transport + transcript toggle shown inside NarrationMascot's
-// popover panel once a learner clicks the mascot. Supplementary aid — never
-// touches SlidePlayer's dwell timer or completion gating.
-export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayerProps) {
+// The narration dialog opened by clicking NarrationMascot — a single Modal
+// (language toggle + audio transport + scrollable transcript together)
+// rather than a docked panel, so it overlays the slide cleanly instead of
+// competing with it for layout space, and closes via its own X, a
+// backdrop click, or Escape (all wired to the same onClose). Mounted only
+// while open, so closing it stops playback rather than continuing it
+// invisibly in the background. Supplementary aid — never touches
+// SlidePlayer's dwell timer or completion gating.
+export function NarrationPlayer({ narrations, onClose }: NarrationPlayerProps) {
   const { user, updateNarrationLanguage } = useAuth()
   const preferredLanguage: NarrationLanguage = user?.preferred_narration_language ?? 'en'
   const bothAvailable = narrations.length === 2
@@ -53,7 +54,6 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
     const preferred = narrations.find((n) => n.language === preferredLanguage)
     return preferred ? preferred.language : narrations[0].language
   })
-  const [showTranscript, setShowTranscript] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -79,27 +79,9 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
   const activeSentenceIndex = sentenceRanges.findIndex((r) => progress >= r.start && progress < r.end)
 
   useEffect(() => {
-    if (!showTranscript || activeSentenceIndex < 0) return
+    if (activeSentenceIndex < 0) return
     sentenceRefs.current[activeSentenceIndex]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [showTranscript, activeSentenceIndex])
-
-  useEffect(() => {
-    onPlayingChange?.(isPlaying)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying])
-
-  // A slide switch (new narrations array) re-resolves the preferred/fallback
-  // language and resets the transport — a manual toggle click (below) is the
-  // only other way selectedLanguage changes, and that intentionally isn't in
-  // this dependency list.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const preferred = narrations.find((n) => n.language === preferredLanguage)
-    setSelectedLanguage(preferred ? preferred.language : narrations[0].language)
-    setIsPlaying(false)
-    setCurrentTime(0)
-    setDuration(0)
-  }, [narrations])
+  }, [activeSentenceIndex])
 
   function handleToggleLanguage(language: NarrationLanguage) {
     if (language === selectedLanguage) return
@@ -134,34 +116,51 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
   }
 
   return (
-    <div className="relative">
-      {showTranscript && (
-        <Modal title="Transcript" onClose={() => setShowTranscript(false)} widthClassName="max-w-xl">
-          <p className="mb-3 text-xs text-neutral-400">
-            The currently-playing sentence is estimated from playback position, not exact word timing.
-          </p>
-          <p className="text-sm leading-relaxed text-neutral-700">
-            {sentenceRanges.map((sentence, i) => (
-              <span
-                key={i}
-                ref={(el) => {
-                  sentenceRefs.current[i] = el
-                }}
-                className={`rounded ${i === activeSentenceIndex ? 'bg-brand-gold/30 text-neutral-900' : ''}`}
-              >
-                {sentence.text}{' '}
-              </span>
-            ))}
-          </p>
-        </Modal>
-      )}
+    <Modal title="Narration" onClose={onClose} widthClassName="max-w-2xl" maxHeightClassName="max-h-[75vh]">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {bothAvailable ? (
+            <div className="flex overflow-hidden rounded border border-neutral-300 text-xs">
+              {(['en', 'ne'] as NarrationLanguage[]).map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  onClick={() => handleToggleLanguage(lang)}
+                  className={`px-3 py-1.5 font-medium transition ${
+                    selectedLanguage === lang
+                      ? 'bg-brand-navy text-white'
+                      : 'bg-white text-neutral-600 hover:bg-neutral-100'
+                  }`}
+                >
+                  {LANGUAGE_LABEL[lang]}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span />
+          )}
 
-      {/* Two rows instead of one — transport (play/seek/time) on top, the
-          secondary controls (language, speed, transcript) below with their
-          own room, rather than everything fighting the seek bar for width
-          in a single cramped row. */}
-      <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
-        <div className="flex items-center gap-3">
+          <select
+            value={playbackRate}
+            onChange={handleRateChange}
+            aria-label="Playback speed"
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700"
+          >
+            {PLAYBACK_RATES.map((rate) => (
+              <option key={rate} value={rate}>
+                {rate}x
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {isFallback && (
+          <p className="-mt-2 text-xs text-neutral-500">
+            Not yet available in {LANGUAGE_LABEL[preferredLanguage]} — playing {LANGUAGE_LABEL[selectedLanguage]}.
+          </p>
+        )}
+
+        <div className="flex items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
           <button
             type="button"
             onClick={togglePlay}
@@ -200,62 +199,22 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
           <span className="w-9 shrink-0 text-xs tabular-nums text-neutral-400">{formatTime(duration)}</span>
         </div>
 
-        <div className="flex items-center justify-between gap-3">
-          {bothAvailable ? (
-            <div className="flex shrink-0 overflow-hidden rounded border border-neutral-300 text-xs">
-              {(['en', 'ne'] as NarrationLanguage[]).map((lang) => (
-                <button
-                  key={lang}
-                  type="button"
-                  onClick={() => handleToggleLanguage(lang)}
-                  className={`px-2.5 py-1 font-medium transition ${
-                    selectedLanguage === lang
-                      ? 'bg-brand-navy text-white'
-                      : 'bg-white text-neutral-600 hover:bg-neutral-100'
-                  }`}
-                >
-                  {lang.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <span />
-          )}
-
-          <div className="flex shrink-0 items-center gap-2">
-            <select
-              value={playbackRate}
-              onChange={handleRateChange}
-              aria-label="Playback speed"
-              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700"
-            >
-              {PLAYBACK_RATES.map((rate) => (
-                <option key={rate} value={rate}>
-                  {rate}x
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={() => setShowTranscript((v) => !v)}
-              aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
-              title="Transcript"
-              className={`flex h-8 w-8 items-center justify-center rounded transition ${
-                showTranscript ? 'bg-brand-navy/10 text-brand-navy' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700'
-              }`}
-            >
-              <FileText className="h-4 w-4" />
-            </button>
-          </div>
+        <div className="max-h-[40vh] overflow-y-auto rounded-lg border border-neutral-200 p-4 text-sm leading-relaxed text-neutral-700">
+          <p>
+            {sentenceRanges.map((sentence, i) => (
+              <span
+                key={i}
+                ref={(el) => {
+                  sentenceRefs.current[i] = el
+                }}
+                className={`rounded ${i === activeSentenceIndex ? 'bg-brand-gold/30 text-neutral-900' : ''}`}
+              >
+                {sentence.text}{' '}
+              </span>
+            ))}
+          </p>
         </div>
       </div>
-
-      {isFallback && (
-        <p className="mt-1 text-xs text-neutral-500">
-          Not yet available in {LANGUAGE_LABEL[preferredLanguage]} — playing {LANGUAGE_LABEL[selectedLanguage]}.
-        </p>
-      )}
-    </div>
+    </Modal>
   )
 }
