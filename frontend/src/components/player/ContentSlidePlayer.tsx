@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Download, Maximize } from 'lucide-react'
+import { NARRATION_BAR_FULLSCREEN_RESERVE_PX, NarrationPlayer } from './NarrationPlayer'
 import { SlideCanvas } from './SlideCanvas'
 import { SlideElementsView } from '../SlideElementsView'
 import { Button } from '../ui/Button'
+import { fetchNarrationsForSlide } from '../../lib/narrationApi'
 import { fetchElements } from '../../lib/slidesApi'
 import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
+import type { SlideNarration } from '../../types/narration'
 import type { SlideElement, SlideSummary, SlideTemplate } from '../../types/slides'
 
 interface ContentSlidePlayerProps {
@@ -33,6 +36,7 @@ export function ContentSlidePlayer({
 }: ContentSlidePlayerProps) {
   const [elements, setElements] = useState<SlideElement[] | null>(null)
   const [templates, setTemplates] = useState<SlideTemplate[]>([])
+  const [narrations, setNarrations] = useState<SlideNarration[]>([])
   const [error, setError] = useState<string | null>(null)
   const [completedDialogueIds, setCompletedDialogueIds] = useState<Set<number>>(new Set())
 
@@ -42,6 +46,15 @@ export function ContentSlidePlayer({
     fetchElements(slide.id)
       .then(setElements)
       .catch(() => setError('Could not load this slide’s content.'))
+  }, [slide.id])
+
+  // Narration is a supplementary aid, not core slide content — a failure to
+  // load it should never block or error out the slide itself.
+  useEffect(() => {
+    setNarrations([])
+    fetchNarrationsForSlide(slide.id)
+      .then(setNarrations)
+      .catch(() => {})
   }, [slide.id])
 
   useEffect(() => {
@@ -66,6 +79,7 @@ export function ContentSlidePlayer({
   if (!elements) return <p className="text-sm text-neutral-500">Loading…</p>
 
   const template = effectiveTemplateId === null ? null : (templates.find((t) => t.id === effectiveTemplateId) ?? null)
+  const hasNarration = narrations.length > 0
 
   return (
     <div className={isFullscreen ? 'flex h-full flex-col' : ''}>
@@ -89,7 +103,10 @@ export function ContentSlidePlayer({
           which also resets the fixed-canvas sizing/scroll/crop below so the
           PDF gets full flowing content instead of a clipped 16:9 snapshot. */}
       <div className={`print-target w-full ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
-        <SlideCanvas fullscreen={isFullscreen}>
+        <SlideCanvas
+          fullscreen={isFullscreen}
+          bottomInsetPx={isFullscreen && hasNarration ? NARRATION_BAR_FULLSCREEN_RESERVE_PX : 0}
+        >
           <SlideElementsView
             elements={elements}
             layout={slide.layout}
@@ -101,6 +118,18 @@ export function ContentSlidePlayer({
           />
         </SlideCanvas>
       </div>
+
+      {/* Supplementary aid — never touches SlidePlayer's dwell timer or
+          completion gating. Rendered here (not inside SlideCanvas/
+          SlideElementsView) so it never becomes part of the PDF export and
+          never overlaps slide content, but still renders through this same
+          ContentSlidePlayer tree the standard and fullscreen views both
+          already share (see CourseDetailPage's single slidePlayerNode). */}
+      {hasNarration && (
+        <div className={`no-print mx-auto w-full max-w-3xl ${isFullscreen ? 'mt-2 shrink-0' : 'mt-4'}`}>
+          <NarrationPlayer narrations={narrations} />
+        </div>
+      )}
     </div>
   )
 }
