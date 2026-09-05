@@ -100,45 +100,55 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
   const isBobbing = !panelOpen && !isPeeking
 
   return (
-    <div className="no-print fixed right-8 bottom-8 z-[110] flex flex-col items-end gap-3">
-      {bubbleVisible && !panelOpen && (
-        <div className="max-w-72 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700 shadow-lg">
-          Feeling bored or confused? I can explain this in simple terms!
-        </div>
-      )}
-
-      {hasOpenedPanel && (
-        <div className={`w-80 max-w-[85vw] rounded-lg border border-neutral-200 bg-white shadow-xl ${panelOpen ? '' : 'hidden'}`}>
-          <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
-            <span className="text-xs font-semibold text-neutral-700">Narration</span>
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              aria-label="Close narration player"
-              className="text-neutral-400 transition hover:text-neutral-700"
-            >
-              <X className="h-4 w-4" />
-            </button>
+    // Vertically centered on the right edge rather than pinned to the
+    // bottom corner — anchoring to the bottom put it directly over the
+    // Next button, which SlideNavFooter (standard view) and
+    // FullscreenSlideOverlay's own nav bar both right-align at the bottom
+    // of their respective views. Centering vertically clears both
+    // unconditionally instead of needing to know either footer's exact height.
+    <div className="no-print fixed top-1/2 right-8 z-[110] -translate-y-1/2">
+      <div className="relative">
+        {bubbleVisible && !panelOpen && (
+          <div className="absolute right-0 bottom-full mb-3 max-w-72 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700 shadow-lg">
+            Feeling bored or confused? I can explain this in simple terms!
           </div>
-          <div className="p-3">
-            <NarrationPlayer narrations={narrations} onPlayingChange={setIsPlaying} />
-          </div>
-        </div>
-      )}
+        )}
 
-      <button
-        type="button"
-        onClick={handleMascotClick}
-        aria-label={panelOpen ? 'Close narration helper' : 'Open narration helper'}
-        className="relative flex h-36 w-36 items-center justify-center"
-      >
-        <span className={`absolute inset-0 rounded-full border-2 border-brand-gold shadow-lg ${badgeClass}`} />
-        <img
-          src={bubbleVisible ? greetingHappy : mascotIdle}
-          alt=""
-          className={`relative h-28 w-28 object-contain ${isPeeking ? 'mascot-peek' : isBobbing ? 'mascot-idle-bob' : ''}`}
-        />
-      </button>
+        {hasOpenedPanel && (
+          <div
+            className={`absolute right-0 bottom-full mb-3 w-80 max-w-[85vw] rounded-lg border border-neutral-200 bg-white shadow-xl ${panelOpen ? '' : 'hidden'}`}
+          >
+            <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
+              <span className="text-xs font-semibold text-neutral-700">Narration</span>
+              <button
+                type="button"
+                onClick={() => setPanelOpen(false)}
+                aria-label="Close narration player"
+                className="text-neutral-400 transition hover:text-neutral-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-3">
+              <NarrationPlayer narrations={narrations} onPlayingChange={setIsPlaying} />
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleMascotClick}
+          aria-label={panelOpen ? 'Close narration helper' : 'Open narration helper'}
+          className="relative flex h-40 w-40 items-center justify-center"
+        >
+          <span className={`absolute inset-0 rounded-full border-2 border-brand-gold shadow-lg ${badgeClass}`} />
+          <img
+            src={bubbleVisible ? greetingHappy : mascotIdle}
+            alt=""
+            className={`relative h-32 w-32 object-contain ${isPeeking ? 'mascot-peek' : isBobbing ? 'mascot-idle-bob' : ''}`}
+          />
+        </button>
+      </div>
     </div>
   )
 }
