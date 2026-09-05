@@ -104,87 +104,99 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
         </div>
       )}
 
-      <div className="flex h-12 items-center gap-3 rounded-lg border border-neutral-200 bg-white px-3 shadow-sm">
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={isPlaying ? 'Pause narration' : 'Play narration'}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-navy text-white transition hover:bg-brand-navy-light"
-        >
-          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-0.5" />}
-        </button>
+      {/* Two rows instead of one — transport (play/seek/time) on top, the
+          secondary controls (language, speed, transcript) below with their
+          own room, rather than everything fighting the seek bar for width
+          in a single cramped row. */}
+      <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={togglePlay}
+            aria-label={isPlaying ? 'Pause narration' : 'Play narration'}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-navy text-white transition hover:bg-brand-navy-light"
+          >
+            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-0.5" />}
+          </button>
 
-        <audio
-          key={activeNarration.id}
-          ref={audioRef}
-          src={activeNarration.audio_file ?? undefined}
-          preload="metadata"
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          className="hidden"
-        />
+          <audio
+            key={activeNarration.id}
+            ref={audioRef}
+            src={activeNarration.audio_file ?? undefined}
+            preload="metadata"
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
+            onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+            className="hidden"
+          />
 
-        <span className="w-9 shrink-0 text-right text-xs tabular-nums text-neutral-500">
-          {formatTime(currentTime)}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={Math.min(currentTime, duration || 0)}
-          onChange={handleSeek}
-          className="h-1.5 flex-1 accent-brand-navy"
-          aria-label="Seek narration"
-        />
-        <span className="w-9 shrink-0 text-xs tabular-nums text-neutral-400">{formatTime(duration)}</span>
+          <span className="w-9 shrink-0 text-right text-xs tabular-nums text-neutral-500">
+            {formatTime(currentTime)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.1}
+            value={Math.min(currentTime, duration || 0)}
+            onChange={handleSeek}
+            className="h-1.5 flex-1 accent-brand-navy"
+            aria-label="Seek narration"
+          />
+          <span className="w-9 shrink-0 text-xs tabular-nums text-neutral-400">{formatTime(duration)}</span>
+        </div>
 
-        <select
-          value={playbackRate}
-          onChange={handleRateChange}
-          aria-label="Playback speed"
-          className="shrink-0 rounded border border-neutral-300 bg-white px-1 py-1 text-xs text-neutral-700"
-        >
-          {PLAYBACK_RATES.map((rate) => (
-            <option key={rate} value={rate}>
-              {rate}x
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center justify-between gap-3">
+          {bothAvailable ? (
+            <div className="flex shrink-0 overflow-hidden rounded border border-neutral-300 text-xs">
+              {(['en', 'ne'] as NarrationLanguage[]).map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  onClick={() => handleToggleLanguage(lang)}
+                  className={`px-2.5 py-1 font-medium transition ${
+                    selectedLanguage === lang
+                      ? 'bg-brand-navy text-white'
+                      : 'bg-white text-neutral-600 hover:bg-neutral-100'
+                  }`}
+                >
+                  {lang.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span />
+          )}
 
-        {bothAvailable && (
-          <div className="flex shrink-0 overflow-hidden rounded border border-neutral-300 text-xs">
-            {(['en', 'ne'] as NarrationLanguage[]).map((lang) => (
-              <button
-                key={lang}
-                type="button"
-                onClick={() => handleToggleLanguage(lang)}
-                className={`px-2 py-1 font-medium transition ${
-                  selectedLanguage === lang
-                    ? 'bg-brand-navy text-white'
-                    : 'bg-white text-neutral-600 hover:bg-neutral-100'
-                }`}
-              >
-                {lang.toUpperCase()}
-              </button>
-            ))}
+          <div className="flex shrink-0 items-center gap-2">
+            <select
+              value={playbackRate}
+              onChange={handleRateChange}
+              aria-label="Playback speed"
+              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700"
+            >
+              {PLAYBACK_RATES.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate}x
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => setShowTranscript((v) => !v)}
+              aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
+              title="Transcript"
+              className={`flex h-8 w-8 items-center justify-center rounded transition ${
+                showTranscript ? 'bg-brand-navy/10 text-brand-navy' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700'
+              }`}
+            >
+              <FileText className="h-4 w-4" />
+            </button>
           </div>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setShowTranscript((v) => !v)}
-          aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
-          title="Transcript"
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded transition ${
-            showTranscript ? 'bg-brand-navy/10 text-brand-navy' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700'
-          }`}
-        >
-          <FileText className="h-4 w-4" />
-        </button>
+        </div>
       </div>
 
       {isFallback && (
