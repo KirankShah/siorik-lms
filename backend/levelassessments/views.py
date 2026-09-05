@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole
-from gamification.services import award_badges_for_level_assessment_attempt
+from gamification.services import award_badges_for_level_assessment_attempt, update_gamification_for_user
 
 from .imports import LevelQuestionImportError, import_level_questions
 from .models import LevelAssessmentAttempt
@@ -147,6 +147,10 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
                 answer.selected_choices.set(selected_choices)
 
             attempt.calculate_score_percent()
+            # Same trigger point as course completion/quiz attempt — keeps
+            # LeaderboardEntry.total_points (and level_assessments_passed_count)
+            # in sync with this attempt's outcome immediately.
+            update_gamification_for_user(request.user)
             award_badges_for_level_assessment_attempt(attempt)
 
         return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)

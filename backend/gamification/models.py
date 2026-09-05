@@ -17,6 +17,11 @@ class LeaderboardEntry(models.Model):
     total_points = models.PositiveIntegerField(default=0)
     courses_completed_count = models.PositiveIntegerField(default=0)
     average_quiz_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Distinct AssessmentLevels passed at least once — see
+    # gamification.services.recalculate_leaderboard_entry for why this counts
+    # the level, not the attempt (a retake of an already-passed level doesn't
+    # add another point award).
+    level_assessments_passed_count = models.PositiveIntegerField(default=0)
     # Recalculated alongside the other fields, on certificate generation (see
     # certificates.services.generate_certificate) rather than computed live.
     certificates_earned_count = models.PositiveIntegerField(default=0)

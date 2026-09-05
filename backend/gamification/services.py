@@ -12,6 +12,15 @@ from .models import Badge, LeaderboardEntry, UserBadge
 COURSE_COMPLETION_POINTS = 100
 MAX_QUIZ_BONUS_POINTS = 50
 
+# A passed level assessment (levelassessments app) is an official,
+# higher-stakes role-based compliance check, not just one more course quiz —
+# so it's deliberately weighted above a single course completion rather than
+# equal to it. Tunable: retune the platform-wide value of a passed level
+# assessment by changing this one multiplier, not by hand-editing point
+# totals anywhere else.
+LEVEL_ASSESSMENT_PASS_POINTS_MULTIPLIER = 1.5
+LEVEL_ASSESSMENT_PASS_POINTS = round(COURSE_COMPLETION_POINTS * LEVEL_ASSESSMENT_PASS_POINTS_MULTIPLIER)
+
 # Minimum distinct quizzes attempted before HIGH_ACHIEVER can be earned, so a
 # single lucky attempt doesn't trigger it.
 HIGH_ACHIEVER_MIN_QUIZZES = 3
@@ -36,9 +45,14 @@ def recalculate_leaderboard_entry(user):
     """
     Recomputes and persists this user's LeaderboardEntry: 100 points per
     completed course, plus up to 50 bonus points scaled linearly to that
-    course's own quiz average (each quiz counted once, at its best score).
-    Not called on every dashboard read — only from the events that can change
-    it (course completion, quiz attempt, certificate generation); see
+    course's own quiz average (each quiz counted once, at its best score),
+    plus LEVEL_ASSESSMENT_PASS_POINTS per distinct level assessment passed
+    (each level counted once, no matter how many attempts/retakes it took to
+    pass it — same "count the outcome, not the attempts" shape as
+    courses_completed_count below, so retaking an already-passed level can't
+    be farmed for repeat points). Not called on every dashboard read — only
+    from the events that can change it (course completion, quiz attempt,
+    level assessment submission, certificate generation); see
     update_gamification_for_user.
     """
     if user.organization_id is None:
@@ -52,6 +66,16 @@ def recalculate_leaderboard_entry(user):
         course_average = _average(course_scores)
         total_points += COURSE_COMPLETION_POINTS + round(MAX_QUIZ_BONUS_POINTS * (course_average / 100))
 
+    # LevelAssessmentAttempt.assessment_level.organization is always this
+    # same user's own organization by construction — start_level_assessment_attempt
+    # only ever starts an attempt against assigned_assessment_level_for_user(user),
+    # which is itself filtered to user.organization_id — so this can't pull in
+    # another organization's level or leak a cross-org attempt into this total.
+    passed_level_ids = set(
+        LevelAssessmentAttempt.objects.filter(user=user, passed=True).values_list('assessment_level_id', flat=True)
+    )
+    total_points += len(passed_level_ids) * LEVEL_ASSESSMENT_PASS_POINTS
+
     overall_average = _average(_best_scores_per_quiz(user))
 
     entry, _created = LeaderboardEntry.objects.update_or_create(
@@ -62,6 +86,7 @@ def recalculate_leaderboard_entry(user):
             'courses_completed_count': completed_enrollments.count(),
             'average_quiz_score': overall_average,
             'certificates_earned_count': Certificate.objects.filter(user=user).count(),
+            'level_assessments_passed_count': len(passed_level_ids),
         },
     )
     return entry
@@ -98,7 +123,8 @@ def award_badges_for_user(user):
 
 
 def update_gamification_for_user(user):
-    """Single entry point called after a course completion or quiz attempt."""
+    """Single entry point called after a course completion, quiz attempt, or
+    level assessment submission."""
     if recalculate_leaderboard_entry(user) is not None:
         award_badges_for_user(user)
 

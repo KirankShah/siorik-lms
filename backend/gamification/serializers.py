@@ -20,6 +20,7 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
             'courses_completed_count',
             'average_quiz_score',
             'certificates_earned_count',
+            'level_assessments_passed_count',
             'updated_at',
         ]
 
