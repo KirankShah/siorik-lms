@@ -13,6 +13,7 @@ class AuditLog(models.Model):
         PASSWORD_RESET_COMPLETED = 'PASSWORD_RESET_COMPLETED', 'Password reset completed'
         ORGANIZATION_CREATED = 'ORGANIZATION_CREATED', 'Organization created'
         ORG_ADMIN_CREATED = 'ORG_ADMIN_CREATED', 'Organization admin created'
+        LEVEL_QUESTIONS_IMPORTED = 'LEVEL_QUESTIONS_IMPORTED', 'Level assessment questions imported'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

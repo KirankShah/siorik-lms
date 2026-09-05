@@ -15,6 +15,7 @@ import { fetchAssignments, fetchMySubmissions } from '../lib/assignmentsApi'
 import { fetchCertificates } from '../lib/certificatesApi'
 import { fetchCourseDetail, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
 import { fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
+import { fetchMyAssessmentLevel } from '../lib/levelAssessmentsApi'
 import { fetchQuizzes } from '../lib/quizApi'
 import { isAdminRole } from '../lib/roles'
 import type { Certificate } from '../types/certificates'
@@ -22,6 +23,7 @@ import type { User } from '../types/auth'
 import type { Assignment } from '../types/assignment'
 import type { CourseListItem, Enrollment } from '../types/courses'
 import type { LeaderboardEntry, UserBadge } from '../types/gamification'
+import type { MyAssessmentLevelStatus } from '../types/levelAssessments'
 import type { QuizListItem } from '../types/quiz'
 
 function isThisMonth(isoDate: string): boolean {
@@ -203,6 +205,48 @@ const STATUS_BADGE: Record<string, BadgeVariant> = {
   COMPLETED: 'gold',
 }
 
+const LEVEL_ASSESSMENT_STATUS_LABEL: Record<string, string> = {
+  NOT_STARTED: 'Not started',
+  IN_PROGRESS: 'In progress',
+  PASSED: 'Passed',
+  FAILED: 'Failed — retake available',
+}
+
+const LEVEL_ASSESSMENT_STATUS_CLASSES: Record<string, string> = {
+  NOT_STARTED: 'bg-neutral-100 text-neutral-700',
+  IN_PROGRESS: 'bg-brand-navy/10 text-brand-navy',
+  PASSED: 'bg-emerald-100 text-emerald-800',
+  FAILED: 'bg-red-100 text-red-700',
+}
+
+function LevelAssessmentCard({ myLevelAssessment }: { myLevelAssessment: MyAssessmentLevelStatus | null }) {
+  if (myLevelAssessment !== null && !myLevelAssessment.assigned) return null
+
+  return (
+    <Card>
+      <h2 className="text-sm font-semibold text-neutral-900">My Level Assessment</h2>
+
+      {!myLevelAssessment ? (
+        <p className="mt-4 text-sm text-neutral-500">Loading…</p>
+      ) : (
+        <Link
+          to="/level-assessment"
+          className="mt-4 flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3 hover:bg-neutral-50"
+        >
+          <p className="text-sm font-medium text-neutral-900">{myLevelAssessment.assessment_level?.name_display}</p>
+          <span
+            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+              LEVEL_ASSESSMENT_STATUS_CLASSES[myLevelAssessment.status ?? 'NOT_STARTED']
+            }`}
+          >
+            {LEVEL_ASSESSMENT_STATUS_LABEL[myLevelAssessment.status ?? 'NOT_STARTED']}
+          </span>
+        </Link>
+      )}
+    </Card>
+  )
+}
+
 interface PendingAssignment {
   assignment: Assignment
   slideTitle: string
@@ -216,16 +260,18 @@ function LearnerDashboard({ user }: { user: User }) {
   const [pendingAssignments, setPendingAssignments] = useState<PendingAssignment[] | null>(null)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[] | null>(null)
   const [myBadges, setMyBadges] = useState<UserBadge[] | null>(null)
+  const [myLevelAssessment, setMyLevelAssessment] = useState<MyAssessmentLevelStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
-    Promise.all([fetchLeaderboard(), fetchMyBadges()])
-      .then(([entries, badges]) => {
+    Promise.all([fetchLeaderboard(), fetchMyBadges(), fetchMyAssessmentLevel()])
+      .then(([entries, badges, levelAssessment]) => {
         if (cancelled) return
         setLeaderboard(entries)
         setMyBadges(badges)
+        setMyLevelAssessment(levelAssessment)
       })
       .catch(() => {
         if (!cancelled) setError('Some dashboard data could not be loaded.')
@@ -325,6 +371,8 @@ function LearnerDashboard({ user }: { user: User }) {
       />
 
       <LeaderboardWidget entries={leaderboard} />
+
+      <LevelAssessmentCard myLevelAssessment={myLevelAssessment} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>

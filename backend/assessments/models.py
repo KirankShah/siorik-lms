@@ -12,6 +12,42 @@ from courses.models import Slide
 MAX_QUESTION_TEXT_LENGTH = 5_000
 
 
+class AbstractGradedQuestion(models.Model):
+    """
+    Field shape shared between this app's Question (tied to a Quiz/Slide,
+    Phase 4/13) and levelassessments.LevelQuestion (standalone, tied to a
+    QuestionSet, Phase B) — same authoring shape, different parent container
+    and question_type choices, so the common fields live here once instead of
+    being redefined per model.
+    """
+
+    question_text = models.TextField(validators=[MaxLengthValidator(MAX_QUESTION_TEXT_LENGTH)])
+    order = models.PositiveIntegerField(default=0)
+    marks = models.PositiveIntegerField(default=1)
+    explanation = models.TextField(blank=True, help_text='Rich text shown to the learner after answering.')
+    feedback_correct = models.TextField(blank=True)
+    feedback_incorrect = models.TextField(blank=True)
+
+    class Meta:
+        abstract = True
+
+
+class AbstractOption(models.Model):
+    """
+    Field shape shared between this app's Choice (Phase 4/13) and
+    levelassessments.LevelChoice (Phase B): choice_text is the option label,
+    is_correct flags the correct option(s) — see each concrete model's own
+    docstring for type-specific meaning beyond this shared shape.
+    """
+
+    choice_text = models.CharField(max_length=500, blank=True, default='')
+    is_correct = models.BooleanField(default=False)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        abstract = True
+
+
 class Quiz(models.Model):
     slide = models.ForeignKey(Slide, on_delete=models.CASCADE, related_name='quizzes')
     title = models.CharField(max_length=255)
@@ -40,7 +76,7 @@ class Quiz(models.Model):
         return f'{self.slide.display_title()} - {self.title}'
 
 
-class Question(models.Model):
+class Question(AbstractGradedQuestion):
     class QuestionType(models.TextChoices):
         SINGLE_CHOICE = 'SINGLE_CHOICE', 'Single choice'
         MULTIPLE_CHOICE = 'MULTIPLE_CHOICE', 'Multiple choice'
@@ -59,7 +95,6 @@ class Question(models.Model):
         WORD_BANK = 'WORD_BANK', 'Word bank'
 
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
-    question_text = models.TextField(validators=[MaxLengthValidator(MAX_QUESTION_TEXT_LENGTH)])
     question_type = models.CharField(
         max_length=20,
         choices=QuestionType.choices,
@@ -74,14 +109,9 @@ class Question(models.Model):
         choices=FillBlankMode.choices,
         default=FillBlankMode.TEXT_INPUT,
     )
-    order = models.PositiveIntegerField(default=0)
     points = models.PositiveIntegerField(default=1)
     image = models.ImageField(upload_to='question_images/', blank=True, null=True, validators=[validate_image_size])
     video_url = models.URLField(blank=True, null=True)
-    explanation = models.TextField(blank=True, help_text='Rich text shown to the learner after answering.')
-    marks = models.PositiveIntegerField(default=1)
-    feedback_correct = models.TextField(blank=True)
-    feedback_incorrect = models.TextField(blank=True)
 
     class Meta:
         ordering = ['order']
@@ -91,7 +121,7 @@ class Question(models.Model):
         return f'{self.quiz.title} - Q{self.order}'
 
 
-class Choice(models.Model):
+class Choice(AbstractOption):
     """
     A single "answer option" row, reused across several question types with
     different meaning per type rather than one table per type:
@@ -109,9 +139,6 @@ class Choice(models.Model):
     """
 
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='choices')
-    choice_text = models.CharField(max_length=500, blank=True, default='')
-    is_correct = models.BooleanField(default=False)
-    order = models.PositiveIntegerField(default=0)
     match_text = models.CharField(max_length=500, blank=True, default='')
     blank_index = models.PositiveIntegerField(null=True, blank=True)
 

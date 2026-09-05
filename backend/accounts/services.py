@@ -152,7 +152,20 @@ def send_org_admin_invite_email(user, temp_password):
     _send_invite_email(to_email=user.email, subject=subject, text_body=text_body, html_body=html_body)
 
 
-def _create_pending_user(*, name, email, organization, role, is_demo, designation='', phone_number=''):
+def _create_pending_user(
+    *,
+    name,
+    email,
+    organization,
+    role,
+    is_demo,
+    designation='',
+    phone_number='',
+    corporate_title='',
+    functional_title='',
+    branch_department='',
+    assessment_level=None,
+):
     """
     Shared validation + account creation for both provision_demo_user and
     provision_org_admin — everything except which role/is_demo it's created
@@ -182,6 +195,10 @@ def _create_pending_user(*, name, email, organization, role, is_demo, designatio
         organization=organization,
         designation=(designation or '').strip(),
         phone_number=(phone_number or '').strip(),
+        corporate_title=(corporate_title or '').strip(),
+        functional_title=(functional_title or '').strip(),
+        branch_department=(branch_department or '').strip(),
+        assessment_level=assessment_level or None,
         is_demo=is_demo,
         must_reset_password=True,
     )
@@ -189,7 +206,18 @@ def _create_pending_user(*, name, email, organization, role, is_demo, designatio
 
 
 @transaction.atomic
-def provision_demo_user(*, name, email, organization, designation='', phone_number=''):
+def provision_demo_user(
+    *,
+    name,
+    email,
+    organization,
+    designation='',
+    phone_number='',
+    corporate_title='',
+    functional_title='',
+    branch_department='',
+    assessment_level=None,
+):
     """
     Creates a single demo LEARNER account with a system-generated temporary
     password and emails an invite. The whole operation (account creation +
@@ -203,6 +231,8 @@ def provision_demo_user(*, name, email, organization, designation='', phone_numb
     user, temp_password = _create_pending_user(
         name=name, email=email, organization=organization, role=User.Role.LEARNER, is_demo=True,
         designation=designation, phone_number=phone_number,
+        corporate_title=corporate_title, functional_title=functional_title,
+        branch_department=branch_department, assessment_level=assessment_level,
     )
 
     try:

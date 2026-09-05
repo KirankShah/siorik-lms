@@ -124,6 +124,14 @@ export function DemoUsersPage() {
             </code>{' '}
             (organization matched by name; designation and phone_number are optional). A header row is optional.
           </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Alternatively, a header row with{' '}
+            <code className="rounded bg-neutral-100 px-1 py-0.5">
+              Name, Email, Corporate Title, Functional Title, Branch/Department, Assessment Level, Organization
+            </code>{' '}
+            is accepted (any column order). Assessment Level must be one of Assistant/Supervisor, Officer,
+            Management, or Senior Management — rows with an invalid or missing value are reported as failures.
+          </p>
 
           <div className="mt-4 space-y-4">
             <div>

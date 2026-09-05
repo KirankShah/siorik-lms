@@ -5,6 +5,7 @@ from django.db.models import Max
 from assessments.models import QuizAttempt
 from certificates.models import Certificate
 from courses.models import Enrollment
+from levelassessments.models import LevelAssessmentAttempt
 
 from .models import Badge, LeaderboardEntry, UserBadge
 
@@ -100,3 +101,108 @@ def update_gamification_for_user(user):
     """Single entry point called after a course completion or quiz attempt."""
     if recalculate_leaderboard_entry(user) is not None:
         award_badges_for_user(user)
+
+
+def _attempt_has_three_correct_in_a_row(attempt):
+    """
+    True if `attempt` has three consecutive correct answers in *drawn* order
+    — the sequence questions_drawn stores (see
+    levelassessments.services.start_level_assessment_attempt), which is the
+    order the learner actually saw and answered them in. LevelQuestion's own
+    `order` spans the whole pool it was drawn from, not this one attempt, so
+    it isn't the right sequence to check a streak against.
+    """
+    correctness_by_question = dict(attempt.answers.values_list('question_id', 'is_correct'))
+    streak = 0
+    for question_id in attempt.questions_drawn:
+        if correctness_by_question.get(question_id):
+            streak += 1
+            if streak >= 3:
+                return True
+        else:
+            streak = 0
+    return False
+
+
+def _is_comeback_pass(attempt):
+    """True if `attempt` passed and this user previously failed a submitted
+    attempt at this same assessment level."""
+    if not attempt.passed:
+        return False
+    return (
+        LevelAssessmentAttempt.objects.filter(
+            user=attempt.user, assessment_level=attempt.assessment_level, submitted_at__isnull=False, passed=False,
+        )
+        .exclude(id=attempt.id)
+        .exists()
+    )
+
+
+def _is_first_in_branch_to_pass(attempt):
+    """
+    True if `attempt` passed and no other user sharing this user's
+    organization + branch_department has ever passed this same assessment
+    level. Branch/org scoped (not global) since branch_department is free
+    text an admin fills in per user — different organizations may reuse the
+    same branch name coincidentally.
+    """
+    if not attempt.passed:
+        return False
+    user = attempt.user
+    branch = (user.branch_department or '').strip()
+    if not branch or user.organization_id is None:
+        return False
+    return not (
+        LevelAssessmentAttempt.objects.filter(
+            assessment_level=attempt.assessment_level,
+            passed=True,
+            user__organization_id=user.organization_id,
+            user__branch_department__iexact=branch,
+        )
+        .exclude(user=user)
+        .exists()
+    )
+
+
+def award_badges_for_level_assessment_attempt(attempt):
+    """
+    Awards any level-assessment-specific badge whose condition is now met by
+    this just-submitted attempt — called once, right after
+    LevelAssessmentAttempt.calculate_score_percent(). Deliberately
+    independent of award_badges_for_user/LeaderboardEntry: a user can sit a
+    level assessment without ever having enrolled in a course, so there may
+    be no LeaderboardEntry to gate on the way award_badges_for_user does.
+
+    'perfect_score' is shared with the course-quiz path in
+    award_badges_for_user — same badge, same key, just a second way to earn
+    it — everything else here is level-assessment-only.
+    """
+    user = attempt.user
+    already_earned = set(UserBadge.objects.filter(user=user).values_list('badge__key', flat=True))
+    to_award = []
+
+    if 'first_strike' not in already_earned:
+        is_first_attempt = not LevelAssessmentAttempt.objects.filter(user=user).exclude(id=attempt.id).exists()
+        if is_first_attempt and attempt.answers.filter(is_correct=True).exists():
+            to_award.append('first_strike')
+
+    if 'hat_trick' not in already_earned and _attempt_has_three_correct_in_a_row(attempt):
+        to_award.append('hat_trick')
+
+    if 'perfect_score' not in already_earned and attempt.score_percent == 100:
+        to_award.append('perfect_score')
+
+    if 'comeback' not in already_earned and _is_comeback_pass(attempt):
+        to_award.append('comeback')
+
+    if 'branch_pride' not in already_earned and _is_first_in_branch_to_pass(attempt):
+        to_award.append('branch_pride')
+
+    if not to_award:
+        return
+
+    badges_by_key = {badge.key: badge for badge in Badge.objects.filter(key__in=to_award)}
+    for key in to_award:
+        badge = badges_by_key.get(key)
+        if badge:
+            UserBadge.objects.get_or_create(user=user, badge=badge)

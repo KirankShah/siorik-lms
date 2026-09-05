@@ -1,5 +1,6 @@
 export type Role = 'LEARNER' | 'INSTRUCTOR' | 'ORG_ADMIN' | 'PLATFORM_ADMIN'
 export type NarrationLanguage = 'en' | 'ne'
+export type AssessmentLevel = 'assistant_supervisor' | 'officer' | 'management' | 'senior_management'
 
 export interface Organization {
   id: number
@@ -18,6 +19,10 @@ export interface User {
   organization: Organization | null
   phone_number: string | null
   designation: string | null
+  corporate_title: string | null
+  functional_title: string | null
+  branch_department: string | null
+  assessment_level: AssessmentLevel | null
   is_active: boolean
   is_demo: boolean
   must_reset_password: boolean

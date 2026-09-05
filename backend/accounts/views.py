@@ -16,7 +16,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole, IsPlatformAdminRole
 
-from .models import Organization
+from .models import Organization, User
 from .serializers import (
     DemoUserCreateSerializer,
     OrganizationSerializer,
@@ -96,6 +96,20 @@ CSV_EXPECTED_HEADER = ['name', 'email', 'organization', 'designation', 'phone_nu
 # first 3 columns are required, so a legacy header is recognized too.
 CSV_LEGACY_HEADER = CSV_EXPECTED_HEADER[:3]
 
+# The extended column set (corporate title, functional title, branch/department,
+# assessment level) is matched by header name rather than position, since it's a
+# superset of unrelated fields with no natural fixed order. A header row is
+# required for this format — maps normalized header cell -> field name.
+CSV_EXTENDED_HEADER_FIELDS = {
+    'name': 'name',
+    'email': 'email',
+    'corporate title': 'corporate_title',
+    'functional title': 'functional_title',
+    'branch/department': 'branch_department',
+    'assessment level': 'assessment_level',
+    'organization': 'organization',
+}
+
 
 def _resolve_organization(name_or_slug):
     name_or_slug = name_or_slug.strip()
@@ -103,6 +117,19 @@ def _resolve_organization(name_or_slug):
         Organization.objects.filter(name__iexact=name_or_slug).first()
         or Organization.objects.filter(slug__iexact=name_or_slug).first()
     )
+
+
+def _resolve_assessment_level(raw):
+    """Matches case/spacing-insensitively against the four allowed values
+    (e.g. "Senior Management" or "senior_management" both resolve), returning
+    None for anything else — including a blank cell — so the caller can reject
+    the row rather than silently defaulting it."""
+    normalized = (raw or '').strip().lower().replace(' ', '_').replace('/', '_')
+    return normalized if normalized in User.AssessmentLevel.values else None
+
+
+def _row_cell(row, index):
+    return row[index].strip() if index < len(row) else ''
 
 
 class DemoUserViewSet(viewsets.GenericViewSet):
@@ -138,9 +165,16 @@ class DemoUserViewSet(viewsets.GenericViewSet):
             return Response({'detail': 'Could not read the uploaded file as UTF-8 text.'}, status=400)
 
         rows = list(csv.reader(io.StringIO(decoded)))
+
+        extended_columns = None  # field name -> column index, when the extended header is used
         if rows:
             header = [c.strip().lower() for c in rows[0]]
             if header[:5] == CSV_EXPECTED_HEADER or header[:3] == CSV_LEGACY_HEADER:
+                rows = rows[1:]
+            elif set(header) == set(CSV_EXTENDED_HEADER_FIELDS):
+                extended_columns = {
+                    field: header.index(column) for column, field in CSV_EXTENDED_HEADER_FIELDS.items()
+                }
                 rows = rows[1:]
 
         created = []
@@ -151,17 +185,44 @@ class DemoUserViewSet(viewsets.GenericViewSet):
             if not row or not any(cell.strip() for cell in row):
                 continue  # blank line
 
-            if len(row) < 3:
-                failed.append({
-                    'row': index,
-                    'email': row[1].strip() if len(row) >= 2 else '',
-                    'reason': 'Malformed row: expected at least 3 columns (name, email, organization).',
-                })
-                continue
+            corporate_title = functional_title = branch_department = ''
+            assessment_level = None
 
-            name, email, org_name = (cell.strip() for cell in row[:3])
-            designation = row[3].strip() if len(row) >= 4 else ''
-            phone_number = row[4].strip() if len(row) >= 5 else ''
+            if extended_columns is not None:
+                name = _row_cell(row, extended_columns['name'])
+                email = _row_cell(row, extended_columns['email'])
+                org_name = _row_cell(row, extended_columns['organization'])
+                corporate_title = _row_cell(row, extended_columns['corporate_title'])
+                functional_title = _row_cell(row, extended_columns['functional_title'])
+                branch_department = _row_cell(row, extended_columns['branch_department'])
+                designation = ''
+                phone_number = ''
+
+                assessment_level_raw = _row_cell(row, extended_columns['assessment_level'])
+                assessment_level = _resolve_assessment_level(assessment_level_raw)
+                if assessment_level is None:
+                    failed.append({
+                        'row': index,
+                        'email': email,
+                        'reason': (
+                            f'Invalid Assessment Level "{assessment_level_raw}": must be one of '
+                            + ', '.join(User.AssessmentLevel.values) + '.'
+                        ),
+                    })
+                    continue
+            else:
+                if len(row) < 3:
+                    failed.append({
+                        'row': index,
+                        'email': row[1].strip() if len(row) >= 2 else '',
+                        'reason': 'Malformed row: expected at least 3 columns (name, email, organization).',
+                    })
+                    continue
+
+                name, email, org_name = (cell.strip() for cell in row[:3])
+                designation = row[3].strip() if len(row) >= 4 else ''
+                phone_number = row[4].strip() if len(row) >= 5 else ''
+
             email_key = email.lower()
 
             if not name or not email or not org_name:
@@ -184,6 +245,10 @@ class DemoUserViewSet(viewsets.GenericViewSet):
                     organization=organization,
                     designation=designation,
                     phone_number=phone_number,
+                    corporate_title=corporate_title,
+                    functional_title=functional_title,
+                    branch_department=branch_department,
+                    assessment_level=assessment_level,
                 )
             except UserProvisioningError as exc:
                 failed.append({'row': index, 'email': email, 'reason': str(exc)})

@@ -57,6 +57,12 @@ class User(AbstractUser):
         EN = 'en', 'English'
         NE = 'ne', 'Nepali'
 
+    class AssessmentLevel(models.TextChoices):
+        ASSISTANT_SUPERVISOR = 'assistant_supervisor', 'Assistant/Supervisor'
+        OFFICER = 'officer', 'Officer'
+        MANAGEMENT = 'management', 'Management'
+        SENIOR_MANAGEMENT = 'senior_management', 'Senior Management'
+
     username = None
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.LEARNER)
@@ -69,6 +75,13 @@ class User(AbstractUser):
     )
     phone_number = models.CharField(max_length=20, blank=True, null=True, validators=[validate_phone_number])
     designation = models.CharField(max_length=150, blank=True, null=True)
+    corporate_title = models.CharField(max_length=150, blank=True, null=True)
+    functional_title = models.CharField(max_length=150, blank=True, null=True)
+    branch_department = models.CharField(max_length=150, blank=True, null=True)
+    # Nullable — not every user needs one (e.g. platform admins).
+    assessment_level = models.CharField(
+        max_length=30, choices=AssessmentLevel.choices, blank=True, null=True
+    )
     # Provisioned via the admin "demo users" tool (accounts.services.provision_demo_user)
     # rather than self-registration — a marker, not a separate user type/table.
     is_demo = models.BooleanField(default=False)

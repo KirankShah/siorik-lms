@@ -13,7 +13,7 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.utils import timezone
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageDraw
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -44,6 +44,17 @@ from courses.models import (
     SlideProgress,
 )
 from courses.video_streaming import build_video_stream_token
+from gamification.models import Badge, UserBadge
+from gamification.services import award_badges_for_level_assessment_attempt
+from levelassessments.models import (
+    AssessmentLevel,
+    LevelAssessmentAnswer,
+    LevelAssessmentAttempt,
+    LevelChoice,
+    LevelQuestion,
+    QuestionSet,
+)
+from levelassessments.services import LevelAssessmentError, start_level_assessment_attempt
 from narration.models import SlideNarration
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
@@ -59,6 +70,33 @@ def make_test_certificate_template(**overrides):
     )
     defaults.update(overrides)
     return CertificateTemplate.objects.create(**defaults)
+
+
+LEVEL_QUESTION_TEMPLATE_HEADER = [
+    'Question Set', 'Question Text', 'Question Type', 'Option A', 'Option B', 'Option C', 'Option D', 'Option E',
+    'Correct Answer(s)', 'Marks', 'Explanation', 'Feedback if Correct', 'Feedback if Incorrect',
+]
+
+
+def make_question_template_upload(rows_by_sheet, filename='questions.xlsx'):
+    """
+    Builds an in-memory .xlsx upload matching the Level Assessment Question
+    Template's column structure. `rows_by_sheet` is {sheet_name: [row_tuple, ...]}
+    where each row_tuple is 13 values in LEVEL_QUESTION_TEMPLATE_HEADER order.
+    """
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for sheet_name, rows in rows_by_sheet.items():
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.append(LEVEL_QUESTION_TEMPLATE_HEADER)
+        for row in rows:
+            sheet.append(list(row))
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return SimpleUploadedFile(
+        filename, buffer.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
 
 
 class BaseAPITestCase(APITestCase):
@@ -1825,6 +1863,60 @@ class DemoUserApiTests(BaseAPITestCase):
         self.assertEqual(user.designation, 'Compliance Officer')
         self.assertEqual(user.phone_number, '+977-1-4123456')
 
+    def test_bulk_upload_extended_columns_captures_titles_and_assessment_level(self):
+        csv_content = (
+            'Name,Email,Corporate Title,Functional Title,Branch/Department,Assessment Level,Organization\n'
+            f'Alice Alpha,alice@example.com,VP,Compliance Analyst,Head Office,Officer,{self.org.name}\n'
+            f'Bob Beta,bob@example.com,SVP,Risk Lead,Branch Office,Senior Management,{self.org.name}\n'
+        )
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], ['alice@example.com', 'bob@example.com'])
+
+        alice = User.objects.get(email='alice@example.com')
+        self.assertEqual(alice.corporate_title, 'VP')
+        self.assertEqual(alice.functional_title, 'Compliance Analyst')
+        self.assertEqual(alice.branch_department, 'Head Office')
+        self.assertEqual(alice.assessment_level, 'officer')
+
+        bob = User.objects.get(email='bob@example.com')
+        self.assertEqual(bob.assessment_level, 'senior_management')
+
+    def test_bulk_upload_extended_columns_rejects_invalid_assessment_level(self):
+        csv_content = (
+            'Name,Email,Corporate Title,Functional Title,Branch/Department,Assessment Level,Organization\n'
+            f'Alice Alpha,alice@example.com,VP,Compliance Analyst,Head Office,Director,{self.org.name}\n'
+        )
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertEqual(len(response.data['failed']), 1)
+        self.assertIn('Invalid Assessment Level', response.data['failed'][0]['reason'])
+        self.assertFalse(User.objects.filter(email='alice@example.com').exists())
+
+    def test_bulk_upload_extended_columns_rejects_missing_assessment_level(self):
+        csv_content = (
+            'Name,Email,Corporate Title,Functional Title,Branch/Department,Assessment Level,Organization\n'
+            f'Alice Alpha,alice@example.com,VP,Compliance Analyst,Head Office,,{self.org.name}\n'
+        )
+        upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
+
+        self.auth_as(self.instructor)
+        response = self.client.post('/api/demo-users/bulk/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertEqual(len(response.data['failed']), 1)
+        self.assertIn('Invalid Assessment Level', response.data['failed'][0]['reason'])
+
     def test_bulk_upload_reports_existing_user_as_failure_not_500(self):
         csv_content = f'name,email,organization\nExisting User,{self.learner.email},{self.org.name}\n'
         upload = SimpleUploadedFile('demo_users.csv', csv_content.encode('utf-8'), content_type='text/csv')
@@ -2321,3 +2413,692 @@ class UserPreferenceApiTests(BaseAPITestCase):
 
         self.learner.refresh_from_db()
         self.assertEqual(self.learner.role, User.Role.LEARNER)
+
+
+class LevelAssessmentAttemptServiceTests(TestCase):
+    """
+    Model + service coverage for the standalone role-based assessment system
+    (independent of Course/Slide) — no API surface yet, so these exercise
+    start_level_assessment_attempt directly, mirroring
+    DemoUserProvisioningServiceTests' pattern for a service with no endpoint.
+    """
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-level')
+        self.user = User.objects.create_user(email='learner@example.com', password='pw', role=User.Role.LEARNER)
+        self.level = AssessmentLevel.objects.create(
+            organization=self.org,
+            name=User.AssessmentLevel.OFFICER,
+            pass_threshold=70,
+            questions_per_attempt=3,
+        )
+        self.set_a = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.set_b = QuestionSet.objects.create(assessment_level=self.level, label='Set 2')
+        # Questions spread across both sets — the draw pools them together.
+        for question_set in (self.set_a, self.set_b):
+            for i in range(2):
+                question = LevelQuestion.objects.create(
+                    question_set=question_set,
+                    question_text=f'Question {question_set.label}-{i}',
+                    question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+                )
+                LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+                LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+
+    def test_draws_the_configured_number_of_questions_from_the_combined_pool(self):
+        attempt = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        self.assertEqual(len(attempt.questions_drawn), 3)
+        pool_ids = set(LevelQuestion.objects.filter(question_set__assessment_level=self.level).values_list('id', flat=True))
+        self.assertTrue(set(attempt.questions_drawn).issubset(pool_ids))
+        self.assertEqual(len(set(attempt.questions_drawn)), 3)  # no duplicates
+
+    def test_second_attempt_blocked_while_one_is_in_progress(self):
+        start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        with self.assertRaises(LevelAssessmentError):
+            start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        self.assertEqual(LevelAssessmentAttempt.objects.filter(user=self.user, assessment_level=self.level).count(), 1)
+
+    def test_retake_allowed_after_prior_attempt_is_submitted(self):
+        first = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+        first.submitted_at = timezone.now()
+        first.score_percent = Decimal('33.33')
+        first.passed = False
+        first.save()
+
+        second = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        self.assertNotEqual(first.id, second.id)
+        self.assertEqual(LevelAssessmentAttempt.objects.filter(user=self.user, assessment_level=self.level).count(), 2)
+
+    def test_rejects_when_pool_smaller_than_questions_per_attempt(self):
+        self.level.questions_per_attempt = 999
+        self.level.save()
+
+        with self.assertRaises(LevelAssessmentError):
+            start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        self.assertEqual(LevelAssessmentAttempt.objects.count(), 0)
+
+    def test_different_users_may_each_have_their_own_open_attempt(self):
+        other_user = User.objects.create_user(email='other@example.com', password='pw', role=User.Role.LEARNER)
+
+        start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+        other_attempt = start_level_assessment_attempt(user=other_user, assessment_level=self.level)
+
+        self.assertIsNotNone(other_attempt.id)
+
+
+class LevelQuestionImportApiTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.level = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        )
+        self.other_org_level = AssessmentLevel.objects.create(
+            organization=self.other_org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        )
+
+    def import_url(self, level):
+        return f'/api/assessment-levels/{level.id}/import-questions/'
+
+    def test_learner_cannot_import(self):
+        upload = make_question_template_upload({'Set 1': []})
+        self.auth_as(self.learner)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 403)
+
+    def test_org_admin_cannot_import_into_another_organizations_level(self):
+        upload = make_question_template_upload({'Set 1': []})
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.import_url(self.other_org_level), {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 404)
+
+    def test_valid_single_choice_and_multiple_answer_rows_are_created(self):
+        rows = [
+            ('Set 1', 'Capital of France?', 'Single Choice', 'Paris', 'Rome', 'Berlin', 'Madrid', '',
+             'A', 2, 'Paris is correct.', 'Well done', 'Try again'),
+            ('Set 1', 'Which are primary colors?', 'Multiple Answer', 'Red', 'Green', 'Blue', 'Purple', 'Yellow',
+             'A, C', 1, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 2)
+        self.assertEqual(response.data['failed'], [])
+
+        question_set = QuestionSet.objects.get(assessment_level=self.level, label='Set 1')
+        self.assertEqual(question_set.questions.count(), 2)
+
+        single_choice = question_set.questions.get(question_type=LevelQuestion.QuestionType.SINGLE_CHOICE)
+        self.assertEqual(single_choice.marks, 2)
+        self.assertEqual(single_choice.choices.count(), 4)  # Option E left blank
+        self.assertEqual(single_choice.choices.get(is_correct=True).choice_text, 'Paris')
+
+        multiple_answer = question_set.questions.get(question_type=LevelQuestion.QuestionType.MULTIPLE_ANSWER)
+        self.assertEqual(multiple_answer.choices.count(), 5)
+        self.assertEqual(
+            set(multiple_answer.choices.filter(is_correct=True).values_list('choice_text', flat=True)),
+            {'Red', 'Blue'},
+        )
+
+    def test_reuses_existing_question_set_by_label(self):
+        existing_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        rows = [
+            ('Set 1', 'Q1?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(QuestionSet.objects.filter(assessment_level=self.level, label='Set 1').count(), 1)
+        self.assertEqual(existing_set.questions.count(), 1)
+
+    def test_missing_options_and_bad_question_type_are_reported_not_dropped(self):
+        rows = [
+            # Missing Option D
+            ('Set 1', 'Bad row 1', 'Single Choice', 'A', 'B', 'C', '', '', 'A', 1, '', '', ''),
+            # Invalid Question Type
+            ('Set 1', 'Bad row 2', 'Essay', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', ''),
+            # Valid row in between — must still be created despite the failures around it
+            ('Set 1', 'Good row', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 1)
+        self.assertEqual(len(response.data['failed']), 2)
+        self.assertIn('Option D', response.data['failed'][0]['reason'])
+        self.assertIn('Single Choice', response.data['failed'][1]['reason'])
+        self.assertEqual(response.data['failed'][0]['row'], 2)
+        self.assertEqual(response.data['failed'][1]['row'], 3)
+
+    def test_correct_answer_referencing_empty_option_is_rejected(self):
+        rows = [
+            ('Set 1', 'Bad row', 'Single Choice', 'A', 'B', 'C', 'D', '', 'E', 1, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertIn('empty option', response.data['failed'][0]['reason'])
+
+    def test_single_choice_with_multiple_correct_answers_is_rejected(self):
+        rows = [
+            ('Set 1', 'Bad row', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A,B', 1, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertIn('exactly one', response.data['failed'][0]['reason'])
+
+    def test_non_positive_marks_is_rejected(self):
+        rows = [
+            ('Set 1', 'Bad row', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 0, '', '', ''),
+        ]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['created'], [])
+        self.assertIn('positive whole number', response.data['failed'][0]['reason'])
+
+    def test_multiple_sheets_are_all_parsed(self):
+        rows_by_sheet = {
+            'Sheet A': [('Set 1', 'Q1?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', '')],
+            'Sheet B': [('Set 2', 'Q2?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', '')],
+        }
+        upload = make_question_template_upload(rows_by_sheet)
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 2)
+        self.assertEqual(
+            QuestionSet.objects.filter(assessment_level=self.level).count(), 2,
+        )
+
+    def test_sheet_with_missing_required_column_is_reported_without_aborting_other_sheets(self):
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        bad_sheet = workbook.create_sheet('Bad Sheet')
+        bad_sheet.append(['Question Set', 'Question Text'])  # missing most required columns
+        bad_sheet.append(['Set 1', 'Q1?'])
+        good_sheet = workbook.create_sheet('Good Sheet')
+        good_sheet.append(LEVEL_QUESTION_TEMPLATE_HEADER)
+        good_sheet.append(('Set 2', 'Q2?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', ''))
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        upload = SimpleUploadedFile('questions.xlsx', buffer.getvalue())
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 1)
+        self.assertEqual(len(response.data['failed']), 1)
+        self.assertIsNone(response.data['failed'][0]['row'])
+        self.assertIn('Missing required column', response.data['failed'][0]['reason'])
+
+    def test_non_xlsx_upload_returns_400(self):
+        upload = SimpleUploadedFile('questions.xlsx', b'not a real workbook', content_type='text/plain')
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_import_requires_a_file(self):
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {}, format='multipart')
+        self.assertEqual(response.status_code, 400)
+
+
+class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
+    """
+    The student-facing flow: dashboard/landing status lookup, starting an
+    attempt (random draw, answer-key stripped), submitting it for grading
+    (answer-key revealed per-answer only after submission), and the
+    resulting status transitions (Not started -> In progress -> Passed/Failed
+    -> retake available).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.level = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=2,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+
+        self.q1 = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q1?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        self.q1_correct = LevelChoice.objects.create(question=self.q1, choice_text='A', is_correct=True)
+        LevelChoice.objects.create(question=self.q1, choice_text='B', is_correct=False)
+
+        self.q2 = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q2?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        self.q2_correct = LevelChoice.objects.create(question=self.q2, choice_text='A', is_correct=True)
+        LevelChoice.objects.create(question=self.q2, choice_text='B', is_correct=False)
+
+        self.q3 = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q3?', question_type=LevelQuestion.QuestionType.MULTIPLE_ANSWER,
+            marks=2,
+        )
+        self.q3_correct_a = LevelChoice.objects.create(question=self.q3, choice_text='A', is_correct=True)
+        self.q3_correct_b = LevelChoice.objects.create(question=self.q3, choice_text='B', is_correct=True)
+        LevelChoice.objects.create(question=self.q3, choice_text='C', is_correct=False)
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+
+    def correct_choice_ids_for(self, question_id):
+        return list(LevelQuestion.objects.get(id=question_id).choices.filter(is_correct=True).values_list('id', flat=True))
+
+    def start_attempt(self):
+        self.auth_as(self.learner)
+        return self.client.post('/api/level-attempts/start/')
+
+    def submit_all_correct(self, attempt_id, questions):
+        answers = [{'question': q['id'], 'selected_choices': self.correct_choice_ids_for(q['id'])} for q in questions]
+        return self.client.post(f'/api/level-attempts/{attempt_id}/submit/', {'answers': answers}, format='json')
+
+    def test_not_assigned_when_user_has_no_assessment_level(self):
+        self.learner.assessment_level = None
+        self.learner.save()
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {'assigned': False})
+
+    def test_not_assigned_when_organization_has_no_configured_level(self):
+        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.other_org_learner.save()  # other_org has no AssessmentLevel configured
+        self.auth_as(self.other_org_learner)
+
+        response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {'assigned': False})
+
+    def test_status_not_started_before_any_attempt(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/my-assessment-level/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['assigned'])
+        self.assertEqual(response.data['status'], 'NOT_STARTED')
+        self.assertIsNone(response.data['open_attempt_id'])
+        self.assertEqual(response.data['assessment_level']['questions_per_attempt'], 2)
+
+    def test_start_draws_the_configured_number_with_no_answer_key_exposed(self):
+        response = self.start_attempt()
+
+        self.assertEqual(response.status_code, 201)
+        questions = response.data['questions']
+        self.assertEqual(len(questions), 2)
+        for question in questions:
+            for choice in question['choices']:
+                self.assertNotIn('is_correct', choice)
+        self.assertEqual(response.data['answers'], [])
+
+    def test_status_in_progress_after_starting_and_blocks_a_second_start(self):
+        self.start_attempt()
+
+        status_response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_response.data['status'], 'IN_PROGRESS')
+        self.assertIsNotNone(status_response.data['open_attempt_id'])
+
+        second_start = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(second_start.status_code, 400)
+
+    def test_submit_all_correct_passes_and_reveals_answer_key(self):
+        start_response = self.start_attempt()
+        attempt_id = start_response.data['id']
+        questions = start_response.data['questions']
+
+        response = self.submit_all_correct(attempt_id, questions)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['passed'])
+        self.assertEqual(Decimal(response.data['score_percent']), Decimal('100.00'))
+        for answer in response.data['answers']:
+            self.assertTrue(answer['is_correct'])
+            self.assertEqual(set(answer['correct_choice_ids']), set(answer['selected_choices']))
+
+        status_response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_response.data['status'], 'PASSED')
+        self.assertIsNone(status_response.data['open_attempt_id'])
+
+    def test_submit_all_wrong_fails(self):
+        start_response = self.start_attempt()
+        attempt_id = start_response.data['id']
+        questions = start_response.data['questions']
+
+        answers = []
+        for question in questions:
+            wrong_choice = next(
+                c['id'] for c in question['choices'] if c['id'] not in self.correct_choice_ids_for(question['id'])
+            )
+            answers.append({'question': question['id'], 'selected_choices': [wrong_choice]})
+        response = self.client.post(f'/api/level-attempts/{attempt_id}/submit/', {'answers': answers}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['passed'])
+
+        status_response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_response.data['status'], 'FAILED')
+
+    def test_retake_allowed_after_submission_with_fresh_draw(self):
+        start_response = self.start_attempt()
+        self.submit_all_correct(start_response.data['id'], start_response.data['questions'])
+
+        second_start = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(second_start.status_code, 201)
+        self.assertNotEqual(second_start.data['id'], start_response.data['id'])
+
+    def test_cannot_submit_answers_missing_a_drawn_question(self):
+        start_response = self.start_attempt()
+        attempt_id = start_response.data['id']
+        questions = start_response.data['questions']
+
+        answers = [{'question': questions[0]['id'], 'selected_choices': self.correct_choice_ids_for(questions[0]['id'])}]
+        response = self.client.post(f'/api/level-attempts/{attempt_id}/submit/', {'answers': answers}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_cannot_submit_a_question_not_drawn_for_this_attempt(self):
+        start_response = self.start_attempt()
+        attempt_id = start_response.data['id']
+        questions = start_response.data['questions']
+        drawn_ids = {q['id'] for q in questions}
+        not_drawn = next(q for q in (self.q1, self.q2, self.q3) if q.id not in drawn_ids)
+
+        answers = [{'question': q['id'], 'selected_choices': self.correct_choice_ids_for(q['id'])} for q in questions]
+        answers[0]['question'] = not_drawn.id
+        response = self.client.post(f'/api/level-attempts/{attempt_id}/submit/', {'answers': answers}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_cannot_submit_the_same_attempt_twice(self):
+        start_response = self.start_attempt()
+        self.submit_all_correct(start_response.data['id'], start_response.data['questions'])
+
+        second_submit = self.client.post(f'/api/level-attempts/{start_response.data["id"]}/submit/', {'answers': []}, format='json')
+        self.assertEqual(second_submit.status_code, 400)
+
+    def test_another_user_cannot_view_or_submit_someone_elses_attempt(self):
+        start_response = self.start_attempt()
+        attempt_id = start_response.data['id']
+
+        self.other_org_learner.organization = self.org
+        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.other_org_learner.save()
+        self.auth_as(self.other_org_learner)
+
+        get_response = self.client.get(f'/api/level-attempts/{attempt_id}/')
+        self.assertEqual(get_response.status_code, 404)
+
+        submit_response = self.client.post(f'/api/level-attempts/{attempt_id}/submit/', {'answers': []}, format='json')
+        self.assertEqual(submit_response.status_code, 404)
+
+    def test_start_requires_an_assigned_assessment_level(self):
+        self.learner.assessment_level = None
+        self.learner.save()
+        response = self.start_attempt()
+        self.assertEqual(response.status_code, 400)
+
+
+class LevelAssessmentBadgeTests(TestCase):
+    """
+    gamification.services.award_badges_for_level_assessment_attempt — the
+    five level-assessment-specific achievement conditions, exercised directly
+    against manually-built attempts/answers (rather than the random-draw
+    service) so each scenario's exact sequence/history is under test control.
+    """
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-badges')
+        self.level = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=5,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.questions = []
+        for i in range(5):
+            question = LevelQuestion.objects.create(
+                question_set=question_set, question_text=f'Q{i}?',
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+            )
+            LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+            LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+            self.questions.append(question)
+
+    def make_user(self, email, branch_department=''):
+        return User.objects.create_user(
+            email=email, password='pw', role=User.Role.LEARNER, organization=self.org,
+            assessment_level=User.AssessmentLevel.OFFICER, branch_department=branch_department,
+        )
+
+    def make_attempt(self, user, correctness, passed, questions_drawn=None):
+        """`correctness` is a list of bools in drawn order, one per question in self.questions[:len(correctness)]."""
+        questions = questions_drawn or self.questions[: len(correctness)]
+        attempt = LevelAssessmentAttempt.objects.create(
+            user=user, assessment_level=self.level, questions_drawn=[q.id for q in questions],
+            submitted_at=timezone.now(), passed=passed,
+            score_percent=Decimal('100.00') if all(correctness) else Decimal('40.00'),
+        )
+        for question, is_correct in zip(questions, correctness):
+            LevelAssessmentAnswer.objects.create(attempt=attempt, question=question, is_correct=is_correct)
+        return attempt
+
+    def earned_keys(self, user):
+        return set(UserBadge.objects.filter(user=user).values_list('badge__key', flat=True))
+
+    # --- First Strike ---
+
+    def test_first_strike_awarded_on_first_attempt_with_a_correct_answer(self):
+        user = self.make_user('a@example.com')
+        attempt = self.make_attempt(user, [True, False], passed=False)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertIn('first_strike', self.earned_keys(user))
+
+    def test_first_strike_not_awarded_if_first_attempt_all_wrong(self):
+        user = self.make_user('b@example.com')
+        attempt = self.make_attempt(user, [False, False], passed=False)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertNotIn('first_strike', self.earned_keys(user))
+
+    def test_first_strike_not_awarded_on_a_later_attempt(self):
+        user = self.make_user('c@example.com')
+        self.make_attempt(user, [False, False], passed=False)  # first attempt, all wrong
+        second_attempt = self.make_attempt(user, [True, True], passed=False)  # second attempt, correct
+
+        award_badges_for_level_assessment_attempt(second_attempt)
+
+        self.assertNotIn('first_strike', self.earned_keys(user))
+
+    # --- Hat Trick ---
+
+    def test_hat_trick_awarded_for_three_consecutive_correct_in_drawn_order(self):
+        user = self.make_user('d@example.com')
+        attempt = self.make_attempt(user, [True, True, True, False, False], passed=False)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertIn('hat_trick', self.earned_keys(user))
+
+    def test_hat_trick_awarded_for_a_trailing_streak(self):
+        user = self.make_user('e@example.com')
+        attempt = self.make_attempt(user, [True, False, True, True, True], passed=False)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertIn('hat_trick', self.earned_keys(user))
+
+    def test_hat_trick_not_awarded_without_three_in_a_row(self):
+        user = self.make_user('f@example.com')
+        attempt = self.make_attempt(user, [True, True, False, True, True], passed=False)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertNotIn('hat_trick', self.earned_keys(user))
+
+    # --- Perfect Score ---
+
+    def test_perfect_score_awarded_for_100_percent_level_assessment(self):
+        user = self.make_user('g@example.com')
+        attempt = self.make_attempt(user, [True] * 5, passed=True)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertIn('perfect_score', self.earned_keys(user))
+
+    def test_perfect_score_not_awarded_below_100_percent(self):
+        user = self.make_user('h@example.com')
+        attempt = self.make_attempt(user, [True, True, True, True, False], passed=True)
+        attempt.score_percent = Decimal('80.00')
+        attempt.save()
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertNotIn('perfect_score', self.earned_keys(user))
+
+    # --- Comeback ---
+
+    def test_comeback_awarded_after_a_prior_failed_attempt_at_the_same_level(self):
+        user = self.make_user('i@example.com')
+        self.make_attempt(user, [False, False], passed=False)
+        second_attempt = self.make_attempt(user, [True, True], passed=True)
+
+        award_badges_for_level_assessment_attempt(second_attempt)
+
+        self.assertIn('comeback', self.earned_keys(user))
+
+    def test_comeback_not_awarded_when_first_attempt_already_passed(self):
+        user = self.make_user('j@example.com')
+        attempt = self.make_attempt(user, [True, True], passed=True)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertNotIn('comeback', self.earned_keys(user))
+
+    def test_comeback_not_awarded_when_the_retake_also_fails(self):
+        user = self.make_user('k@example.com')
+        self.make_attempt(user, [False, False], passed=False)
+        second_attempt = self.make_attempt(user, [False, False], passed=False)
+
+        award_badges_for_level_assessment_attempt(second_attempt)
+
+        self.assertNotIn('comeback', self.earned_keys(user))
+
+    # --- Branch Pride ---
+
+    def test_branch_pride_awarded_to_first_passer_in_a_branch(self):
+        user = self.make_user('l@example.com', branch_department='Head Office')
+        attempt = self.make_attempt(user, [True, True], passed=True)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertIn('branch_pride', self.earned_keys(user))
+
+    def test_branch_pride_not_awarded_to_second_passer_in_the_same_branch(self):
+        first_user = self.make_user('m@example.com', branch_department='Head Office')
+        first_attempt = self.make_attempt(first_user, [True, True], passed=True)
+        award_badges_for_level_assessment_attempt(first_attempt)
+
+        second_user = self.make_user('n@example.com', branch_department='Head Office')
+        second_attempt = self.make_attempt(second_user, [True, True], passed=True)
+        award_badges_for_level_assessment_attempt(second_attempt)
+
+        self.assertNotIn('branch_pride', self.earned_keys(second_user))
+
+    def test_branch_pride_awarded_independently_per_branch(self):
+        first_user = self.make_user('o@example.com', branch_department='Head Office')
+        award_badges_for_level_assessment_attempt(self.make_attempt(first_user, [True, True], passed=True))
+
+        other_branch_user = self.make_user('p@example.com', branch_department='Pokhara Branch')
+        other_attempt = self.make_attempt(other_branch_user, [True, True], passed=True)
+        award_badges_for_level_assessment_attempt(other_attempt)
+
+        self.assertIn('branch_pride', self.earned_keys(other_branch_user))
+
+    def test_branch_pride_not_awarded_without_a_branch_department(self):
+        user = self.make_user('q@example.com', branch_department='')
+        attempt = self.make_attempt(user, [True, True], passed=True)
+
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertNotIn('branch_pride', self.earned_keys(user))
+
+    # --- Idempotency / already-earned ---
+
+    def test_badge_not_re_awarded_if_already_earned(self):
+        user = self.make_user('r@example.com')
+        badge = Badge.objects.get(key='first_strike')
+        UserBadge.objects.create(user=user, badge=badge)
+
+        attempt = self.make_attempt(user, [True, True], passed=False)
+        award_badges_for_level_assessment_attempt(attempt)
+
+        self.assertEqual(UserBadge.objects.filter(user=user, badge=badge).count(), 1)
+
+
+class LevelAssessmentBadgeIntegrationTests(BaseAPITestCase):
+    """Confirms the submit endpoint actually wires up badge awarding, not just the service function in isolation."""
+
+    def test_submitting_a_perfect_first_attempt_awards_first_strike_and_perfect_score(self):
+        level = AssessmentLevel.objects.create(
+            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=level, label='Set 1')
+        question = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q1?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        correct_choice = LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+        LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+        self.auth_as(self.learner)
+
+        start_response = self.client.post('/api/level-attempts/start/')
+        attempt_id = start_response.data['id']
+
+        submit_response = self.client.post(
+            f'/api/level-attempts/{attempt_id}/submit/',
+            {'answers': [{'question': question.id, 'selected_choices': [correct_choice.id]}]},
+            format='json',
+        )
+
+        self.assertEqual(submit_response.status_code, 200)
+        earned = set(UserBadge.objects.filter(user=self.learner).values_list('badge__key', flat=True))
+        self.assertIn('first_strike', earned)
+        self.assertIn('perfect_score', earned)

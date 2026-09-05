@@ -6,6 +6,7 @@ import { CourseDetailPage } from './pages/CourseDetailPage'
 import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LearnerReportsPage } from './pages/LearnerReportsPage'
+import { LevelAssessmentPage } from './pages/LevelAssessmentPage'
 import { LoginPage } from './pages/LoginPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
 import { AdminSectionLayout } from './pages/admin/AdminSectionLayout'
@@ -42,6 +43,7 @@ function App() {
           <Route path="/courses" element={<CoursesPage />} />
           <Route path="/courses/:id" element={<CourseDetailPage />} />
           <Route path="/assessments" element={<AssessmentsPage />} />
+          <Route path="/level-assessment" element={<LevelAssessmentPage />} />
           <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />
           <Route path="/reports" element={<LearnerReportsPage />} />

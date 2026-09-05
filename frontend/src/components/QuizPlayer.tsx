@@ -2,11 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../lib/apiClient'
 import { fetchQuizDetail, submitQuizAttempt } from '../lib/quizApi'
 import { CategorizeAnswer } from './CategorizeAnswer'
+import { ChoiceQuestionAnswer } from './ChoiceQuestionAnswer'
+import { ChoiceQuestionResult } from './ChoiceQuestionResult'
 import { FillBlankSentence } from './FillBlankSentence'
 import { FillBlankTextAnswer } from './FillBlankTextAnswer'
 import { HotspotAnswer } from './HotspotAnswer'
 import { MatchingAnswer } from './MatchingAnswer'
 import { OrderingAnswer } from './OrderingAnswer'
+import { QuestionFeedback } from './QuestionFeedback'
 import { WordBankAnswer } from './WordBankAnswer'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
@@ -254,6 +257,11 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
     return answer?.kind === 'WORD_BANK' ? answer.placements : {}
   }
 
+  function getChoiceValue(question: Question): Set<number> {
+    const answer = answers[question.id]
+    return answer?.kind === 'CHOICE' ? answer.selected : new Set()
+  }
+
   if (stage === 'intro') {
     return (
       <Card className="text-center">
@@ -358,29 +366,13 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                     <p className="text-sm text-neutral-400 italic">This question is missing its image.</p>
                   )
                 ) : (
-                  <div className="space-y-2">
-                    {question.choices.map((choice) => {
-                      const answer = answers[question.id]
-                      const selected = answer?.kind === 'CHOICE' && answer.selected.has(choice.id)
-                      return (
-                        <label
-                          key={choice.id}
-                          className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition ${
-                            selected ? 'border-brand-navy bg-brand-navy/5' : 'border-neutral-200 hover:bg-neutral-50'
-                          }`}
-                        >
-                          <input
-                            type={question.question_type === 'MULTIPLE_ANSWER' ? 'checkbox' : 'radio'}
-                            name={`question-${question.id}`}
-                            checked={selected}
-                            onChange={() => toggleChoice(question, choice.id)}
-                            className="h-4 w-4"
-                          />
-                          {choice.choice_text}
-                        </label>
-                      )
-                    })}
-                  </div>
+                  <ChoiceQuestionAnswer
+                    questionId={question.id}
+                    isMultiple={question.question_type === 'MULTIPLE_ANSWER'}
+                    choices={question.choices}
+                    selected={getChoiceValue(question)}
+                    onToggle={(choiceId) => toggleChoice(question, choiceId)}
+                  />
                 )}
               </div>
             </div>
@@ -603,46 +595,23 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                     </ul>
                   </div>
                 ) : (
-                  <ul className="mt-2 space-y-1">
-                    {question.choices.map((choice) => {
-                      const wasSelected = answer?.selected_choices.includes(choice.id) ?? false
-                      // The quiz itself never sends choice.is_correct to a learner (it
-                      // would leak the answer key while the quiz is in progress). Once
-                      // there's a result, the attempt's own answer carries the correct
-                      // choice ids for this question instead — safe to show now.
-                      const knownCorrect = answer?.correct_choice_ids.includes(choice.id) ?? false
-                      return (
-                        <li
-                          key={choice.id}
-                          className={`text-sm ${
-                            knownCorrect
-                              ? 'font-medium text-emerald-700'
-                              : wasSelected
-                                ? 'text-neutral-900'
-                                : 'text-neutral-500'
-                          }`}
-                        >
-                          {wasSelected ? '●' : '○'} {choice.choice_text}
-                          {knownCorrect && ' (correct answer)'}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-
-                {answer?.explanation && (
-                  <div
-                    className="mt-3 w-full min-w-0 rounded-md bg-neutral-50 p-3 text-sm text-neutral-700 [overflow-wrap:anywhere]"
-                    dangerouslySetInnerHTML={{ __html: answer.explanation }}
+                  // The quiz itself never sends choice.is_correct to a learner (it
+                  // would leak the answer key while the quiz is in progress). Once
+                  // there's a result, the attempt's own answer carries the correct
+                  // choice ids for this question instead — safe to show now.
+                  <ChoiceQuestionResult
+                    choices={question.choices}
+                    selectedIds={answer?.selected_choices ?? []}
+                    correctIds={answer?.correct_choice_ids ?? []}
                   />
                 )}
 
-                {answer?.is_correct && answer.feedback_correct && (
-                  <p className="mt-2 break-words text-sm text-emerald-700">{answer.feedback_correct}</p>
-                )}
-                {answer && !answer.is_correct && answer.feedback_incorrect && (
-                  <p className="mt-2 break-words text-sm text-red-700">{answer.feedback_incorrect}</p>
-                )}
+                <QuestionFeedback
+                  explanation={answer?.explanation}
+                  isCorrect={answer?.is_correct}
+                  feedbackCorrect={answer?.feedback_correct}
+                  feedbackIncorrect={answer?.feedback_incorrect}
+                />
               </div>
             )
           })}
