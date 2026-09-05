@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Pause, Play } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { Modal } from '../ui/Modal'
 import type { NarrationLanguage } from '../../types/auth'
 import type { SlideNarration } from '../../types/narration'
 
@@ -24,6 +25,22 @@ function formatTime(seconds: number): string {
   return `${minutes}:${secs.toString().padStart(2, '0')}`
 }
 
+// Splits on English/Nepali sentence-ending punctuation (the Devanagari
+// danda "।" included) to get karaoke-style highlight units. There's no
+// per-word timing from Azure TTS stored anywhere (the backend only saves
+// the finished audio_file, not word-boundary events), so which sentence is
+// "active" is an estimate — each sentence's time range is its share of
+// script_text's total character count, applied to the audio's actual
+// duration. That's a reasonable approximation for narration-paced speech,
+// not an exact sync — a real fix needs Azure's word-boundary events
+// captured at generation time and stored alongside the audio.
+function splitIntoSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?।])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 // The audio transport + transcript toggle shown inside NarrationMascot's
 // popover panel once a learner clicks the mascot. Supplementary aid — never
 // touches SlidePlayer's dwell timer or completion gating.
@@ -42,9 +59,29 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
   const [duration, setDuration] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const sentenceRefs = useRef<(HTMLSpanElement | null)[]>([])
 
   const activeNarration = narrations.find((n) => n.language === selectedLanguage) ?? narrations[0]
   const isFallback = !bothAvailable && selectedLanguage !== preferredLanguage
+
+  const sentenceRanges = useMemo(() => {
+    const sentences = splitIntoSentences(activeNarration.script_text)
+    const totalChars = sentences.reduce((sum, s) => sum + s.length, 0) || 1
+    let cumulative = 0
+    return sentences.map((text) => {
+      const start = cumulative / totalChars
+      cumulative += text.length
+      return { text, start, end: cumulative / totalChars }
+    })
+  }, [activeNarration.script_text])
+
+  const progress = duration > 0 ? currentTime / duration : 0
+  const activeSentenceIndex = sentenceRanges.findIndex((r) => progress >= r.start && progress < r.end)
+
+  useEffect(() => {
+    if (!showTranscript || activeSentenceIndex < 0) return
+    sentenceRefs.current[activeSentenceIndex]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [showTranscript, activeSentenceIndex])
 
   useEffect(() => {
     onPlayingChange?.(isPlaying)
@@ -99,9 +136,24 @@ export function NarrationPlayer({ narrations, onPlayingChange }: NarrationPlayer
   return (
     <div className="relative">
       {showTranscript && (
-        <div className="absolute bottom-full left-0 mb-2 max-h-56 w-full overflow-y-auto rounded-lg border border-neutral-200 bg-white p-3 text-xs whitespace-pre-wrap text-neutral-700 shadow-lg">
-          {activeNarration.script_text}
-        </div>
+        <Modal title="Transcript" onClose={() => setShowTranscript(false)} widthClassName="max-w-xl">
+          <p className="mb-3 text-xs text-neutral-400">
+            The currently-playing sentence is estimated from playback position, not exact word timing.
+          </p>
+          <p className="text-sm leading-relaxed text-neutral-700">
+            {sentenceRanges.map((sentence, i) => (
+              <span
+                key={i}
+                ref={(el) => {
+                  sentenceRefs.current[i] = el
+                }}
+                className={`rounded ${i === activeSentenceIndex ? 'bg-brand-gold/30 text-neutral-900' : ''}`}
+              >
+                {sentence.text}{' '}
+              </span>
+            ))}
+          </p>
+        </Modal>
       )}
 
       {/* Two rows instead of one — transport (play/seek/time) on top, the
