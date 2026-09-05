@@ -133,7 +133,7 @@ export function NarrationPlayer({ narrations, onClose, canvasRef }: NarrationPla
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-5 text-[15px] leading-relaxed text-neutral-700">
+      <div className="flex-1 overflow-y-auto p-5 text-[17px] leading-relaxed text-neutral-700">
         {isFallback && (
           <p className="mb-3 text-xs text-neutral-500">
             Not yet available in {LANGUAGE_LABEL[preferredLanguage]} — showing {LANGUAGE_LABEL[selectedLanguage]}.
