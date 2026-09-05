@@ -1,4 +1,5 @@
 export type Role = 'LEARNER' | 'INSTRUCTOR' | 'ORG_ADMIN' | 'PLATFORM_ADMIN'
+export type NarrationLanguage = 'en' | 'ne'
 
 export interface Organization {
   id: number
@@ -20,6 +21,7 @@ export interface User {
   is_active: boolean
   is_demo: boolean
   must_reset_password: boolean
+  preferred_narration_language: NarrationLanguage
 }
 
 export interface AuthTokens {

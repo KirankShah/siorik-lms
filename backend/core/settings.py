@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'certificates',
     'audit',
     'dialogue',
+    'narration',
 ]
 
 MIDDLEWARE = [
@@ -94,6 +95,14 @@ CERTIFICATE_VERIFICATION_BASE_URL = os.environ.get('CERTIFICATE_VERIFICATION_BAS
 # invite emails (accounts.services.send_demo_user_invite_email) — the backend
 # has no other way to know the frontend's origin.
 FRONTEND_BASE_URL = os.environ.get('FRONTEND_BASE_URL', 'http://localhost:5173')
+
+# Claude (script generation) and Azure Neural TTS (audio synthesis) for
+# narration.services.generate_slide_narration — read entirely from the
+# environment, never hardcoded. Left blank in dev is fine: generation just
+# raises NarrationGenerationError until they're set.
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+AZURE_SPEECH_KEY = os.environ.get('AZURE_SPEECH_KEY', '')
+AZURE_SPEECH_REGION = os.environ.get('AZURE_SPEECH_REGION', '')
 
 # SMTP credentials read entirely from the environment — never hardcoded. Only
 # ever set EMAIL_HOST_PASSWORD via .env (gitignored) locally or the host's

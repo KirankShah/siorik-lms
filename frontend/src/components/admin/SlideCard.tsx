@@ -16,6 +16,7 @@ import { ElementFormModal } from './ElementFormModal'
 import { ElementTypePicker } from './ElementTypePicker'
 import { ImageWidthPicker } from './ImageWidthPicker'
 import { LayoutPicker } from './LayoutPicker'
+import { NarrationPanel } from './NarrationPanel'
 import { TemplatePicker } from './TemplatePicker'
 import { ElementPreview } from '../ElementPreview'
 import { SlideElementsView } from '../SlideElementsView'
@@ -358,6 +359,12 @@ export function SlideCard({ slide, dragHandleProps, courseTemplateId, onDuplicat
           <SlideElementsView elements={elements} layout={slide.layout} template={effectiveTemplate} />
         )}
       </div>
+
+      {isEditing && (
+        <div className="mt-4">
+          <NarrationPanel slideId={slide.id} />
+        </div>
+      )}
 
       {isEditing && slide.slide_type === 'CONTENT' && (
         <button

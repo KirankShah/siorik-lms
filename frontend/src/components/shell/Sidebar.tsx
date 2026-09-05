@@ -34,7 +34,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   }`
 
 export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
-  const { user, logout } = useAuth()
+  const { user, logout, updateNarrationLanguage } = useAuth()
   const admin = isAdminRole(user?.role)
 
   const navItems: NavItem[] = [
@@ -103,6 +103,19 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
           <p className="truncate text-sm font-medium text-white">{user?.email}</p>
           <p className="text-xs text-white/50">{user?.role.replace('_', ' ')}</p>
         </div>
+        {user && (
+          <div className="mt-3 px-3">
+            <label className="block text-xs text-white/50">Narration language</label>
+            <select
+              value={user.preferred_narration_language}
+              onChange={(e) => void updateNarrationLanguage(e.target.value as 'en' | 'ne')}
+              className="mt-1 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white"
+            >
+              <option value="en" className="text-neutral-900">English</option>
+              <option value="ne" className="text-neutral-900">Nepali</option>
+            </select>
+          </div>
+        )}
         <button
           type="button"
           onClick={logout}

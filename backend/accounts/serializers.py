@@ -43,8 +43,17 @@ class UserSerializer(serializers.ModelSerializer):
             'is_active',
             'is_demo',
             'must_reset_password',
+            'preferred_narration_language',
         ]
         read_only_fields = fields
+
+
+class UserPreferenceSerializer(serializers.ModelSerializer):
+    """Backs MeView's PATCH — the only self-service field a user can change here."""
+
+    class Meta:
+        model = User
+        fields = ['preferred_narration_language']
 
 
 class DemoUserCreateSerializer(serializers.Serializer):

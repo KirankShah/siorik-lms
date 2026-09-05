@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { apiFetch, login as loginRequest, setSessionExpiredHandler } from '../lib/apiClient'
 import { getTokenExpiryMs } from '../lib/jwt'
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from '../lib/tokenStorage'
-import type { User } from '../types/auth'
+import type { NarrationLanguage, User } from '../types/auth'
 
 interface AuthContextValue {
   user: User | null
@@ -11,6 +11,7 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>
   logout: () => void
   refreshUser: () => Promise<void>
+  updateNarrationLanguage: (language: NarrationLanguage) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -81,6 +82,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me)
   }, [])
 
+  const updateNarrationLanguage = useCallback(async (language: NarrationLanguage) => {
+    const me = await apiFetch<User>('/auth/me/', {
+      method: 'PATCH',
+      body: { preferred_narration_language: language },
+    })
+    setUser(me)
+  }, [])
+
   useEffect(() => {
     setSessionExpiredHandler(() => logout())
     return () => setSessionExpiredHandler(null)
@@ -114,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser, updateNarrationLanguage }}>
       {children}
     </AuthContext.Provider>
   )

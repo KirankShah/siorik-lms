@@ -44,6 +44,7 @@ from courses.models import (
     SlideProgress,
 )
 from courses.video_streaming import build_video_stream_token
+from narration.models import SlideNarration
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
 
@@ -2205,3 +2206,118 @@ class DemoLessonAccessTests(BaseAPITestCase):
             f'/api/courses/{self.published_org_course.slug}/demo-lesson-access/', {'lesson': foreign_lesson.id}
         )
         self.assertEqual(response.status_code, 404)
+
+
+class SlideNarrationFlowTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.content_slide = Slide.objects.create(
+            lesson=self.lesson1, order=1, title='Intro Slide', slide_type=Slide.SlideType.CONTENT,
+        )
+        Element.objects.create(
+            slide=self.content_slide, order=1, element_type=Element.ElementType.TEXT,
+            rich_text='<p>Welcome to your AML training.</p>',
+        )
+        self.empty_slide = Slide.objects.create(
+            lesson=self.lesson1, order=2, title='Empty Slide', slide_type=Slide.SlideType.CONTENT,
+        )
+
+    def test_learner_cannot_generate_narration(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+        self.assertEqual(response.status_code, 403)
+
+    def test_instructor_and_org_admin_cannot_generate_narration(self):
+        for user in (self.instructor, self.org_admin):
+            self.auth_as(user)
+            response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+            self.assertEqual(response.status_code, 403)
+
+    def test_generate_rejects_invalid_language(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'fr'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_generate_fails_when_slide_has_no_narratable_text(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/slide-narrations/generate/', {'slide': self.empty_slide.id, 'language': 'en'})
+        self.assertEqual(response.status_code, 400)
+
+    @patch('narration.services._synthesize_speech')
+    @patch('narration.services._generate_script')
+    def test_platform_admin_can_generate_narration(self, mock_generate_script, mock_synthesize_speech):
+        mock_generate_script.return_value = 'Welcome to this training module.'
+        mock_synthesize_speech.return_value = (b'fake-mp3-bytes', 'en-US-JennyNeural')
+
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['script_text'], 'Welcome to this training module.')
+        self.assertEqual(response.data['voice_name'], 'en-US-JennyNeural')
+        self.assertIsNotNone(response.data['audio_file'])
+
+        narration = SlideNarration.objects.get(slide=self.content_slide, language='en')
+        self.assertEqual(narration.generated_by, self.platform_admin)
+
+    @patch('narration.services._synthesize_speech')
+    @patch('narration.services._generate_script')
+    def test_regenerating_one_language_leaves_the_other_untouched(self, mock_generate_script, mock_synthesize_speech):
+        mock_generate_script.side_effect = ['English v1', 'Nepali script', 'English v2']
+        mock_synthesize_speech.side_effect = [
+            (b'audio-en-1', 'en-US-JennyNeural'),
+            (b'audio-ne', 'ne-NP-HemkalaNeural'),
+            (b'audio-en-2', 'en-US-JennyNeural'),
+        ]
+        self.auth_as(self.platform_admin)
+
+        self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+        self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'ne'})
+        self.assertEqual(SlideNarration.objects.filter(slide=self.content_slide).count(), 2)
+
+        response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+        self.assertEqual(response.data['script_text'], 'English v2')
+        self.assertEqual(SlideNarration.objects.filter(slide=self.content_slide).count(), 2)
+
+        ne_narration = SlideNarration.objects.get(slide=self.content_slide, language='ne')
+        self.assertEqual(ne_narration.script_text, 'Nepali script')
+
+    @patch('narration.services._synthesize_speech')
+    @patch('narration.services._generate_script')
+    def test_learner_can_view_generated_narration_for_a_visible_course(self, mock_generate_script, mock_synthesize_speech):
+        mock_generate_script.return_value = 'Script text'
+        mock_synthesize_speech.return_value = (b'audio-bytes', 'en-US-JennyNeural')
+        self.auth_as(self.platform_admin)
+        self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'en'})
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/slide-narrations/?slide={self.content_slide.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['language'], 'en')
+
+    def test_learner_in_other_org_cannot_see_narration_for_a_course_they_cannot_view(self):
+        self.auth_as(self.other_org_learner)
+        response = self.client.get(f'/api/slide-narrations/?slide={self.content_slide.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 0)
+
+
+class UserPreferenceApiTests(BaseAPITestCase):
+    def test_learner_can_set_preferred_narration_language(self):
+        self.auth_as(self.learner)
+        self.assertEqual(self.client.get('/api/auth/me/').data['preferred_narration_language'], 'en')
+
+        response = self.client.patch('/api/auth/me/', {'preferred_narration_language': 'ne'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['preferred_narration_language'], 'ne')
+
+        self.learner.refresh_from_db()
+        self.assertEqual(self.learner.preferred_narration_language, 'ne')
+
+    def test_patch_me_cannot_change_role(self):
+        self.auth_as(self.learner)
+        response = self.client.patch('/api/auth/me/', {'preferred_narration_language': 'ne', 'role': 'PLATFORM_ADMIN'})
+        self.assertEqual(response.status_code, 200)
+
+        self.learner.refresh_from_db()
+        self.assertEqual(self.learner.role, User.Role.LEARNER)

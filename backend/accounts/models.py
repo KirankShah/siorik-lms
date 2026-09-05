@@ -53,6 +53,10 @@ class User(AbstractUser):
         ORG_ADMIN = 'ORG_ADMIN', 'Org Admin'
         PLATFORM_ADMIN = 'PLATFORM_ADMIN', 'Platform Admin'
 
+    class NarrationLanguage(models.TextChoices):
+        EN = 'en', 'English'
+        NE = 'ne', 'Nepali'
+
     username = None
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.LEARNER)
@@ -72,6 +76,12 @@ class User(AbstractUser):
     # cleared by SetPasswordView once the user picks their own. Frontend's
     # ProtectedRoute redirects to /reset-password for as long as this is True.
     must_reset_password = models.BooleanField(default=False)
+    # The narration audio/script language the slide player defaults to for
+    # this learner — see narration app (SlideNarration.Language mirrors these
+    # same two codes). Settable by the learner themselves via MeView's PATCH.
+    preferred_narration_language = models.CharField(
+        max_length=5, choices=NarrationLanguage.choices, default=NarrationLanguage.EN
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

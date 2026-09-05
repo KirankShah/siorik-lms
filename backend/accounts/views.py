@@ -4,7 +4,7 @@ import io
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
-from rest_framework.generics import RetrieveAPIView
+from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -17,7 +17,13 @@ from audit.services import log_action
 from core.permissions import IsAdminRole, IsPlatformAdminRole
 
 from .models import Organization
-from .serializers import DemoUserCreateSerializer, OrganizationSerializer, SetPasswordSerializer, UserSerializer
+from .serializers import (
+    DemoUserCreateSerializer,
+    OrganizationSerializer,
+    SetPasswordSerializer,
+    UserPreferenceSerializer,
+    UserSerializer,
+)
 from .services import UserProvisioningError, provision_demo_user, provision_org_admin
 
 
@@ -39,12 +45,28 @@ class ThrottledTokenObtainPairView(TokenObtainPairView):
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
 
-class MeView(RetrieveAPIView):
+class MeView(RetrieveUpdateAPIView):
+    """
+    GET returns the full (read-only) profile. PATCH is narrower — only
+    self-service preferences (currently just preferred_narration_language)
+    go through UserPreferenceSerializer, so a learner can't use this endpoint
+    to change their own role/organization/etc.
+    """
+
     permission_classes = [IsAuthenticated]
-    serializer_class = UserSerializer
+    http_method_names = ['get', 'patch', 'head', 'options']
 
     def get_object(self):
         return self.request.user
+
+    def get_serializer_class(self):
+        if self.request.method == 'PATCH':
+            return UserPreferenceSerializer
+        return UserSerializer
+
+    def update(self, request, *args, **kwargs):
+        super().update(request, *args, **kwargs)
+        return Response(UserSerializer(request.user).data)
 
 
 class OrganizationViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
