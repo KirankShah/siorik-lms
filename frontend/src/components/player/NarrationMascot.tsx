@@ -92,11 +92,17 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
 
   const isDarkBackgroundTemplate = template ? isLightHexColor(template.text_color) : false
   const badgeClass = isDarkBackgroundTemplate ? 'bg-amber-50' : 'bg-brand-navy'
+  // A gentle continuous bob keeps the mascot visibly "alive" — separate from
+  // the bigger periodic peek above, which stays a rare, more deliberate
+  // attention-grab. Paused while the panel is open so it isn't distracting
+  // mid-use; combining it with the peek transform would fight that
+  // animation, so it steps aside whenever a peek is in progress.
+  const isBobbing = !panelOpen && !isPeeking
 
   return (
-    <div className="no-print fixed right-6 bottom-6 z-[110] flex flex-col items-end gap-2">
+    <div className="no-print fixed right-8 bottom-8 z-[110] flex flex-col items-end gap-3">
       {bubbleVisible && !panelOpen && (
-        <div className="max-w-56 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700 shadow-lg">
+        <div className="max-w-72 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700 shadow-lg">
           Feeling bored or confused? I can explain this in simple terms!
         </div>
       )}
@@ -124,13 +130,13 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
         type="button"
         onClick={handleMascotClick}
         aria-label={panelOpen ? 'Close narration helper' : 'Open narration helper'}
-        className="relative flex h-14 w-14 items-center justify-center"
+        className="relative flex h-36 w-36 items-center justify-center"
       >
-        <span className={`absolute inset-0 rounded-full border-2 border-brand-gold shadow-md ${badgeClass}`} />
+        <span className={`absolute inset-0 rounded-full border-2 border-brand-gold shadow-lg ${badgeClass}`} />
         <img
           src={bubbleVisible ? greetingHappy : mascotIdle}
           alt=""
-          className={`relative h-10 w-10 object-contain ${isPeeking ? 'mascot-peek' : ''}`}
+          className={`relative h-28 w-28 object-contain ${isPeeking ? 'mascot-peek' : isBobbing ? 'mascot-idle-bob' : ''}`}
         />
       </button>
     </div>

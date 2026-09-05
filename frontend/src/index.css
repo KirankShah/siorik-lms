@@ -55,6 +55,18 @@ body {
   animation: mascot-peek 700ms ease-in-out;
 }
 
+/* Gentle continuous idle bob — always running while idle (see
+   NarrationMascot's isBobbing), independent of the rarer mascot-peek above,
+   to keep the mascot visibly alive rather than a static icon. Small
+   amplitude, transform-only, so it never shifts surrounding content. */
+@keyframes mascot-idle-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.mascot-idle-bob {
+  animation: mascot-idle-bob 2.6s ease-in-out infinite;
+}
+
 /* "Download as PDF" on a Content page — print (or "Save as PDF") only the
    element marked .print-target, hiding the rest of the app chrome. */
 @media print {
