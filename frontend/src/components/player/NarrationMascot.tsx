@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import greetingHappy from '../../assets/greeting-happy.png'
 import mascotIdle from '../../assets/greeting-neutral.png'
 import { NarrationPlayer } from './NarrationPlayer'
@@ -11,6 +12,11 @@ interface NarrationMascotProps {
   // The slide's active template (course template, or its own override) —
   // drives the badge's adaptive contrast. See isLightHexColor below.
   template: SlideTemplate | null
+  // The actual on-screen slide box (see SlideCanvas) — threaded through to
+  // NarrationPlayer so its transcript reading pane can portal directly into
+  // it, sized as a true fraction of the real slide footprint in both
+  // standard and fullscreen.
+  canvasRef: RefObject<HTMLDivElement | null>
 }
 
 const BUBBLE_AUTO_DISMISS_MS = 5000
@@ -37,14 +43,14 @@ function isLightHexColor(hex: string): boolean {
 }
 
 // Floating, mascot-triggered entry point to the narration player — just the
-// icon/badge/speech-bubble; the player itself is a Modal (NarrationPlayer),
-// not a docked panel, so it never competes with the mascot or slide content
-// for layout space. Fixed-position so it never shifts other slide content
-// and is unaffected by the fullscreen overlay's clipped, non-scrolling
-// content well. Visible only on CONTENT slides with at least one
-// SlideNarration (ContentSlidePlayer only renders this when narrations is
-// non-empty).
-export function NarrationMascot({ slideId, narrations, template }: NarrationMascotProps) {
+// icon/badge/speech-bubble; NarrationPlayer renders its own compact controls
+// panel docked above this button, separate from its transcript reading pane
+// (portaled into the slide canvas — see canvasRef). Fixed-position so the
+// mascot/controls panel never shift other slide content and are unaffected
+// by the fullscreen overlay's clipped, non-scrolling content well. Visible
+// only on CONTENT slides with at least one SlideNarration (ContentSlidePlayer
+// only renders this when narrations is non-empty).
+export function NarrationMascot({ slideId, narrations, template, canvasRef }: NarrationMascotProps) {
   const [bubbleVisible, setBubbleVisible] = useState(true)
   const [panelOpen, setPanelOpen] = useState(false)
   const [isPeeking, setIsPeeking] = useState(false)
@@ -143,7 +149,9 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
         </button>
       </div>
 
-      {panelOpen && <NarrationPlayer narrations={narrations} onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (
+        <NarrationPlayer narrations={narrations} onClose={() => setPanelOpen(false)} canvasRef={canvasRef} />
+      )}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Download, Maximize } from 'lucide-react'
 import { NarrationMascot } from './NarrationMascot'
 import { SlideCanvas } from './SlideCanvas'
@@ -39,6 +39,7 @@ export function ContentSlidePlayer({
   const [narrations, setNarrations] = useState<SlideNarration[]>([])
   const [error, setError] = useState<string | null>(null)
   const [completedDialogueIds, setCompletedDialogueIds] = useState<Set<number>>(new Set())
+  const canvasRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setElements(null)
@@ -103,7 +104,7 @@ export function ContentSlidePlayer({
           which also resets the fixed-canvas sizing/scroll/crop below so the
           PDF gets full flowing content instead of a clipped 16:9 snapshot. */}
       <div className={`print-target w-full ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
-        <SlideCanvas fullscreen={isFullscreen}>
+        <SlideCanvas ref={canvasRef} fullscreen={isFullscreen}>
           <SlideElementsView
             elements={elements}
             layout={slide.layout}
@@ -122,7 +123,9 @@ export function ContentSlidePlayer({
           completion gating either. Still renders through this same
           ContentSlidePlayer tree the standard and fullscreen views both
           already share (see CourseDetailPage's single slidePlayerNode). */}
-      {hasNarration && <NarrationMascot slideId={slide.id} narrations={narrations} template={template} />}
+      {hasNarration && (
+        <NarrationMascot slideId={slide.id} narrations={narrations} template={template} canvasRef={canvasRef} />
+      )}
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { forwardRef } from 'react'
 import type { ReactNode } from 'react'
 
 interface SlideCanvasProps {
@@ -11,7 +12,17 @@ interface SlideCanvasProps {
 // same canvas box regardless of how much content it holds; layout/scroll
 // behavior inside it is SlideElementsView's job (see its canvasMode prop),
 // this component only owns the box's size, position, and clipping.
-export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
+//
+// Forwards a ref to the actual `.slide-canvas` box (not the outer centering
+// wrapper) so NarrationPlayer's transcript reading pane can portal into it —
+// that's the one element whose on-screen size IS the slide's real footprint
+// in both standard and fullscreen, so anchoring/sizing a "quarter of the
+// slide" overlay against it is correct in either view without any manual
+// measurement.
+export const SlideCanvas = forwardRef<HTMLDivElement, SlideCanvasProps>(function SlideCanvas(
+  { fullscreen, children },
+  ref,
+) {
   if (fullscreen) {
     return (
       // No manual padding here on purpose: max-width/max-height cap the box
@@ -21,6 +32,7 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
       // lopsided.
       <div className="flex h-full w-full items-center justify-center overflow-hidden">
         <div
+          ref={ref}
           className="slide-canvas relative overflow-hidden rounded-lg border border-black/10 bg-white shadow-lg"
           style={{
             aspectRatio: '16 / 9',
@@ -46,10 +58,11 @@ export function SlideCanvas({ fullscreen, children }: SlideCanvasProps) {
     // Height is never set directly; aspect-ratio derives it from the
     // resolved width, so the ratio stays locked at every size.
     <div
+      ref={ref}
       className="slide-canvas relative mx-auto overflow-hidden rounded-lg border border-neutral-200 bg-white"
       style={{ aspectRatio: '16 / 9', width: '90%' }}
     >
       {children}
     </div>
   )
-}
+})
