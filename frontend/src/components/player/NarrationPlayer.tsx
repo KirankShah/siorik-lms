@@ -118,9 +118,12 @@ export function NarrationPlayer({ narrations, onClose, canvasRef }: NarrationPla
   }
 
   const transcriptPane = showTranscript && canvasRef.current && (
-    <div className="no-print pointer-events-auto absolute inset-x-0 bottom-0 z-20 flex h-1/4 min-h-[160px] max-h-72 flex-col border-t border-neutral-200 bg-white shadow-2xl">
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-100 px-4 py-2">
-        <span className="text-sm font-semibold text-neutral-700">Transcript</span>
+    // Floats with margin on all three open sides (never flush to the slide's
+    // edges) as a glassy card — backdrop-blur + a translucent white gradient
+    // for the "gloss", ring + shadow for lift — rather than a flat docked bar.
+    <div className="no-print pointer-events-auto absolute right-6 bottom-6 left-6 z-20 flex h-2/5 min-h-[220px] max-h-[420px] flex-col overflow-hidden rounded-2xl border border-white/60 bg-gradient-to-b from-white/95 to-white/80 shadow-2xl ring-1 ring-black/5 backdrop-blur-md">
+      <div className="flex shrink-0 items-center justify-between border-b border-neutral-200/60 px-5 py-3">
+        <span className="text-sm font-semibold text-neutral-800">Transcript</span>
         <button
           type="button"
           onClick={() => setShowTranscript(false)}
@@ -130,7 +133,7 @@ export function NarrationPlayer({ narrations, onClose, canvasRef }: NarrationPla
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 text-sm leading-relaxed text-neutral-700">
+      <div className="flex-1 overflow-y-auto p-5 text-[15px] leading-relaxed text-neutral-700">
         {isFallback && (
           <p className="mb-3 text-xs text-neutral-500">
             Not yet available in {LANGUAGE_LABEL[preferredLanguage]} — showing {LANGUAGE_LABEL[selectedLanguage]}.
