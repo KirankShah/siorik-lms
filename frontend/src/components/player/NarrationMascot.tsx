@@ -18,6 +18,8 @@ const BUBBLE_AUTO_DISMISS_MS = 5000
 const PEEK_MIN_DELAY_MS = 15000
 const PEEK_MAX_DELAY_MS = 20000
 const PEEK_DURATION_MS = 700
+const GREETING_TEXT = 'Feeling bored or confused? I can explain this in simple terms!'
+const HOVER_TEXT = "Want me to summarize or explain this in simple terms — no need to read through it all?"
 
 // Perceived-brightness split (ITU-R BT.601) on a #rrggbb string — true above
 // the midpoint means "light color". Used on SlideTemplate.text_color: a
@@ -46,13 +48,16 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
   const [hasOpenedPanel, setHasOpenedPanel] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isPeeking, setIsPeeking] = useState(false)
+  const [isHovering, setIsHovering] = useState(false)
 
   const bubbleVisibleRef = useRef(bubbleVisible)
   const panelOpenRef = useRef(panelOpen)
   const isPlayingRef = useRef(isPlaying)
+  const isHoveringRef = useRef(isHovering)
   bubbleVisibleRef.current = bubbleVisible
   panelOpenRef.current = panelOpen
   isPlayingRef.current = isPlaying
+  isHoveringRef.current = isHovering
 
   // A fresh slide load: greet, then auto-dismiss into the small persistent icon.
   useEffect(() => {
@@ -65,15 +70,15 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
   }, [slideId])
 
   // Idle peek every 15-20s, skipped (and rescheduled) whenever the bubble is
-  // showing, the panel is open, or audio is playing — checked at fire time
-  // via refs so this scheduling loop doesn't need to restart on every state
-  // change, just on slide change.
+  // showing (greeting or hover), the panel is open, or audio is playing —
+  // checked at fire time via refs so this scheduling loop doesn't need to
+  // restart on every state change, just on slide change.
   useEffect(() => {
     let timeoutId: number
     function scheduleNext() {
       const delay = PEEK_MIN_DELAY_MS + Math.random() * (PEEK_MAX_DELAY_MS - PEEK_MIN_DELAY_MS)
       timeoutId = window.setTimeout(() => {
-        if (!bubbleVisibleRef.current && !panelOpenRef.current && !isPlayingRef.current) {
+        if (!bubbleVisibleRef.current && !panelOpenRef.current && !isPlayingRef.current && !isHoveringRef.current) {
           setIsPeeking(true)
           window.setTimeout(() => setIsPeeking(false), PEEK_DURATION_MS)
         }
@@ -94,10 +99,17 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
   const badgeClass = isDarkBackgroundTemplate ? 'bg-amber-50' : 'bg-brand-navy'
   // A gentle continuous bob keeps the mascot visibly "alive" — separate from
   // the bigger periodic peek above, which stays a rare, more deliberate
-  // attention-grab. Paused while the panel is open so it isn't distracting
-  // mid-use; combining it with the peek transform would fight that
-  // animation, so it steps aside whenever a peek is in progress.
-  const isBobbing = !panelOpen && !isPeeking
+  // attention-grab. Paused while the panel is open or being hovered so it
+  // isn't distracting once it already has the learner's attention;
+  // combining it with the peek transform would fight that animation, so it
+  // steps aside whenever a peek is in progress.
+  const isBobbing = !panelOpen && !isPeeking && !isHovering
+  // The auto-greeting takes priority over the hover prompt if both are
+  // somehow true at once (hovering during the first few seconds on a fresh
+  // slide) — once the greeting's own auto-dismiss timer clears it, hovering
+  // takes over as the way to bring the bubble back.
+  const showBubble = !panelOpen && (bubbleVisible || isHovering)
+  const bubbleText = bubbleVisible ? GREETING_TEXT : HOVER_TEXT
 
   return (
     // Vertically centered on the right edge rather than pinned to the
@@ -106,20 +118,24 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
     // FullscreenSlideOverlay's own nav bar both right-align at the bottom
     // of their respective views. Centering vertically clears both
     // unconditionally instead of needing to know either footer's exact height.
-    <div className="no-print fixed top-1/2 right-8 z-[110] -translate-y-1/2">
-      <div className="relative">
-        {bubbleVisible && !panelOpen && (
-          <div className="absolute right-0 bottom-full mb-3 max-w-72 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700 shadow-lg">
-            Feeling bored or confused? I can explain this in simple terms!
+    <div className="no-print fixed top-1/2 right-6 z-[110] -translate-y-1/2">
+      <div
+        className="relative"
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => setIsHovering(false)}
+      >
+        {showBubble && (
+          <div className="absolute right-0 bottom-full mb-4 max-w-80 rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-4 py-3 text-sm leading-snug text-neutral-700 shadow-xl">
+            {bubbleText}
           </div>
         )}
 
         {hasOpenedPanel && (
           <div
-            className={`absolute right-0 bottom-full mb-3 w-80 max-w-[85vw] rounded-lg border border-neutral-200 bg-white shadow-xl ${panelOpen ? '' : 'hidden'}`}
+            className={`absolute right-0 bottom-full mb-4 w-96 max-w-[90vw] rounded-lg border border-neutral-200 bg-white shadow-2xl ${panelOpen ? '' : 'hidden'}`}
           >
-            <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
-              <span className="text-xs font-semibold text-neutral-700">Narration</span>
+            <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
+              <span className="text-sm font-semibold text-neutral-700">Narration</span>
               <button
                 type="button"
                 onClick={() => setPanelOpen(false)}
@@ -129,7 +145,7 @@ export function NarrationMascot({ slideId, narrations, template }: NarrationMasc
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="p-3">
+            <div className="p-4">
               <NarrationPlayer narrations={narrations} onPlayingChange={setIsPlaying} />
             </div>
           </div>
