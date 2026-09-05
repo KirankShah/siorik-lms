@@ -118,8 +118,8 @@ export function NarrationPlayer({ narrations, onClose, canvasRef }: NarrationPla
   }
 
   const transcriptPane = showTranscript && canvasRef.current && (
-    <div className="no-print pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-1/4 min-w-[240px] max-w-xs flex-col border-l border-neutral-200 bg-white shadow-2xl">
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-100 px-4 py-3">
+    <div className="no-print pointer-events-auto absolute inset-x-0 bottom-0 z-20 flex h-1/4 min-h-[160px] max-h-72 flex-col border-t border-neutral-200 bg-white shadow-2xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-neutral-100 px-4 py-2">
         <span className="text-sm font-semibold text-neutral-700">Transcript</span>
         <button
           type="button"
