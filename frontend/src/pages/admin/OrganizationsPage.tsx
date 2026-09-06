@@ -56,7 +56,13 @@ export function OrganizationsPage() {
   }
 
   async function handleDelete(organization: Organization) {
-    if (!window.confirm(`Delete "${organization.name}"? This cannot be undone.`)) return
+    if (
+      !window.confirm(
+        `Delete "${organization.name}"? This permanently deletes all of its users and all of its own courses too. This cannot be undone.`
+      )
+    ) {
+      return
+    }
     setDeletingId(organization.id)
     setListError(null)
     try {
@@ -168,7 +174,8 @@ export function OrganizationsPage() {
         <Card>
           <h2 className="text-sm font-semibold text-neutral-900">Existing organizations</h2>
           <p className="mt-1 text-xs text-neutral-500">
-            Only an organization with no users or courses attached can be deleted — reassign or remove those first.
+            Deleting an organization also permanently deletes all of its users and all of its own courses (including
+            any cloned into it). This cannot be undone.
           </p>
 
           {listError && <p className="mt-4 text-sm text-red-600">{listError}</p>}

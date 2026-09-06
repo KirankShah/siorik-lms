@@ -17,6 +17,12 @@ export function deleteOrganization(id: number): Promise<void> {
   return apiFetch<void>(`/organizations/${id}/`, { method: 'DELETE' })
 }
 
+// PLATFORM_ADMIN-only — permanently deletes a LEARNER account (and,
+// via cascade, their enrollments/attempts/submissions).
+export function deleteLearner(userId: number): Promise<void> {
+  return apiFetch<void>(`/learners/${userId}/`, { method: 'DELETE' })
+}
+
 export interface DemoUserInput {
   name: string
   email: string

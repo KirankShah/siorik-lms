@@ -980,17 +980,52 @@ class OrganizationListTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Organization.objects.filter(id=empty_org.id).exists())
 
-    def test_cannot_delete_organization_with_users(self):
+    def test_deleting_organization_cascades_its_users_and_own_courses(self):
+        # A PLATFORM-owned course can have Course.organization set as inert
+        # metadata (ignored for access control there) — it must survive,
+        # just unlinked, not be deleted along with the organization.
+        tagged_platform_course = Course.objects.create(
+            title='Platform Tagged', slug='platform-tagged', organization=self.org,
+            content_owner=Course.ContentOwner.PLATFORM, is_published=True,
+        )
+
         self.auth_as(self.platform_admin)
         response = self.client.delete(f'/api/organizations/{self.org.id}/')
-        self.assertEqual(response.status_code, 400)
-        self.assertTrue(Organization.objects.filter(id=self.org.id).exists())
+        self.assertEqual(response.status_code, 204)
+
+        self.assertFalse(Organization.objects.filter(id=self.org.id).exists())
+        self.assertFalse(User.objects.filter(id__in=[self.learner.id, self.org_admin.id, self.instructor.id]).exists())
+        self.assertFalse(
+            Course.objects.filter(id__in=[self.published_org_course.id, self.unpublished_org_course.id]).exists()
+        )
+        tagged_platform_course.refresh_from_db()
+        self.assertIsNone(tagged_platform_course.organization_id)
 
     def test_org_admin_cannot_delete_organization(self):
         empty_org = Organization.objects.create(name='Empty Org 2', slug='empty-org-2')
         self.auth_as(self.org_admin)
         response = self.client.delete(f'/api/organizations/{empty_org.id}/')
         self.assertEqual(response.status_code, 403)
+
+
+class LearnerDeletionTests(BaseAPITestCase):
+    def test_platform_admin_can_delete_a_learner(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(f'/api/learners/{self.learner.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(User.objects.filter(id=self.learner.id).exists())
+
+    def test_org_admin_cannot_delete_a_learner(self):
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/learners/{self.learner.id}/')
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(User.objects.filter(id=self.learner.id).exists())
+
+    def test_cannot_delete_a_non_learner_via_this_endpoint(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(f'/api/learners/{self.instructor.id}/')
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(User.objects.filter(id=self.instructor.id).exists())
 
 
 class CourseBuilderTests(BaseAPITestCase):

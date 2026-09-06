@@ -793,6 +793,7 @@ def _build_enrollment_report_rows(user, query_params):
             user=enrollment.user, quiz__slide__lesson__module__course=enrollment.course
         ).aggregate(best=Max('score_percent'))['best']
         rows.append({
+            'user_id': enrollment.user_id,
             'learner_email': enrollment.user.email,
             'learner_name': enrollment.user.get_full_name() or enrollment.user.email,
             'course_title': enrollment.course.title,

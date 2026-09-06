@@ -1,4 +1,5 @@
 export interface ReportRow {
+  user_id: number
   learner_email: string
   learner_name: string
   course_title: string

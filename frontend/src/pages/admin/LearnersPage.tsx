@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Badge } from '../../components/ui/Badge'
 import type { BadgeVariant } from '../../components/ui/Badge'
+import { useAuth } from '../../context/AuthContext'
+import { deleteLearner } from '../../lib/accountsApi'
+import { ApiError } from '../../lib/apiClient'
 import { fetchLearnerRoster } from '../../lib/coursesApi'
+import { isPlatformAdminRole } from '../../lib/roles'
 import type { ReportRow } from '../../types/admin'
 
 const STATUS_BADGE: Record<string, BadgeVariant> = {
@@ -22,14 +26,43 @@ const STATUS_LABEL: Record<string, string> = {
 // since this page is restricted to org admins while Reports also allows
 // INSTRUCTOR.
 export function LearnersPage() {
+  const { user } = useAuth()
+  const canDelete = isPlatformAdminRole(user?.role)
   const [rows, setRows] = useState<ReportRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
 
-  useEffect(() => {
+  function loadRows() {
     fetchLearnerRoster()
       .then(setRows)
       .catch(() => setError('Could not load learners.'))
-  }, [])
+  }
+
+  useEffect(loadRows, [])
+
+  async function handleDelete(row: ReportRow) {
+    if (
+      !window.confirm(
+        `Delete ${row.learner_name} (${row.learner_email})? This permanently deletes their account and all their enrollments/progress. This cannot be undone.`
+      )
+    ) {
+      return
+    }
+    setDeletingUserId(row.user_id)
+    setError(null)
+    try {
+      await deleteLearner(row.user_id)
+      loadRows()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setError('This account no longer exists.')
+      } else {
+        setError('Could not delete this learner.')
+      }
+    } finally {
+      setDeletingUserId(null)
+    }
+  }
 
   return (
     <div>
@@ -46,6 +79,7 @@ export function LearnersPage() {
                 <th className="px-4 py-3">Course</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Score</th>
+                {canDelete && <th className="px-4 py-3" />}
               </tr>
             </thead>
             <tbody>
@@ -62,11 +96,23 @@ export function LearnersPage() {
                   <td className="px-4 py-3 text-neutral-700">
                     {row.score_percent !== null ? `${row.score_percent}%` : '—'}
                   </td>
+                  {canDelete && (
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        disabled={deletingUserId === row.user_id}
+                        onClick={() => void handleDelete(row)}
+                        className="text-red-600 underline disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {deletingUserId === row.user_id ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-center text-neutral-400">
+                  <td colSpan={canDelete ? 5 : 4} className="px-4 py-6 text-center text-neutral-400">
                     No learners yet.
                   </td>
                 </tr>

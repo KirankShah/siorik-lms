@@ -98,19 +98,36 @@ class OrganizationViewSet(
         log_action(self.request.user, AuditLog.Action.ORGANIZATION_CREATED, organization)
 
     def perform_destroy(self, instance):
-        # A hard delete would SET_NULL every attached User/Course's
-        # organization FK rather than fail loudly — silently orphaning real
-        # accounts and content. Only allow deleting an organization that has
-        # none, so this is only ever a cleanup action for an empty/mistaken
-        # entry, never an accidental off-boarding of a live client.
-        if instance.users.exists() or instance.courses.exists():
-            raise ValidationError({
-                'detail': (
-                    'This organization still has users or courses attached. '
-                    'Reassign or remove them before deleting it.'
-                )
-            })
+        # Deleting an organization is a full off-boarding: every one of its
+        # own courses (content_owner=ORGANIZATION — including any course
+        # cloned into it, since a clone is always created as
+        # ORGANIZATION-owned, see courses.services.clone_course_for_organization)
+        # and every one of its users is deleted along with it. A PLATFORM-owned
+        # course that merely has this org tagged as metadata (Course.organization
+        # is ignored for access control there — see the model's own help_text)
+        # is left alone; its FK just falls back to null via on_delete=SET_NULL
+        # once the organization row itself is gone.
+        from courses.models import Course
+
+        instance.courses.filter(content_owner=Course.ContentOwner.ORGANIZATION).delete()
+        instance.users.all().delete()
         log_action(self.request.user, AuditLog.Action.ORGANIZATION_DELETED, instance)
+        instance.delete()
+
+
+class LearnerViewSet(mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """
+    PLATFORM_ADMIN-only deletion of a LEARNER account — backs the "Delete"
+    action on the admin Learners page. Scoped to LEARNER specifically rather
+    than any user: this isn't a general user-management endpoint, and
+    deleting an ORG_ADMIN/INSTRUCTOR isn't something that page should trigger.
+    """
+
+    queryset = User.objects.filter(role=User.Role.LEARNER)
+    permission_classes = [IsAuthenticated, IsPlatformAdminRole]
+
+    def perform_destroy(self, instance):
+        log_action(self.request.user, AuditLog.Action.LEARNER_DELETED, instance)
         instance.delete()
 
 
