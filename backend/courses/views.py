@@ -50,6 +50,7 @@ from .permissions import (
     is_lesson_locked_for_demo_user,
     visible_courses_for_user,
 )
+from .services import clone_course_for_organization
 from .serializers import (
     CourseAccessSerializer,
     CourseDetailSerializer,
@@ -94,6 +95,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     ACCESS_GRANT_ACTIONS = ('access_grants', 'revoke_access')
     DEMO_ACCESS_ACTIONS = ('demo_lesson_access', 'revoke_demo_lesson_access')
+    CLONE_ACTIONS = ('clone',)
 
     def get_permissions(self):
         if (
@@ -101,6 +103,7 @@ class CourseViewSet(viewsets.ModelViewSet):
             or self.action in ('bulk_enroll', 'invite')
             or self.action in self.ACCESS_GRANT_ACTIONS
             or self.action in self.DEMO_ACCESS_ACTIONS
+            or self.action in self.CLONE_ACTIONS
         ):
             return [IsAuthenticated(), IsAdminRole()]
         return [IsAuthenticated()]
@@ -173,6 +176,29 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not deleted:
             return Response({'detail': 'No matching access grant.'}, status=404)
         return Response(status=204)
+
+    @action(detail=True, methods=['post'])
+    def clone(self, request, slug=None):
+        """
+        Deep-copy a PLATFORM-owned course into a brand new, independent
+        ORGANIZATION-owned course for the given organization, so that org can
+        freely edit its own copy while the platform master stays untouched.
+        Replaces any existing view-only CourseAccess grant for that
+        organization, since it now owns an editable copy instead.
+        """
+        course = self.get_object()
+        if course.content_owner != Course.ContentOwner.PLATFORM:
+            raise ValidationError({'detail': 'Only platform-managed courses can be cloned into an organization.'})
+
+        organization = get_object_or_404(Organization, pk=request.data.get('organization'))
+        cloned_course = clone_course_for_organization(course, organization, created_by=request.user)
+        CourseAccess.objects.filter(course=course, organization=organization).delete()
+        log_action(request.user, AuditLog.Action.COURSE_CLONED, cloned_course)
+
+        return Response(
+            CourseDetailSerializer(cloned_course, context=self.get_serializer_context()).data,
+            status=201,
+        )
 
     @action(detail=True, methods=['get', 'post'], url_path='demo-lesson-access')
     def demo_lesson_access(self, request, slug=None):

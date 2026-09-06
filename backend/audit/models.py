@@ -6,6 +6,7 @@ class AuditLog(models.Model):
     class Action(models.TextChoices):
         LOGIN = 'LOGIN', 'Login'
         COURSE_CREATED = 'COURSE_CREATED', 'Course created'
+        COURSE_CLONED = 'COURSE_CLONED', 'Course cloned'
         CERTIFICATE_GENERATED = 'CERTIFICATE_GENERATED', 'Certificate generated'
         ENROLLMENT_CREATED = 'ENROLLMENT_CREATED', 'Enrollment created'
         ENROLLMENT_UPDATED = 'ENROLLMENT_UPDATED', 'Enrollment updated'

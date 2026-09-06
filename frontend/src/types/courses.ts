@@ -62,6 +62,9 @@ export interface CourseDetail extends CourseListItem {
   is_demo_available: boolean
   modules: Module[]
   access_grants: CourseAccessGrant[]
+  // Set only when this course was produced by cloning a platform course into
+  // an organization — see courses.services.clone_course_for_organization.
+  cloned_from_title: string | null
 }
 
 export interface DemoLessonAccessGrant {

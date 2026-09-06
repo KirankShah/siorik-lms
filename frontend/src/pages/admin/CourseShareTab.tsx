@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
+import { CloneCoursePanel } from '../../components/admin/CloneCoursePanel'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
@@ -140,12 +141,15 @@ export function CourseShareTab() {
       </Card>
 
       {isPlatformAdmin && course.content_owner === 'PLATFORM' && (
-        <AccessGrantsPanel
-          courseSlug={course.slug}
-          grants={course.access_grants}
-          organizations={organizations}
-          onChanged={reload}
-        />
+        <>
+          <AccessGrantsPanel
+            courseSlug={course.slug}
+            grants={course.access_grants}
+            organizations={organizations}
+            onChanged={reload}
+          />
+          <CloneCoursePanel courseSlug={course.slug} organizations={organizations} />
+        </>
       )}
     </div>
   )

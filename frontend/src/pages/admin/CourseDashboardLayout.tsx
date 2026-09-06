@@ -42,23 +42,28 @@ export function CourseDashboardLayout() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 pb-4">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-neutral-500">
-          <Link to="/dashboard" className="hover:text-neutral-900 hover:underline">
-            Dashboard
-          </Link>
-          <ChevronRight className="h-3.5 w-3.5" />
-          <Link to="/admin/courses" className="hover:text-neutral-900 hover:underline">
-            Courses
-          </Link>
-          <ChevronRight className="h-3.5 w-3.5" />
-          <span className="font-medium text-neutral-900">{course.title}</span>
-          {activeTab && (
-            <>
-              <ChevronRight className="h-3.5 w-3.5" />
-              <span>{activeTab.label}</span>
-            </>
+        <div>
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-neutral-500">
+            <Link to="/dashboard" className="hover:text-neutral-900 hover:underline">
+              Dashboard
+            </Link>
+            <ChevronRight className="h-3.5 w-3.5" />
+            <Link to="/admin/courses" className="hover:text-neutral-900 hover:underline">
+              Courses
+            </Link>
+            <ChevronRight className="h-3.5 w-3.5" />
+            <span className="font-medium text-neutral-900">{course.title}</span>
+            {activeTab && (
+              <>
+                <ChevronRight className="h-3.5 w-3.5" />
+                <span>{activeTab.label}</span>
+              </>
+            )}
+          </nav>
+          {course.cloned_from_title && (
+            <p className="mt-1 text-xs text-neutral-400">Cloned from "{course.cloned_from_title}"</p>
           )}
-        </nav>
+        </div>
 
         <a
           href={`/courses/${course.slug}`}

@@ -21,7 +21,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import Organization, User
 from accounts.services import UserProvisioningError, provision_demo_user
-from assessments.models import Choice, Question, Quiz, QuizAttempt
+from assessments.models import CategorizeItem, CategoryBucket, Choice, HotspotRegion, Question, Quiz, QuizAttempt, WordBankToken
 from assignments.models import Assignment, AssignmentSubmission
 from audit.models import AuditLog
 from certificates.models import Certificate, CertificateTemplate
@@ -1074,6 +1074,95 @@ class CourseAccessGrantTests(BaseAPITestCase):
         CourseAccess.objects.create(course=self.platform_course, organization=self.org)
         self.auth_as(self.org_admin)
         response = self.client.patch(f'/api/courses/{self.platform_course.slug}/', {'title': 'Hacked'})
+        self.assertEqual(response.status_code, 404)
+
+
+class CourseCloneTests(BaseAPITestCase):
+    """Covers courses.services.clone_course_for_organization via the /clone/ endpoint,
+    exercising one slide of every type so every deep-copy branch runs."""
+
+    def setUp(self):
+        super().setUp()
+        self.module = Module.objects.create(course=self.platform_course, title='Module 1', order=1)
+        self.lesson = Lesson.objects.create(module=self.module, title='Lesson 1', order=1, estimated_minutes=5)
+
+        self.content_slide = Slide.objects.create(lesson=self.lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+        Element.objects.create(slide=self.content_slide, order=1, element_type=Element.ElementType.TEXT, rich_text='Hello')
+
+        self.quiz_slide2 = Slide.objects.create(lesson=self.lesson, order=2, slide_type=Slide.SlideType.QUIZ)
+        quiz = Quiz.objects.create(slide=self.quiz_slide2, title='Quiz', pass_percentage=60)
+        question = Question.objects.create(
+            quiz=quiz, question_text='Categorize this', order=1, question_type=Question.QuestionType.CATEGORIZE,
+        )
+        bucket = CategoryBucket.objects.create(question=question, label='Bucket A', order=1)
+        CategorizeItem.objects.create(question=question, item_text='Item 1', correct_bucket=bucket, order=1)
+        HotspotRegion.objects.create(question=question, x=1, y=1, width=10, height=10, is_correct=True)
+        WordBankToken.objects.create(question=question, text='word', correct_blank_index=1, order=1)
+        Choice.objects.create(question=question, choice_text='Option', is_correct=True, order=1)
+
+        self.assignment_slide = Slide.objects.create(lesson=self.lesson, order=3, slide_type=Slide.SlideType.ASSIGNMENT)
+        Assignment.objects.create(slide=self.assignment_slide, instructions='Do it', max_marks=50)
+
+        self.scenario_slide = Slide.objects.create(lesson=self.lesson, order=4, slide_type=Slide.SlideType.SCENARIO)
+        start_node = ScenarioNode.objects.create(slide=self.scenario_slide, node_key='start', is_start=True)
+        end_node = ScenarioNode.objects.create(slide=self.scenario_slide, node_key='end')
+        ScenarioChoice.objects.create(node=start_node, choice_text='Go', next_node=end_node, order=1)
+        ScenarioChoice.objects.create(node=start_node, choice_text='Stop', next_node=None, order=2)
+
+    def test_platform_admin_can_clone_course_into_organization(self):
+        CourseAccess.objects.create(course=self.platform_course, organization=self.org)
+        self.auth_as(self.platform_admin)
+
+        response = self.client.post(f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id})
+        self.assertEqual(response.status_code, 201)
+
+        cloned = Course.objects.get(slug=response.data['slug'])
+        self.assertEqual(cloned.content_owner, Course.ContentOwner.ORGANIZATION)
+        self.assertEqual(cloned.organization_id, self.org.id)
+        self.assertEqual(cloned.cloned_from_id, self.platform_course.id)
+        self.assertFalse(cloned.is_published)
+        self.assertNotEqual(cloned.id, self.platform_course.id)
+
+        cloned_lesson = Lesson.objects.get(module__course=cloned)
+        self.assertEqual(Slide.objects.filter(lesson=cloned_lesson).count(), 4)
+
+        cloned_content_slide = Slide.objects.get(lesson=cloned_lesson, order=1)
+        self.assertEqual(cloned_content_slide.elements.count(), 1)
+        self.assertEqual(cloned_content_slide.elements.first().rich_text, 'Hello')
+
+        cloned_quiz_slide = Slide.objects.get(lesson=cloned_lesson, order=2)
+        cloned_question = Question.objects.get(quiz__slide=cloned_quiz_slide)
+        self.assertEqual(cloned_question.buckets.count(), 1)
+        self.assertEqual(cloned_question.categorize_items.count(), 1)
+        self.assertEqual(cloned_question.categorize_items.first().correct_bucket.question_id, cloned_question.id)
+        self.assertEqual(cloned_question.hotspot_regions.count(), 1)
+        self.assertEqual(cloned_question.word_bank_tokens.count(), 1)
+        self.assertEqual(cloned_question.choices.count(), 1)
+
+        cloned_assignment_slide = Slide.objects.get(lesson=cloned_lesson, order=3)
+        self.assertEqual(cloned_assignment_slide.assignment.max_marks, 50)
+
+        cloned_scenario_slide = Slide.objects.get(lesson=cloned_lesson, order=4)
+        cloned_start = ScenarioNode.objects.get(slide=cloned_scenario_slide, node_key='start')
+        cloned_end = ScenarioNode.objects.get(slide=cloned_scenario_slide, node_key='end')
+        self.assertEqual(cloned_start.choices.count(), 2)
+        self.assertEqual(cloned_start.choices.get(choice_text='Go').next_node_id, cloned_end.id)
+        self.assertIsNone(cloned_start.choices.get(choice_text='Stop').next_node_id)
+
+        # Source course is untouched.
+        self.assertEqual(Slide.objects.filter(lesson=self.lesson).count(), 4)
+        self.assertFalse(CourseAccess.objects.filter(course=self.platform_course, organization=self.org).exists())
+
+    def test_cannot_clone_an_organization_owned_course(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post(
+            f'/api/courses/{self.published_org_course.slug}/clone/', {'organization': self.other_org.id}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_org_admin_cannot_clone_platform_course(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id})
         self.assertEqual(response.status_code, 404)
 
 

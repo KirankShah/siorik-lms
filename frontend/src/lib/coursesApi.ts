@@ -111,6 +111,13 @@ export function revokeCourseAccess(courseSlug: string, organizationId: number): 
   })
 }
 
+export function cloneCourse(courseSlug: string, organizationId: number): Promise<CourseDetail> {
+  return apiFetch<CourseDetail>(`/courses/${courseSlug}/clone/`, {
+    method: 'POST',
+    body: { organization: organizationId },
+  })
+}
+
 // --- Admin: demo lesson access ---
 
 export function fetchDemoLessonAccess(courseSlug: string): Promise<DemoLessonAccessGrant[]> {

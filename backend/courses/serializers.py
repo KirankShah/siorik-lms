@@ -148,6 +148,7 @@ class CourseAccessSerializer(serializers.ModelSerializer):
 class CourseDetailSerializer(serializers.ModelSerializer):
     modules = ModuleSerializer(many=True, read_only=True)
     access_grants = CourseAccessSerializer(many=True, read_only=True)
+    cloned_from_title = serializers.CharField(source='cloned_from.title', read_only=True, default=None)
 
     class Meta:
         model = Course
@@ -170,6 +171,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'updated_at',
             'modules',
             'access_grants',
+            'cloned_from_title',
         ]
 
 
