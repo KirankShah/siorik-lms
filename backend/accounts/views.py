@@ -69,12 +69,19 @@ class MeView(RetrieveUpdateAPIView):
         return Response(UserSerializer(request.user).data)
 
 
-class OrganizationViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class OrganizationViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     """
     List/retrieve is available to any admin role (used to assign course
-    access, pick an org for demo-user provisioning, etc.) — creating a new
-    organization is a platform-level action (onboarding a new client), so
-    that's restricted to PLATFORM_ADMIN specifically; see get_permissions.
+    access, pick an org for demo-user provisioning, etc.) — creating or
+    deleting an organization is a platform-level action (onboarding/
+    off-boarding a client), so both are restricted to PLATFORM_ADMIN
+    specifically; see get_permissions.
     """
 
     queryset = Organization.objects.filter(is_active=True).order_by('name')
@@ -82,13 +89,29 @@ class OrganizationViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get_permissions(self):
-        if self.action == 'create':
+        if self.action in ('create', 'destroy'):
             return [IsAuthenticated(), IsPlatformAdminRole()]
         return super().get_permissions()
 
     def perform_create(self, serializer):
         organization = serializer.save()
         log_action(self.request.user, AuditLog.Action.ORGANIZATION_CREATED, organization)
+
+    def perform_destroy(self, instance):
+        # A hard delete would SET_NULL every attached User/Course's
+        # organization FK rather than fail loudly — silently orphaning real
+        # accounts and content. Only allow deleting an organization that has
+        # none, so this is only ever a cleanup action for an empty/mistaken
+        # entry, never an accidental off-boarding of a live client.
+        if instance.users.exists() or instance.courses.exists():
+            raise ValidationError({
+                'detail': (
+                    'This organization still has users or courses attached. '
+                    'Reassign or remove them before deleting it.'
+                )
+            })
+        log_action(self.request.user, AuditLog.Action.ORGANIZATION_DELETED, instance)
+        instance.delete()
 
 
 CSV_EXPECTED_HEADER = ['name', 'email', 'organization', 'designation', 'phone_number']

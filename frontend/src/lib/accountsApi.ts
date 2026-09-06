@@ -13,6 +13,10 @@ export function createOrganization(input: OrganizationCreateInput): Promise<Orga
   return apiFetch<Organization>('/organizations/', { method: 'POST', body: input })
 }
 
+export function deleteOrganization(id: number): Promise<void> {
+  return apiFetch<void>(`/organizations/${id}/`, { method: 'DELETE' })
+}
+
 export interface DemoUserInput {
   name: string
   email: string

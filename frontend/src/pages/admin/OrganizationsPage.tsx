@@ -5,12 +5,13 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { ApiError } from '../../lib/apiClient'
-import { createOrgAdmin, createOrganization, fetchOrganizations } from '../../lib/accountsApi'
+import { createOrgAdmin, createOrganization, deleteOrganization, fetchOrganizations } from '../../lib/accountsApi'
 import type { Organization } from '../../types/auth'
 
 export function OrganizationsPage() {
   const [organizations, setOrganizations] = useState<Organization[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const [name, setName] = useState('')
   const [createError, setCreateError] = useState<string | null>(null)
@@ -51,6 +52,25 @@ export function OrganizationsPage() {
       }
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  async function handleDelete(organization: Organization) {
+    if (!window.confirm(`Delete "${organization.name}"? This cannot be undone.`)) return
+    setDeletingId(organization.id)
+    setListError(null)
+    try {
+      await deleteOrganization(organization.id)
+      loadOrganizations()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) {
+        const body = err.body as { detail?: string } | null
+        setListError(body?.detail ?? 'Could not delete this organization.')
+      } else {
+        setListError('Could not delete this organization.')
+      }
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -147,6 +167,9 @@ export function OrganizationsPage() {
 
         <Card>
           <h2 className="text-sm font-semibold text-neutral-900">Existing organizations</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            Only an organization with no users or courses attached can be deleted — reassign or remove those first.
+          </p>
 
           {listError && <p className="mt-4 text-sm text-red-600">{listError}</p>}
 
@@ -162,7 +185,17 @@ export function OrganizationsPage() {
                     <p className="truncate text-sm font-medium text-neutral-900">{org.name}</p>
                     <p className="text-xs text-neutral-500">/{org.slug}</p>
                   </div>
-                  <Badge variant={org.is_active ? 'navy' : 'neutral'}>{org.is_active ? 'Active' : 'Inactive'}</Badge>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={org.is_active ? 'navy' : 'neutral'}>{org.is_active ? 'Active' : 'Inactive'}</Badge>
+                    <button
+                      type="button"
+                      disabled={deletingId === org.id}
+                      onClick={() => void handleDelete(org)}
+                      className="text-sm text-red-600 underline disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {deletingId === org.id ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>

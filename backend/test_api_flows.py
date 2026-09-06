@@ -967,6 +967,31 @@ class OrganizationListTests(BaseAPITestCase):
         response = self.client.get('/api/organizations/')
         self.assertEqual(response.status_code, 403)
 
+    def test_cannot_create_organization_with_duplicate_name(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post('/api/organizations/', {'name': self.org.name.upper()})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', str(response.data))
+
+    def test_platform_admin_can_delete_empty_organization(self):
+        empty_org = Organization.objects.create(name='Empty Org', slug='empty-org')
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(f'/api/organizations/{empty_org.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Organization.objects.filter(id=empty_org.id).exists())
+
+    def test_cannot_delete_organization_with_users(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(f'/api/organizations/{self.org.id}/')
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Organization.objects.filter(id=self.org.id).exists())
+
+    def test_org_admin_cannot_delete_organization(self):
+        empty_org = Organization.objects.create(name='Empty Org 2', slug='empty-org-2')
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/organizations/{empty_org.id}/')
+        self.assertEqual(response.status_code, 403)
+
 
 class CourseBuilderTests(BaseAPITestCase):
     def test_learner_cannot_create_course(self):

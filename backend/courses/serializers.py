@@ -107,6 +107,8 @@ class CourseListSerializer(serializers.ModelSerializer):
     # a locked course is still just a teaser card, since retrieving it
     # (and everything beneath it) stays gated by visible_courses_for_user.
     is_locked = serializers.SerializerMethodField()
+    organization_name = serializers.CharField(source='organization.name', read_only=True, default=None)
+    cloned_from_title = serializers.CharField(source='cloned_from.title', read_only=True, default=None)
 
     class Meta:
         model = Course
@@ -116,6 +118,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'slug',
             'description',
             'organization',
+            'organization_name',
             'content_owner',
             'cover_image',
             'is_published',
@@ -124,6 +127,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'is_locked',
+            'cloned_from_title',
         ]
 
     def get_is_locked(self, course):

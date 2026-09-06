@@ -33,12 +33,19 @@ export interface CourseListItem {
   slug: string
   description: string
   organization: number | null
+  // Populated whenever `organization` is set, regardless of content_owner —
+  // lets the admin course list show which org a course belongs to without a
+  // follow-up request.
+  organization_name: string | null
   content_owner: ContentOwner
   cover_image: string | null
   is_published: boolean
   // Null means the pre-templates default look — see backend Course.template.
   template: number | null
   completion_deadline_days: number | null
+  // Set only when this course was produced by cloning a platform course into
+  // an organization — see courses.services.clone_course_for_organization.
+  cloned_from_title: string | null
   created_at: string
   updated_at: string
   // True only for a demo user (accounts.User.is_demo) viewing a course

@@ -11,6 +11,15 @@ class OrganizationSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'slug', 'logo', 'is_active']
         extra_kwargs = {'slug': {'required': False}}
 
+    def validate_name(self, value):
+        value = value.strip()
+        existing = Organization.objects.filter(name__iexact=value)
+        if self.instance:
+            existing = existing.exclude(pk=self.instance.pk)
+        if existing.exists():
+            raise serializers.ValidationError('An organization with this name already exists.')
+        return value
+
     def validate(self, attrs):
         # slug is a required-unique model field, but making the caller invent
         # one is needless friction for the common case — auto-derive it from

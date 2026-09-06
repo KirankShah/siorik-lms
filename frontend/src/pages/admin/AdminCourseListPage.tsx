@@ -55,6 +55,7 @@ export function AdminCourseListPage() {
               <tr>
                 <th className="px-4 py-3">Title</th>
                 <th className="px-4 py-3">Owner</th>
+                <th className="px-4 py-3">Organization</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3" />
               </tr>
@@ -62,8 +63,16 @@ export function AdminCourseListPage() {
             <tbody>
               {courses.map((course) => (
                 <tr key={course.id} className="border-b border-neutral-100 last:border-0">
-                  <td className="px-4 py-3 font-medium text-neutral-900">{course.title}</td>
+                  <td className="px-4 py-3 font-medium text-neutral-900">
+                    {course.title}
+                    {course.cloned_from_title && (
+                      <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
+                        cloned from {course.cloned_from_title}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-neutral-500">{course.content_owner}</td>
+                  <td className="px-4 py-3 text-neutral-500">{course.organization_name ?? '—'}</td>
                   <td className="px-4 py-3">
                     <Badge variant={course.is_published ? 'navy' : 'gold'}>
                       {course.is_published ? 'Published' : 'Draft'}
@@ -88,7 +97,7 @@ export function AdminCourseListPage() {
               ))}
               {courses.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-center text-neutral-400">
+                  <td colSpan={5} className="px-4 py-6 text-center text-neutral-400">
                     No courses yet.
                   </td>
                 </tr>

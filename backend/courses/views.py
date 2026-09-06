@@ -110,7 +110,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if self.action == 'list':
-            return catalog_courses_for_user(self.request.user)
+            return catalog_courses_for_user(self.request.user).select_related('organization', 'cloned_from')
         if self.action == 'retrieve':
             return visible_courses_for_user(self.request.user)
         return editable_courses_for_user(self.request.user)
