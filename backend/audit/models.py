@@ -7,6 +7,7 @@ class AuditLog(models.Model):
         LOGIN = 'LOGIN', 'Login'
         COURSE_CREATED = 'COURSE_CREATED', 'Course created'
         COURSE_CLONED = 'COURSE_CLONED', 'Course cloned'
+        COURSE_DUPLICATED = 'COURSE_DUPLICATED', 'Course duplicated'
         CERTIFICATE_GENERATED = 'CERTIFICATE_GENERATED', 'Certificate generated'
         ENROLLMENT_CREATED = 'ENROLLMENT_CREATED', 'Enrollment created'
         ENROLLMENT_UPDATED = 'ENROLLMENT_UPDATED', 'Enrollment updated'

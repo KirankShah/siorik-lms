@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '../../components/ui/Badge'
 import { Card } from '../../components/ui/Card'
-import { deleteCourse, fetchCourses } from '../../lib/coursesApi'
+import { useAuth } from '../../context/AuthContext'
+import { deleteCourse, duplicateCourse, fetchCourses } from '../../lib/coursesApi'
 import type { CourseListItem } from '../../types/courses'
 
 export function AdminCourseListPage() {
+  const { user } = useAuth()
+  const isPlatformAdmin = user?.role === 'PLATFORM_ADMIN'
   const [courses, setCourses] = useState<CourseListItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null)
+  const [duplicatingSlug, setDuplicatingSlug] = useState<string | null>(null)
 
   function loadCourses() {
     fetchCourses()
@@ -31,6 +35,19 @@ export function AdminCourseListPage() {
       setError('Could not delete this course.')
     } finally {
       setDeletingSlug(null)
+    }
+  }
+
+  async function handleDuplicate(course: CourseListItem) {
+    setDuplicatingSlug(course.slug)
+    setError(null)
+    try {
+      await duplicateCourse(course.slug)
+      loadCourses()
+    } catch {
+      setError('Could not duplicate this course.')
+    } finally {
+      setDuplicatingSlug(null)
     }
   }
 
@@ -83,6 +100,16 @@ export function AdminCourseListPage() {
                       <Link to={`/admin/courses/${course.slug}`} className="text-brand-navy underline">
                         Manage
                       </Link>
+                      {isPlatformAdmin && (
+                        <button
+                          type="button"
+                          disabled={duplicatingSlug === course.slug}
+                          onClick={() => void handleDuplicate(course)}
+                          className="text-brand-navy underline disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {duplicatingSlug === course.slug ? 'Duplicating…' : 'Duplicate'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={deletingSlug === course.slug}

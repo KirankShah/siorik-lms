@@ -95,7 +95,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     ACCESS_GRANT_ACTIONS = ('access_grants', 'revoke_access')
     DEMO_ACCESS_ACTIONS = ('demo_lesson_access', 'revoke_demo_lesson_access')
-    CLONE_ACTIONS = ('clone',)
+    CLONE_ACTIONS = ('clone', 'duplicate')
 
     def get_permissions(self):
         if (
@@ -207,6 +207,37 @@ class CourseViewSet(viewsets.ModelViewSet):
 
         return Response(
             CourseDetailSerializer(cloned_course, context=self.get_serializer_context()).data,
+            status=201,
+        )
+
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, slug=None):
+        """
+        Deep-copy a course into a brand new, independent copy owned by the
+        same owner as the source: a platform course duplicates into another
+        platform course, an organization course into another course for that
+        same organization. Unlike `clone`, ownership never changes hands and
+        no organization needs to be chosen. Platform-admin only.
+        """
+        if request.user.role != User.Role.PLATFORM_ADMIN:
+            raise PermissionDenied('Only platform admins can duplicate a course.')
+
+        course = self.get_object()
+        organization = (
+            course.organization if course.content_owner == Course.ContentOwner.ORGANIZATION else None
+        )
+        duplicated_course = clone_course(
+            course,
+            created_by=request.user,
+            organization=organization,
+            title=f'{course.title} (Copy)'[:255],
+            slug_seed=f'{course.slug}-copy',
+        )
+
+        log_action(request.user, AuditLog.Action.COURSE_DUPLICATED, duplicated_course)
+
+        return Response(
+            CourseDetailSerializer(duplicated_course, context=self.get_serializer_context()).data,
             status=201,
         )
 

@@ -121,6 +121,13 @@ export function cloneCourse(courseSlug: string, organizationId?: number): Promis
   })
 }
 
+// Deep-copies a course into an independent copy with the SAME owner as the
+// source (platform -> platform, org -> same org). Platform-admin only; unlike
+// cloneCourse it never changes ownership. The copy's title gets " (Copy)".
+export function duplicateCourse(courseSlug: string): Promise<CourseDetail> {
+  return apiFetch<CourseDetail>(`/courses/${courseSlug}/duplicate/`, { method: 'POST' })
+}
+
 // --- Admin: demo lesson access ---
 
 export function fetchDemoLessonAccess(courseSlug: string): Promise<DemoLessonAccessGrant[]> {

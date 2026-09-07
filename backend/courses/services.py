@@ -141,7 +141,7 @@ _SLIDE_CLONERS = {
 
 
 @transaction.atomic
-def clone_course(source_course, created_by, *, organization=None):
+def clone_course(source_course, created_by, *, organization=None, title=None, slug_seed=None):
     """
     Deep-copies source_course into a brand new, independent course. The clone
     is a one-time fork: nothing links it back to the source beyond the
@@ -149,21 +149,28 @@ def clone_course(source_course, created_by, *, organization=None):
     (enrollments, attempts, submissions, certificates, SlideRevision history)
     is ever copied — see the plan this implements for the full rationale.
 
-    When `organization` is given, the clone is an ORGANIZATION-owned copy for
-    that org (a platform course forked for self-serve editing). When it is
-    None, the clone is a PLATFORM-owned copy (an org course pulled up into the
-    platform library) — platform-admin only, enforced by the caller.
+    Ownership of the copy follows `organization`:
+
+    - `organization` given -> an ORGANIZATION-owned copy for that org (a
+      platform course forked for self-serve editing, or an org course
+      duplicated in place for the same org).
+    - `organization` None -> a PLATFORM-owned copy (an org course pulled up
+      into the platform library, or a platform course duplicated in place) —
+      platform-admin only, enforced by the caller.
+
+    `title` overrides the copy's title (defaults to the source's). `slug_seed`
+    overrides the base slug that gets disambiguated against existing courses.
     """
     if organization is not None:
         content_owner = Course.ContentOwner.ORGANIZATION
-        slug_seed = f'{source_course.slug}-{organization.slug}'
+        default_slug_seed = f'{source_course.slug}-{organization.slug}'
     else:
         content_owner = Course.ContentOwner.PLATFORM
-        slug_seed = f'{source_course.slug}-platform'
+        default_slug_seed = f'{source_course.slug}-platform'
 
     cloned_course = Course.objects.create(
-        title=source_course.title,
-        slug=_unique_course_slug(slug_seed),
+        title=title or source_course.title,
+        slug=_unique_course_slug(slug_seed or default_slug_seed),
         description=source_course.description,
         organization=organization,
         content_owner=content_owner,

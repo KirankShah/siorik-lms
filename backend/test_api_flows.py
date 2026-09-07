@@ -1251,6 +1251,49 @@ class CourseCloneTests(BaseAPITestCase):
         response = self.client.post(f'/api/courses/{self.published_org_course.slug}/clone/')
         self.assertEqual(response.status_code, 403)
 
+    def test_platform_admin_can_duplicate_platform_course_in_place(self):
+        self.auth_as(self.platform_admin)
+
+        response = self.client.post(f'/api/courses/{self.platform_course.slug}/duplicate/')
+        self.assertEqual(response.status_code, 201)
+
+        copy = Course.objects.get(slug=response.data['slug'])
+        self.assertNotEqual(copy.id, self.platform_course.id)
+        self.assertEqual(copy.content_owner, Course.ContentOwner.PLATFORM)
+        self.assertIsNone(copy.organization_id)
+        self.assertEqual(copy.title, f'{self.platform_course.title} (Copy)')
+        self.assertEqual(copy.cloned_from_id, self.platform_course.id)
+        self.assertFalse(copy.is_published)
+
+        copied_lesson = Lesson.objects.get(module__course=copy)
+        self.assertEqual(Slide.objects.filter(lesson=copied_lesson).count(), 4)
+        copied_question = Question.objects.get(quiz__slide__lesson=copied_lesson)
+        self.assertEqual(copied_question.categorize_items.first().correct_bucket.question_id, copied_question.id)
+
+        # Source untouched.
+        self.assertEqual(Slide.objects.filter(lesson=self.lesson).count(), 4)
+
+    def test_platform_admin_can_duplicate_org_course_for_same_org(self):
+        self.auth_as(self.platform_admin)
+        org_clone = self.client.post(
+            f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id}
+        )
+        org_course = Course.objects.get(slug=org_clone.data['slug'])
+
+        response = self.client.post(f'/api/courses/{org_course.slug}/duplicate/')
+        self.assertEqual(response.status_code, 201)
+
+        copy = Course.objects.get(slug=response.data['slug'])
+        self.assertEqual(copy.content_owner, Course.ContentOwner.ORGANIZATION)
+        self.assertEqual(copy.organization_id, self.org.id)
+        self.assertNotIn(copy.id, (org_course.id, self.platform_course.id))
+        self.assertEqual(Slide.objects.filter(lesson__module__course=copy).count(), 4)
+
+    def test_org_admin_cannot_duplicate_course(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(f'/api/courses/{self.published_org_course.slug}/duplicate/')
+        self.assertEqual(response.status_code, 403)
+
 
 class VideoStreamingTests(BaseAPITestCase):
     """

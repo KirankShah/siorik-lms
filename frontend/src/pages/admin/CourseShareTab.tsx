@@ -4,6 +4,7 @@ import { useOutletContext } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { CloneCoursePanel } from '../../components/admin/CloneCoursePanel'
 import { CloneToPlatformPanel } from '../../components/admin/CloneToPlatformPanel'
+import { DuplicateCoursePanel } from '../../components/admin/DuplicateCoursePanel'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
@@ -156,6 +157,8 @@ export function CourseShareTab() {
       {isPlatformAdmin && course.content_owner === 'ORGANIZATION' && (
         <CloneToPlatformPanel courseSlug={course.slug} />
       )}
+
+      {isPlatformAdmin && <DuplicateCoursePanel courseSlug={course.slug} />}
     </div>
   )
 }
