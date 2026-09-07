@@ -111,10 +111,13 @@ export function revokeCourseAccess(courseSlug: string, organizationId: number): 
   })
 }
 
-export function cloneCourse(courseSlug: string, organizationId: number): Promise<CourseDetail> {
+// organizationId targets an organization-owned clone of a platform course.
+// Omit it to clone an organization-owned course up into the platform library
+// (platform-admin only).
+export function cloneCourse(courseSlug: string, organizationId?: number): Promise<CourseDetail> {
   return apiFetch<CourseDetail>(`/courses/${courseSlug}/clone/`, {
     method: 'POST',
-    body: { organization: organizationId },
+    body: organizationId ? { organization: organizationId } : {},
   })
 }
 

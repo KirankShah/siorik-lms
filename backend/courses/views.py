@@ -14,7 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -50,7 +50,7 @@ from .permissions import (
     is_lesson_locked_for_demo_user,
     visible_courses_for_user,
 )
-from .services import clone_course_for_organization
+from .services import clone_course
 from .serializers import (
     CourseAccessSerializer,
     CourseDetailSerializer,
@@ -180,19 +180,29 @@ class CourseViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def clone(self, request, slug=None):
         """
-        Deep-copy a PLATFORM-owned course into a brand new, independent
-        ORGANIZATION-owned course for the given organization, so that org can
-        freely edit its own copy while the platform master stays untouched.
-        Replaces any existing view-only CourseAccess grant for that
-        organization, since it now owns an editable copy instead.
+        Deep-copy a course into a brand new, independent copy, direction chosen
+        by the source's owner:
+
+        - PLATFORM-owned source: clone into an ORGANIZATION-owned copy for the
+          organization given in the body, so that org can freely edit its own
+          copy while the platform master stays untouched. Replaces any existing
+          view-only CourseAccess grant for that organization, since it now owns
+          an editable copy instead.
+        - ORGANIZATION-owned source: clone into a PLATFORM-owned copy in the
+          platform library. Platform-admin only — an org admin cannot push
+          their content up into the platform catalogue.
         """
         course = self.get_object()
-        if course.content_owner != Course.ContentOwner.PLATFORM:
-            raise ValidationError({'detail': 'Only platform-managed courses can be cloned into an organization.'})
 
-        organization = get_object_or_404(Organization, pk=request.data.get('organization'))
-        cloned_course = clone_course_for_organization(course, organization, created_by=request.user)
-        CourseAccess.objects.filter(course=course, organization=organization).delete()
+        if course.content_owner == Course.ContentOwner.PLATFORM:
+            organization = get_object_or_404(Organization, pk=request.data.get('organization'))
+            cloned_course = clone_course(course, created_by=request.user, organization=organization)
+            CourseAccess.objects.filter(course=course, organization=organization).delete()
+        else:
+            if request.user.role != User.Role.PLATFORM_ADMIN:
+                raise PermissionDenied('Only platform admins can clone a course into the platform library.')
+            cloned_course = clone_course(course, created_by=request.user, organization=None)
+
         log_action(request.user, AuditLog.Action.COURSE_CLONED, cloned_course)
 
         return Response(

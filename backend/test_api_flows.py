@@ -1138,7 +1138,7 @@ class CourseAccessGrantTests(BaseAPITestCase):
 
 
 class CourseCloneTests(BaseAPITestCase):
-    """Covers courses.services.clone_course_for_organization via the /clone/ endpoint,
+    """Covers courses.services.clone_course via the /clone/ endpoint,
     exercising one slide of every type so every deep-copy branch runs."""
 
     def setUp(self):
@@ -1213,17 +1213,43 @@ class CourseCloneTests(BaseAPITestCase):
         self.assertEqual(Slide.objects.filter(lesson=self.lesson).count(), 4)
         self.assertFalse(CourseAccess.objects.filter(course=self.platform_course, organization=self.org).exists())
 
-    def test_cannot_clone_an_organization_owned_course(self):
-        self.auth_as(self.platform_admin)
-        response = self.client.post(
-            f'/api/courses/{self.published_org_course.slug}/clone/', {'organization': self.other_org.id}
-        )
-        self.assertEqual(response.status_code, 400)
-
     def test_org_admin_cannot_clone_platform_course(self):
         self.auth_as(self.org_admin)
         response = self.client.post(f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id})
         self.assertEqual(response.status_code, 404)
+
+    def test_platform_admin_can_clone_org_course_into_platform_library(self):
+        # First fork the rich platform course into the org so there's an
+        # ORGANIZATION-owned course carrying one slide of every type.
+        self.auth_as(self.platform_admin)
+        org_clone = self.client.post(
+            f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id}
+        )
+        org_course = Course.objects.get(slug=org_clone.data['slug'])
+
+        response = self.client.post(f'/api/courses/{org_course.slug}/clone/')
+        self.assertEqual(response.status_code, 201)
+
+        platform_copy = Course.objects.get(slug=response.data['slug'])
+        self.assertEqual(platform_copy.content_owner, Course.ContentOwner.PLATFORM)
+        self.assertIsNone(platform_copy.organization_id)
+        self.assertEqual(platform_copy.cloned_from_id, org_course.id)
+        self.assertFalse(platform_copy.is_published)
+        self.assertNotIn(platform_copy.id, (org_course.id, self.platform_course.id))
+
+        copied_lesson = Lesson.objects.get(module__course=platform_copy)
+        self.assertEqual(Slide.objects.filter(lesson=copied_lesson).count(), 4)
+        copied_question = Question.objects.get(quiz__slide__lesson=copied_lesson)
+        self.assertEqual(copied_question.categorize_items.first().correct_bucket.question_id, copied_question.id)
+
+        # Both source courses are untouched.
+        self.assertEqual(Slide.objects.filter(lesson__module__course=org_course).count(), 4)
+        self.assertEqual(Slide.objects.filter(lesson=self.lesson).count(), 4)
+
+    def test_org_admin_cannot_clone_own_course_into_platform_library(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(f'/api/courses/{self.published_org_course.slug}/clone/')
+        self.assertEqual(response.status_code, 403)
 
 
 class VideoStreamingTests(BaseAPITestCase):

@@ -103,9 +103,10 @@ class Course(models.Model):
     # user is only lesson-restricted when this is True. False (the default)
     # means demo users see this course exactly like any other learner.
     is_demo_available = models.BooleanField(default=False)
-    # Set only on a course produced by courses.services.clone_course_for_organization
-    # — an audit/reporting trail back to the platform master it was forked
-    # from. Purely informational: no sync/diff/merge is ever performed
+    # Set only on a course produced by courses.services.clone_course — an
+    # audit/reporting trail back to the course it was forked from (a platform
+    # master forked for an org, or an org course pulled up into the platform
+    # library). Purely informational: no sync/diff/merge is ever performed
     # against the source course.
     cloned_from = models.ForeignKey(
         'self',

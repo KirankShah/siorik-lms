@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { AccessGrantsPanel } from '../../components/admin/AccessGrantsPanel'
 import { CloneCoursePanel } from '../../components/admin/CloneCoursePanel'
+import { CloneToPlatformPanel } from '../../components/admin/CloneToPlatformPanel'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
@@ -150,6 +151,10 @@ export function CourseShareTab() {
           />
           <CloneCoursePanel courseSlug={course.slug} organizations={organizations} />
         </>
+      )}
+
+      {isPlatformAdmin && course.content_owner === 'ORGANIZATION' && (
+        <CloneToPlatformPanel courseSlug={course.slug} />
       )}
     </div>
   )

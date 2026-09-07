@@ -141,21 +141,32 @@ _SLIDE_CLONERS = {
 
 
 @transaction.atomic
-def clone_course_for_organization(source_course, organization, created_by):
+def clone_course(source_course, created_by, *, organization=None):
     """
-    Deep-copies source_course (expected PLATFORM-owned) into a brand new,
-    independent ORGANIZATION-owned course for `organization`. The clone is a
-    one-time fork: nothing links it back to the source beyond the
+    Deep-copies source_course into a brand new, independent course. The clone
+    is a one-time fork: nothing links it back to the source beyond the
     informational Course.cloned_from FK, and no learner-generated data
     (enrollments, attempts, submissions, certificates, SlideRevision history)
     is ever copied — see the plan this implements for the full rationale.
+
+    When `organization` is given, the clone is an ORGANIZATION-owned copy for
+    that org (a platform course forked for self-serve editing). When it is
+    None, the clone is a PLATFORM-owned copy (an org course pulled up into the
+    platform library) — platform-admin only, enforced by the caller.
     """
+    if organization is not None:
+        content_owner = Course.ContentOwner.ORGANIZATION
+        slug_seed = f'{source_course.slug}-{organization.slug}'
+    else:
+        content_owner = Course.ContentOwner.PLATFORM
+        slug_seed = f'{source_course.slug}-platform'
+
     cloned_course = Course.objects.create(
         title=source_course.title,
-        slug=_unique_course_slug(f'{source_course.slug}-{organization.slug}'),
+        slug=_unique_course_slug(slug_seed),
         description=source_course.description,
         organization=organization,
-        content_owner=Course.ContentOwner.ORGANIZATION,
+        content_owner=content_owner,
         cover_image=source_course.cover_image,
         is_published=False,
         template=source_course.template,

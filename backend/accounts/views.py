@@ -99,10 +99,10 @@ class OrganizationViewSet(
 
     def perform_destroy(self, instance):
         # Deleting an organization is a full off-boarding: every one of its
-        # own courses (content_owner=ORGANIZATION — including any course
-        # cloned into it, since a clone is always created as
-        # ORGANIZATION-owned, see courses.services.clone_course_for_organization)
-        # and every one of its users is deleted along with it. A PLATFORM-owned
+        # own courses (content_owner=ORGANIZATION — including any platform
+        # course cloned into it as an ORGANIZATION-owned copy, see
+        # courses.services.clone_course) and every one of its users is deleted
+        # along with it. A PLATFORM-owned
         # course that merely has this org tagged as metadata (Course.organization
         # is ignored for access control there — see the model's own help_text)
         # is left alone; its FK just falls back to null via on_delete=SET_NULL

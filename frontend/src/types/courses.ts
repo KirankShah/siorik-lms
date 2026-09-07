@@ -43,8 +43,9 @@ export interface CourseListItem {
   // Null means the pre-templates default look — see backend Course.template.
   template: number | null
   completion_deadline_days: number | null
-  // Set only when this course was produced by cloning a platform course into
-  // an organization — see courses.services.clone_course_for_organization.
+  // Set only when this course was produced by cloning another course (a
+  // platform course forked for an org, or an org course pulled up into the
+  // platform library) — see courses.services.clone_course.
   cloned_from_title: string | null
   created_at: string
   updated_at: string
@@ -69,8 +70,9 @@ export interface CourseDetail extends CourseListItem {
   is_demo_available: boolean
   modules: Module[]
   access_grants: CourseAccessGrant[]
-  // Set only when this course was produced by cloning a platform course into
-  // an organization — see courses.services.clone_course_for_organization.
+  // Set only when this course was produced by cloning another course (a
+  // platform course forked for an org, or an org course pulled up into the
+  // platform library) — see courses.services.clone_course.
   cloned_from_title: string | null
 }
 
