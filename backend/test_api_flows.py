@@ -1466,6 +1466,59 @@ class SlideOrderingTests(BaseAPITestCase):
         self.assertEqual(response.data['order'], 9)
 
 
+class ModuleLessonOrderingTests(BaseAPITestCase):
+    """Module.order (per course) and Lesson.order (per module) are
+    server-authoritative in exactly the same way as Slide.order — a gapped
+    sequence from a cloned course with its first modules/lessons deleted must
+    not block adding one, and a delete renumbers the rest to 1..N."""
+
+    def setUp(self):
+        super().setUp()
+        # published_org_course already has self.module at order 1. Add a gap
+        # like deleting modules 2-5 of a clone would leave.
+        self.mod_a = Module.objects.create(course=self.published_org_course, title='A', order=6)
+        self.mod_b = Module.objects.create(course=self.published_org_course, title='B', order=7)
+        # self.module already has lesson1 (order 1) and lesson2 (order 2); give
+        # mod_a a gapped lesson sequence.
+        self.les_x = Lesson.objects.create(module=self.mod_a, title='X', order=6, estimated_minutes=1)
+        self.les_y = Lesson.objects.create(module=self.mod_a, title='Y', order=7, estimated_minutes=1)
+        self.les_z = Lesson.objects.create(module=self.mod_a, title='Z', order=8, estimated_minutes=1)
+
+    def test_new_module_appends_past_the_highest_order(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/modules/', {
+            'course': self.published_org_course.id, 'title': 'New', 'order': 6,
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 8)
+
+    def test_deleting_a_module_renumbers_the_rest(self):
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/modules/{self.mod_a.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            list(Module.objects.filter(course=self.published_org_course).order_by('order').values_list('id', 'order')),
+            [(self.module.id, 1), (self.mod_b.id, 2)],
+        )
+
+    def test_new_lesson_appends_past_the_highest_order_in_its_module(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/lessons/', {
+            'module': self.mod_a.id, 'title': 'New', 'lesson_type': 'TEXT', 'order': 6,
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 9)
+
+    def test_deleting_a_lesson_renumbers_the_rest_of_its_module(self):
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/lessons/{self.les_y.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            list(Lesson.objects.filter(module=self.mod_a).order_by('order').values_list('id', 'order')),
+            [(self.les_x.id, 1), (self.les_z.id, 2)],
+        )
+
+
 class QuizBuilderTests(BaseAPITestCase):
     def test_org_admin_can_build_quiz_question_choice(self):
         self.auth_as(self.org_admin)

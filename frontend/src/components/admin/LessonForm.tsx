@@ -6,17 +6,13 @@ import type { Lesson, LessonType } from '../../types/courses'
 interface LessonFormProps {
   moduleId: number
   lesson?: Lesson
-  // Order value to assign when creating a new lesson (position is finalized by a
-  // follow-up reorder call from the parent, so this just needs to be a safe,
-  // collision-free value — the parent passes lessons.length + 1).
-  nextOrder?: number
   onSaved: (createdLessonId?: number) => void
   onCancel: () => void
 }
 
 const LESSON_TYPES: LessonType[] = ['VIDEO', 'SLIDES', 'DOCUMENT', 'TEXT']
 
-export function LessonForm({ moduleId, lesson, nextOrder, onSaved, onCancel }: LessonFormProps) {
+export function LessonForm({ moduleId, lesson, onSaved, onCancel }: LessonFormProps) {
   const [title, setTitle] = useState(lesson?.title ?? '')
   const [lessonType, setLessonType] = useState<LessonType>(lesson?.lesson_type ?? 'TEXT')
   const [estimatedMinutes, setEstimatedMinutes] = useState(lesson?.estimated_minutes ?? 0)
@@ -30,12 +26,12 @@ export function LessonForm({ moduleId, lesson, nextOrder, onSaved, onCancel }: L
     setIsSaving(true)
     setError(null)
     try {
+      // Position (order) is server-assigned on create and owned by
+      // drag-and-drop / "add lesson here" thereafter — never sent from here.
       const payload = {
         module: moduleId,
         title,
         lesson_type: lessonType,
-        // Position (order) is owned by drag-and-drop / "add lesson here" — never hand-edited here.
-        order: lesson ? lesson.order : (nextOrder ?? 1),
         estimated_minutes: estimatedMinutes,
         content_url: contentUrl,
         content_file: file,
