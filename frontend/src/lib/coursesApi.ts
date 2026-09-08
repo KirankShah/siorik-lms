@@ -151,7 +151,8 @@ export function revokeDemoLessonAccess(courseSlug: string, lessonId: number): Pr
 export interface ModuleInput {
   course: number
   title: string
-  order: number
+  // `order` is assigned server-side (a new module appends to the end of the
+  // course) — never sent on create/update.
 }
 
 export function createModule(input: ModuleInput): Promise<{ id: number }> {
@@ -183,7 +184,9 @@ export interface LessonInput {
   title: string
   lesson_type: LessonType
   content_url?: string
-  order: number
+  // `order` is assigned server-side (a new lesson appends to the end of its
+  // module; the curriculum board repositions it with a follow-up reorder call
+  // when it was inserted mid-list) — never sent.
   estimated_minutes: number
   content_file?: File | null
 }

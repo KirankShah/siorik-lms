@@ -124,7 +124,7 @@ export function CourseEditorPage() {
   async function handleAddModule() {
     if (!course || !newModuleTitle.trim()) return
     try {
-      await createModule({ course: course.id, title: newModuleTitle, order: course.modules.length + 1 })
+      await createModule({ course: course.id, title: newModuleTitle })
       setNewModuleTitle('')
       setIsAddingModule(false)
       loadCourse(course.slug)

@@ -210,6 +210,10 @@ class ModuleWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
         fields = ['id', 'course', 'title', 'order']
+        # `order` is server-authoritative — a new module appends to the end of
+        # the course, and reorder()/perform_destroy() keep the sequence a
+        # contiguous 1..N. A client-supplied order is ignored.
+        read_only_fields = ['id', 'order']
 
 
 class ModuleOrderSerializer(serializers.ModelSerializer):
@@ -241,6 +245,11 @@ class LessonWriteSerializer(serializers.ModelSerializer):
             'order',
             'estimated_minutes',
         ]
+        # `order` is server-authoritative — a new lesson appends to the end of
+        # its module (the frontend then repositions it via reorder() if it was
+        # inserted mid-list), and perform_destroy() keeps the sequence a
+        # contiguous 1..N. A client-supplied order is ignored.
+        read_only_fields = ['id', 'order']
 
     def validate(self, attrs):
         # Lesson.clean() enforces file-extension-vs-lesson_type, but ModelSerializer

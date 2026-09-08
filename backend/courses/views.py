@@ -78,6 +78,29 @@ REORDER_TEMP_OFFSET = 10_000
 
 WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
+
+def _append_order(sibling_qs):
+    """The order value for a row appended to the end of `sibling_qs` — one past
+    the current highest, or 1 when empty. Max-based, not count-based: a gap in
+    the sequence (e.g. a cloned course with its first modules/lessons/slides
+    deleted) must never yield a value that collides with a surviving sibling
+    through the (parent, order) unique_together."""
+    highest = sibling_qs.aggregate(highest=Max('order'))['highest']
+    return (highest or 0) + 1
+
+
+def _renumber_contiguous(model, sibling_qs):
+    """Rewrite `sibling_qs`'s rows to a contiguous 1..N by their current order,
+    so deleting one never leaves a gap that drifts the displayed "N." labels or
+    blocks the next append. Two-phase (bump into the temp-offset range first) to
+    stay clear of the (parent, order) unique_together mid-update — same shape as
+    the reorder() actions."""
+    ids = list(sibling_qs.order_by('order').values_list('id', flat=True))
+    for offset, pk in enumerate(ids):
+        model.objects.filter(pk=pk).update(order=REORDER_TEMP_OFFSET + offset)
+    for index, pk in enumerate(ids, start=1):
+        model.objects.filter(pk=pk).update(order=index)
+
 # Prevents CSV/formula injection: a cell starting with =, +, -, or @ can be
 # interpreted as a formula (and executed) when the file is opened in Excel.
 _FORMULA_PREFIXES = ('=', '+', '-', '@')
@@ -335,7 +358,13 @@ class ModuleViewSet(viewsets.ModelViewSet):
         course = serializer.validated_data['course']
         if not editable_courses_for_user(self.request.user).filter(pk=course.pk).exists():
             raise ValidationError({'course': 'You do not have permission to modify this course.'})
-        serializer.save()
+        serializer.save(order=_append_order(Module.objects.filter(course=course)))
+
+    def perform_destroy(self, instance):
+        course = instance.course
+        with transaction.atomic():
+            instance.delete()
+            _renumber_contiguous(Module, Module.objects.filter(course=course))
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):
@@ -374,7 +403,16 @@ class LessonViewSet(viewsets.ModelViewSet):
         module = serializer.validated_data['module']
         if not editable_courses_for_user(self.request.user).filter(pk=module.course_id).exists():
             raise ValidationError({'module': 'You do not have permission to modify this course.'})
-        serializer.save()
+        # Appended to the end of the module; the frontend finalises the exact
+        # position with a follow-up reorder() call when a lesson is inserted
+        # mid-list. See _append_order for why max-based, not count-based.
+        serializer.save(order=_append_order(Lesson.objects.filter(module=module)))
+
+    def perform_destroy(self, instance):
+        module = instance.module
+        with transaction.atomic():
+            instance.delete()
+            _renumber_contiguous(Lesson, Lesson.objects.filter(module=module))
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):
@@ -464,14 +502,6 @@ class LessonViewSet(viewsets.ModelViewSet):
         return Response(LessonOrderSerializer(lessons, many=True).data)
 
 
-def _next_slide_order(lesson):
-    """The order value for a slide appended to the end of `lesson` — one past
-    the current highest, or 1 for an empty lesson. Max-based, not count-based,
-    so a gap in the sequence never produces a colliding value."""
-    highest = Slide.objects.filter(lesson=lesson).aggregate(highest=Max('order'))['highest']
-    return (highest or 0) + 1
-
-
 class SlideViewSet(viewsets.ModelViewSet):
     serializer_class = SlideSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
@@ -489,24 +519,13 @@ class SlideViewSet(viewsets.ModelViewSet):
         # slides of a cloned course) — the client sent order = count + 1, which
         # collided with a surviving slide through Slide's (lesson, order)
         # unique_together and 400'd every time.
-        serializer.save(order=_next_slide_order(lesson))
+        serializer.save(order=_append_order(Slide.objects.filter(lesson=lesson)))
 
     def perform_destroy(self, instance):
         lesson = instance.lesson
         with transaction.atomic():
             instance.delete()
-            # Close the gap the deletion leaves so the lesson's slide order
-            # stays a contiguous 1..N — otherwise the next "add slide" (which
-            # appends at end + 1) and the displayed "Slide N" labels drift.
-            # Two-phase renumber to dodge the (lesson, order) unique_together,
-            # same as reorder().
-            remaining_ids = list(
-                Slide.objects.filter(lesson=lesson).order_by('order').values_list('id', flat=True)
-            )
-            for offset, slide_id in enumerate(remaining_ids):
-                Slide.objects.filter(pk=slide_id).update(order=REORDER_TEMP_OFFSET + offset)
-            for index, slide_id in enumerate(remaining_ids, start=1):
-                Slide.objects.filter(pk=slide_id).update(order=index)
+            _renumber_contiguous(Slide, Slide.objects.filter(lesson=lesson))
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):
@@ -542,7 +561,7 @@ class SlideViewSet(viewsets.ModelViewSet):
             new_slide = Slide.objects.create(
                 lesson=slide.lesson,
                 title=f'{slide.title} (copy)' if slide.title else '',
-                order=_next_slide_order(slide.lesson),
+                order=_append_order(Slide.objects.filter(lesson=slide.lesson)),
                 slide_type=slide.slide_type,
                 layout=slide.layout,
                 image_column_width=slide.image_column_width,

@@ -409,7 +409,6 @@ function SortableModuleRow({
                 <div className="my-2">
                   <LessonForm
                     moduleId={module.id}
-                    nextOrder={module.lessons.length + 1}
                     onSaved={(createdId) => onLessonInserted(idx, createdId)}
                     onCancel={onCancelInsert}
                   />
@@ -441,7 +440,6 @@ function SortableModuleRow({
         <div className="mt-3">
           <LessonForm
             moduleId={module.id}
-            nextOrder={module.lessons.length + 1}
             onSaved={(createdId) => onLessonInserted(module.lessons.length, createdId)}
             onCancel={onCancelInsert}
           />
