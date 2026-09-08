@@ -14,7 +14,8 @@ import type {
 export interface SlideInput {
   lesson: number
   title?: string
-  order: number
+  // `order` is assigned server-side (a new slide always appends to the end of
+  // its lesson) — never sent on create/update.
   slide_type: SlideType
   layout?: Layout
   image_column_width?: ImageColumnWidth

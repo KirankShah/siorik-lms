@@ -464,6 +464,14 @@ class LessonViewSet(viewsets.ModelViewSet):
         return Response(LessonOrderSerializer(lessons, many=True).data)
 
 
+def _next_slide_order(lesson):
+    """The order value for a slide appended to the end of `lesson` — one past
+    the current highest, or 1 for an empty lesson. Max-based, not count-based,
+    so a gap in the sequence never produces a colliding value."""
+    highest = Slide.objects.filter(lesson=lesson).aggregate(highest=Max('order'))['highest']
+    return (highest or 0) + 1
+
+
 class SlideViewSet(viewsets.ModelViewSet):
     serializer_class = SlideSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
@@ -475,7 +483,30 @@ class SlideViewSet(viewsets.ModelViewSet):
         lesson = serializer.validated_data['lesson']
         if not editable_courses_for_user(self.request.user).filter(pk=lesson.module.course_id).exists():
             raise ValidationError({'lesson': 'You do not have permission to modify this lesson.'})
-        serializer.save()
+        # Server-authoritative order: a new slide always lands at the end of the
+        # lesson. Trusting a client-supplied order broke creation whenever the
+        # lesson's order sequence had a gap (e.g. after deleting the first few
+        # slides of a cloned course) — the client sent order = count + 1, which
+        # collided with a surviving slide through Slide's (lesson, order)
+        # unique_together and 400'd every time.
+        serializer.save(order=_next_slide_order(lesson))
+
+    def perform_destroy(self, instance):
+        lesson = instance.lesson
+        with transaction.atomic():
+            instance.delete()
+            # Close the gap the deletion leaves so the lesson's slide order
+            # stays a contiguous 1..N — otherwise the next "add slide" (which
+            # appends at end + 1) and the displayed "Slide N" labels drift.
+            # Two-phase renumber to dodge the (lesson, order) unique_together,
+            # same as reorder().
+            remaining_ids = list(
+                Slide.objects.filter(lesson=lesson).order_by('order').values_list('id', flat=True)
+            )
+            for offset, slide_id in enumerate(remaining_ids):
+                Slide.objects.filter(pk=slide_id).update(order=REORDER_TEMP_OFFSET + offset)
+            for index, slide_id in enumerate(remaining_ids, start=1):
+                Slide.objects.filter(pk=slide_id).update(order=index)
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):
@@ -511,7 +542,7 @@ class SlideViewSet(viewsets.ModelViewSet):
             new_slide = Slide.objects.create(
                 lesson=slide.lesson,
                 title=f'{slide.title} (copy)' if slide.title else '',
-                order=Slide.objects.filter(lesson=slide.lesson).count() + 1,
+                order=_next_slide_order(slide.lesson),
                 slide_type=slide.slide_type,
                 layout=slide.layout,
                 image_column_width=slide.image_column_width,
