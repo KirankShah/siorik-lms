@@ -15,7 +15,14 @@ export function FillBlankSentence({ questionText, renderBlank }: FillBlankSenten
   return (
     <>
       {splitBlankSegments(questionText).map((segment, i) =>
-        typeof segment === 'number' ? <span key={i}>{renderBlank(segment)}</span> : <span key={i}>{segment}</span>,
+        typeof segment === 'number' ? (
+          <span key={i}>{renderBlank(segment)}</span>
+        ) : (
+          // pre-wrap so paragraph breaks in a multi-part cloze question survive
+          <span key={i} className="whitespace-pre-wrap">
+            {segment}
+          </span>
+        ),
       )}
     </>
   )

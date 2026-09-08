@@ -1,3 +1,5 @@
+import { htmlToPlainText } from './htmlEntities'
+
 // FILL_BLANK question_text supports numbered placeholders like
 // "Money laundering has three stages: {{1}}, {{2}}, and {{3}}." — shared by
 // both fill_blank_mode variants (TEXT_INPUT renders a text box per blank,
@@ -8,8 +10,16 @@ const BLANK_PATTERN = /\{\{(\d+)\}\}/g
 // blank-index numbers, so player components can map it directly to React
 // elements (text segments as text, numbers as an inline input/drop target) —
 // no HTML injection, DOM querying, or portals involved.
+//
+// The text is meant to be plain, but the authoring form historically ran it
+// through RichTextField, so some saved questions carry Quill HTML ("<p>",
+// "&nbsp;", "&quot;"). Flatten that to plain text here — the one shared entry
+// point — so every FILL_BLANK screen renders cleanly without re-authoring.
 export function splitBlankSegments(text: string): (string | number)[] {
-  return text.split(BLANK_PATTERN).map((part, i) => (i % 2 === 1 ? Number(part) : part)).filter((part) => part !== '')
+  return htmlToPlainText(text)
+    .split(BLANK_PATTERN)
+    .map((part, i) => (i % 2 === 1 ? Number(part) : part))
+    .filter((part) => part !== '')
 }
 
 export function extractBlankIndexes(text: string): number[] {
