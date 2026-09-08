@@ -18,6 +18,7 @@ class AuditLog(models.Model):
         LEARNER_DELETED = 'LEARNER_DELETED', 'Learner deleted'
         ORG_ADMIN_CREATED = 'ORG_ADMIN_CREATED', 'Organization admin created'
         LEVEL_QUESTIONS_IMPORTED = 'LEVEL_QUESTIONS_IMPORTED', 'Level assessment questions imported'
+        STAFF_ENROLLED = 'STAFF_ENROLLED', 'Staff learner enrolled'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

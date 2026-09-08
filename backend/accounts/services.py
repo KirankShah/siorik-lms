@@ -265,3 +265,90 @@ def provision_org_admin(*, name, email, organization, designation='', phone_numb
         raise UserProvisioningError(f'Account created but the invite email failed to send: {exc}') from exc
 
     return user
+
+
+def send_staff_learner_invite_email(user, temp_password):
+    display_name = user.get_full_name() or user.email
+    org_name = user.organization.name if user.organization else 'your institution'
+    login_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login"
+    subject = f'{display_name}, Your Siorik LMS Account for {org_name}'
+
+    text_body = (
+        f'Dear {display_name},\n\n'
+        f'An account has been created for you on Siorik LMS by {org_name} for your compliance and '
+        f'financial-crime-prevention training.\n\n'
+        f'Your login details:\n\n'
+        f'Email: {user.email}\n'
+        f'Temporary Password: {temp_password}\n\n'
+        f'Log In to Siorik LMS: {login_url}\n\n'
+        f"For your security, you'll be asked to set a new password the first time you log in. Once you're "
+        f"in, your assigned assessment will be waiting on your dashboard.\n\n"
+        f'If you have any questions, please contact your training administrator.\n\n'
+        f'Best regards,\n'
+        f'Siorik Consultancy Pvt. Ltd.'
+    )
+
+    html_body = f'''
+<div style="font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto;">
+  <p>Dear {display_name},</p>
+  <p>An account has been created for you on Siorik LMS by <strong>{org_name}</strong> for your compliance
+     and financial-crime-prevention training.</p>
+  <p style="margin-bottom: 4px;"><strong>Your login details:</strong></p>
+  <p style="margin-top: 0;">
+    Email: {user.email}<br>
+    Temporary Password: {temp_password}
+  </p>
+  <p>
+    <a href="{login_url}"
+       style="display: inline-block; padding: 12px 28px; background-color: {_BRAND_NAVY}; color: {_BRAND_GOLD};
+              text-decoration: none; font-weight: bold; border-radius: 6px;">
+      Log In to Siorik LMS &rarr;
+    </a>
+  </p>
+  <p>For your security, you'll be asked to set a new password the first time you log in. Once you're in,
+     your assigned assessment will be waiting on your dashboard.</p>
+  <p>If you have any questions, please contact your training administrator.</p>
+  <p>
+    Best regards,<br>
+    Siorik Consultancy Pvt. Ltd.
+  </p>
+</div>
+'''
+
+    _send_invite_email(to_email=user.email, subject=subject, text_body=text_body, html_body=html_body)
+
+
+@transaction.atomic
+def provision_staff_learner(
+    *,
+    name,
+    email,
+    organization,
+    designation='',
+    phone_number='',
+    corporate_title='',
+    functional_title='',
+    branch_department='',
+    assessment_level=None,
+):
+    """
+    Creates a real (is_demo=False) LEARNER account for `organization` staff —
+    same atomic account+invite mechanics as provision_demo_user, but a full
+    learner with normal course access (not a prospective-client demo), and a
+    staff-worded invite. `assessment_level` (one of User.AssessmentLevel) is
+    what later drives which role-based assessment they're shown, via
+    levelassessments.services.assigned_assessment_level_for_user.
+    """
+    user, temp_password = _create_pending_user(
+        name=name, email=email, organization=organization, role=User.Role.LEARNER, is_demo=False,
+        designation=designation, phone_number=phone_number,
+        corporate_title=corporate_title, functional_title=functional_title,
+        branch_department=branch_department, assessment_level=assessment_level,
+    )
+
+    try:
+        send_staff_learner_invite_email(user, temp_password)
+    except Exception as exc:
+        raise UserProvisioningError(f'Account created but the invite email failed to send: {exc}') from exc
+
+    return user

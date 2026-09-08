@@ -14,7 +14,9 @@ class AssessmentLevelSerializer(serializers.ModelSerializer):
     class Meta:
         model = AssessmentLevel
         fields = ['id', 'organization', 'name', 'name_display', 'pass_threshold', 'questions_per_attempt']
-        read_only_fields = fields
+        # The four tiers are fixed per org (seeded on org creation) — only their
+        # scoring config is editable, and only via PATCH (see the viewset).
+        read_only_fields = ['id', 'organization', 'name', 'name_display']
 
 
 class LevelChoiceSerializer(serializers.ModelSerializer):

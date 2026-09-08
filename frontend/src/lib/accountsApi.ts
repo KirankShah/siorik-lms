@@ -58,3 +58,28 @@ export function bulkCreateDemoUsers(file: File): Promise<DemoUserBulkResult> {
 export function createOrgAdmin(input: DemoUserInput): Promise<User> {
   return apiFetch<User>('/org-admins/', { method: 'POST', body: input })
 }
+
+export interface StaffEnrollCreated {
+  email: string
+  assessment_level: string
+}
+
+export interface StaffEnrollFailure {
+  row: number | null
+  email: string
+  reason: string
+}
+
+export interface StaffEnrollResult {
+  created: StaffEnrollCreated[]
+  failed: StaffEnrollFailure[]
+}
+
+// ORG_ADMIN/PLATFORM_ADMIN — bulk-creates real (non-demo) LEARNER accounts from
+// the staff-enrollment spreadsheet (.xlsx or .csv). Each row's Assessment Level
+// is stored on the account and drives which role-based assessment they see.
+export function bulkEnrollStaff(file: File): Promise<StaffEnrollResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return apiFetch<StaffEnrollResult>('/staff/bulk/', { method: 'POST', body: formData })
+}

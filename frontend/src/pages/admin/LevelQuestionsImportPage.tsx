@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ApiError } from '../../lib/apiClient'
-import { fetchAssessmentLevels, importLevelQuestions } from '../../lib/levelAssessmentsApi'
+import { fetchAssessmentLevels, importLevelQuestions, updateAssessmentLevel } from '../../lib/levelAssessmentsApi'
 import type { AssessmentLevelSummary, LevelQuestionImportResult } from '../../types/levelAssessments'
 
 const TEMPLATE_COLUMNS = [
@@ -20,6 +20,89 @@ const TEMPLATE_COLUMNS = [
   'Feedback if Correct',
   'Feedback if Incorrect',
 ]
+
+function LevelSettingsCard({
+  level,
+  onSaved,
+}: {
+  level: AssessmentLevelSummary
+  onSaved: (updated: AssessmentLevelSummary) => void
+}) {
+  const [passThreshold, setPassThreshold] = useState(String(level.pass_threshold))
+  const [questionsPerAttempt, setQuestionsPerAttempt] = useState(String(level.questions_per_attempt))
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  // Re-sync when the selected level changes.
+  useEffect(() => {
+    setPassThreshold(String(level.pass_threshold))
+    setQuestionsPerAttempt(String(level.questions_per_attempt))
+    setStatus('idle')
+  }, [level.id, level.pass_threshold, level.questions_per_attempt])
+
+  const pass = Number(passThreshold)
+  const perAttempt = Number(questionsPerAttempt)
+  const valid =
+    Number.isInteger(pass) && pass >= 0 && pass <= 100 && Number.isInteger(perAttempt) && perAttempt >= 1
+  const dirty = pass !== level.pass_threshold || perAttempt !== level.questions_per_attempt
+
+  async function save() {
+    if (!valid || !dirty) return
+    setStatus('saving')
+    try {
+      const updated = await updateAssessmentLevel(level.id, {
+        pass_threshold: pass,
+        questions_per_attempt: perAttempt,
+      })
+      onSaved(updated)
+      setStatus('saved')
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  return (
+    <Card className="space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-neutral-900">Level settings — {level.name_display}</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Each organization sets its own pass mark. An attempt draws the number of questions below at random from this
+          level's pool, so the pool must hold at least that many questions before a learner can start.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-4">
+        <label className="text-sm">
+          <span className="block font-medium text-neutral-700">Pass mark (%)</span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={passThreshold}
+            onChange={(e) => setPassThreshold(e.target.value)}
+            className="mt-1 w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="text-sm">
+          <span className="block font-medium text-neutral-700">Questions per attempt</span>
+          <input
+            type="number"
+            min={1}
+            value={questionsPerAttempt}
+            onChange={(e) => setQuestionsPerAttempt(e.target.value)}
+            className="mt-1 w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+          />
+        </label>
+      </div>
+      {!valid && (
+        <p className="text-sm text-red-600">Pass mark must be 0–100 and questions per attempt at least 1.</p>
+      )}
+      {status === 'error' && <p className="text-sm text-red-600">Could not save the level settings.</p>}
+      {status === 'saved' && !dirty && <p className="text-sm text-emerald-700">Level settings saved.</p>}
+      <Button disabled={!valid || !dirty || status === 'saving'} onClick={save}>
+        {status === 'saving' ? 'Saving…' : 'Save settings'}
+      </Button>
+    </Card>
+  )
+}
 
 export function LevelQuestionsImportPage() {
   const [levels, setLevels] = useState<AssessmentLevelSummary[]>([])
@@ -39,6 +122,11 @@ export function LevelQuestionsImportPage() {
   // A PLATFORM_ADMIN sees several organizations' levels at once, so the label
   // needs the org name to stay unambiguous; an ORG_ADMIN sees only their own.
   const showOrg = useMemo(() => new Set(levels.map((level) => level.organization.id)).size > 1, [levels])
+  const selectedLevel = levels.find((level) => String(level.id) === levelId) ?? null
+
+  function applyLevelUpdate(updated: AssessmentLevelSummary) {
+    setLevels((prev) => prev.map((level) => (level.id === updated.id ? updated : level)))
+  }
 
   async function handleSubmit() {
     if (!levelId || !file) return
@@ -61,11 +149,10 @@ export function LevelQuestionsImportPage() {
 
   return (
     <div>
-      <h1 className="text-lg font-semibold text-neutral-900">Assessment Questions</h1>
+      <h1 className="text-lg font-semibold text-neutral-900">Level Assessments</h1>
       <p className="mt-1 text-sm text-neutral-500">
-        Bulk-import role-based assessment questions from a "Level Assessment Question Template" Excel workbook into one
-        assessment level. Each valid row is committed immediately; invalid rows are skipped and listed below with a
-        reason — they never block the rest of the file.
+        Configure each role-based assessment level's pass mark and import its questions. Staff are shown the assessment
+        for the level they were enrolled at — no per-person assignment step.
       </p>
 
       <Card className="mt-4 space-y-4">
@@ -76,7 +163,11 @@ export function LevelQuestionsImportPage() {
           <select
             id="import-level"
             value={levelId}
-            onChange={(e) => setLevelId(e.target.value)}
+            onChange={(e) => {
+              setLevelId(e.target.value)
+              setResult(null)
+              setError(null)
+            }}
             className="mt-1 w-full max-w-sm rounded-md border border-neutral-300 px-3 py-2 text-sm"
           >
             <option value="">Select a level…</option>
@@ -88,8 +179,25 @@ export function LevelQuestionsImportPage() {
           </select>
           {levelsError && <p className="mt-1 text-sm text-red-600">{levelsError}</p>}
           {!levelsError && levels.length === 0 && (
-            <p className="mt-1 text-sm text-neutral-500">No assessment levels are configured yet.</p>
+            <p className="mt-1 text-sm text-neutral-500">No assessment levels found for your organization.</p>
           )}
+        </div>
+      </Card>
+
+      {selectedLevel && (
+        <div className="mt-4">
+          <LevelSettingsCard level={selectedLevel} onSaved={applyLevelUpdate} />
+        </div>
+      )}
+
+      <Card className="mt-4 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold text-neutral-900">Import questions</h2>
+          <p className="mt-1 text-sm text-neutral-500">
+            Bulk-import questions from a "Level Assessment Question Template" Excel workbook into the selected level.
+            Each valid row is committed immediately; invalid rows are skipped and listed below with a reason — they
+            never block the rest of the file.
+          </p>
         </div>
 
         <div>

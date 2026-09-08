@@ -66,6 +66,18 @@ from narration.models import SlideNarration
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
 
+def configure_assessment_level(organization, name, **config):
+    """Every Organization now gets its four AssessmentLevel rows from a
+    post_save signal (levelassessments.signals), so tests fetch-and-configure
+    the one they want rather than creating it."""
+    level, _ = AssessmentLevel.objects.get_or_create(organization=organization, name=name)
+    for field, value in config.items():
+        setattr(level, field, value)
+    if config:
+        level.save(update_fields=list(config))
+    return level
+
+
 def make_test_certificate_template(**overrides):
     """Builds a minimal, valid CertificateTemplate for tests that don't rely on the seeded platform default."""
     image_buffer = io.BytesIO()
@@ -2869,11 +2881,8 @@ class LevelAssessmentAttemptServiceTests(TestCase):
     def setUp(self):
         self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-level')
         self.user = User.objects.create_user(email='learner@example.com', password='pw', role=User.Role.LEARNER)
-        self.level = AssessmentLevel.objects.create(
-            organization=self.org,
-            name=User.AssessmentLevel.OFFICER,
-            pass_threshold=70,
-            questions_per_attempt=3,
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=70, questions_per_attempt=3,
         )
         self.set_a = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
         self.set_b = QuestionSet.objects.create(assessment_level=self.level, label='Set 2')
@@ -2937,11 +2946,11 @@ class LevelAssessmentAttemptServiceTests(TestCase):
 class LevelQuestionImportApiTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
-        self.level = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, questions_per_attempt=2,
         )
-        self.other_org_level = AssessmentLevel.objects.create(
-            organization=self.other_org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        self.other_org_level = configure_assessment_level(
+            self.other_org, User.AssessmentLevel.OFFICER, questions_per_attempt=2,
         )
 
     def import_url(self, level):
@@ -3117,6 +3126,165 @@ class LevelQuestionImportApiTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class AssessmentLevelConfigApiTests(BaseAPITestCase):
+    """Every org is auto-seeded four AssessmentLevel rows; an admin tunes their
+    pass_threshold / questions_per_attempt per org via PATCH."""
+
+    def test_org_has_four_seeded_levels(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/assessment-levels/')
+        names = sorted(level['name'] for level in response.data)
+        self.assertEqual(names, ['assistant_supervisor', 'management', 'officer', 'senior_management'])
+        self.assertTrue(all(level['organization']['id'] == self.org.id for level in response.data))
+
+    def test_org_admin_can_patch_pass_threshold_for_own_org_level(self):
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/assessment-levels/{level.id}/', {'pass_threshold': 85, 'questions_per_attempt': 20}, format='json'
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        level.refresh_from_db()
+        self.assertEqual((level.pass_threshold, level.questions_per_attempt), (85, 20))
+
+    def test_name_and_organization_are_read_only_on_patch(self):
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/assessment-levels/{level.id}/',
+            {'name': User.AssessmentLevel.MANAGEMENT, 'pass_threshold': 60}, format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        level.refresh_from_db()
+        self.assertEqual(level.name, User.AssessmentLevel.OFFICER)
+        self.assertEqual(level.pass_threshold, 60)
+
+    def test_org_admin_cannot_patch_another_orgs_level(self):
+        other = AssessmentLevel.objects.get(organization=self.other_org, name=User.AssessmentLevel.OFFICER)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(f'/api/assessment-levels/{other.id}/', {'pass_threshold': 10}, format='json')
+        self.assertEqual(response.status_code, 404)
+
+    def test_learner_cannot_patch_a_level(self):
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        self.auth_as(self.learner)
+        response = self.client.patch(f'/api/assessment-levels/{level.id}/', {'pass_threshold': 10}, format='json')
+        self.assertEqual(response.status_code, 403)
+
+
+def make_staff_upload(rows, *, filename='staff.xlsx', title_row=True, org_name='Acme Bank'):
+    """Builds an .xlsx matching the LBBL staff-enrollment template shape:
+    optional title row, then the header, then `rows` (each a dict)."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'Staff Details'
+    if title_row:
+        sheet.append([f'{org_name} - Staff Enrollment Details'])
+    header = ['Full Name', 'Email Address', 'Corporate Title', 'Functional Title',
+              'Branch / Department', 'Assessment Level', 'Phone Number (optional)', 'Organization']
+    sheet.append(header)
+    for row in rows:
+        sheet.append([
+            row.get('name', ''), row.get('email', ''), row.get('corporate_title', ''),
+            row.get('functional_title', ''), row.get('branch', ''), row.get('level', ''),
+            row.get('phone', ''), row.get('org', org_name),
+        ])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return SimpleUploadedFile(
+        filename, buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
+class StaffEnrollmentApiTests(BaseAPITestCase):
+    URL = '/api/staff/bulk/'
+
+    def test_org_admin_enrolls_staff_as_real_learners_with_assessment_level(self):
+        upload = make_staff_upload([
+            {'name': 'Sunita Karki', 'email': 'sunita@acme.test', 'level': 'Front-Line Level', 'phone': '9801234567'},
+            {'name': 'Bikash Thapa', 'email': 'bikash@acme.test', 'level': 'Officer'},
+        ])
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data['created']), 2)
+        self.assertEqual(response.data['failed'], [])
+
+        sunita = User.objects.get(email='sunita@acme.test')
+        self.assertEqual(sunita.role, User.Role.LEARNER)
+        self.assertFalse(sunita.is_demo)
+        self.assertTrue(sunita.must_reset_password)
+        self.assertEqual(sunita.assessment_level, User.AssessmentLevel.ASSISTANT_SUPERVISOR)
+        self.assertEqual(sunita.organization, self.org)
+        self.assertEqual(sunita.phone_number, '9801234567')
+
+    def test_assigned_assessment_level_resolves_for_an_enrolled_staff_member(self):
+        configure_assessment_level(self.org, User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1)
+        upload = make_staff_upload([
+            {'name': 'Anita Shrestha', 'email': 'anita@acme.test', 'level': 'Middle Management Level'},
+        ])
+        self.auth_as(self.org_admin)
+        self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        anita = User.objects.get(email='anita@acme.test')
+        self.auth_as(anita)
+        response = self.client.get('/api/my-assessment-level/')
+        self.assertTrue(response.data['assigned'])
+        self.assertEqual(response.data['assessment_level']['name'], User.AssessmentLevel.MANAGEMENT)
+
+    def test_invalid_level_and_missing_fields_are_reported_not_dropped(self):
+        upload = make_staff_upload([
+            {'name': 'Good Row', 'email': 'good@acme.test', 'level': 'Officer'},
+            {'name': 'Bad Level', 'email': 'bad@acme.test', 'level': 'Wizard'},
+            {'name': '', 'email': 'noname@acme.test', 'level': 'Officer'},
+        ])
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(len(response.data['created']), 1)
+        reasons = {f['email']: f['reason'] for f in response.data['failed']}
+        self.assertIn('bad@acme.test', reasons)
+        self.assertIn('noname@acme.test', reasons)
+
+    def test_org_admin_cannot_enroll_into_another_organization(self):
+        upload = make_staff_upload(
+            [{'name': 'X', 'email': 'x@other.test', 'level': 'Officer', 'org': 'Other Bank'}], org_name='Other Bank'
+        )
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(len(response.data['created']), 0)
+        self.assertFalse(User.objects.filter(email='x@other.test').exists())
+
+    def test_platform_admin_can_enroll_into_any_organization(self):
+        upload = make_staff_upload(
+            [{'name': 'Y', 'email': 'y@other.test', 'level': 'Officer', 'org': 'Other Bank'}], org_name='Other Bank'
+        )
+        self.auth_as(self.platform_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(len(response.data['created']), 1, response.data)
+        self.assertEqual(User.objects.get(email='y@other.test').organization, self.other_org)
+
+    def test_learner_and_instructor_are_forbidden(self):
+        upload = make_staff_upload([{'name': 'Z', 'email': 'z@acme.test', 'level': 'Officer'}])
+        for user in (self.learner, self.instructor):
+            self.auth_as(user)
+            response = self.client.post(self.URL, {'file': upload}, format='multipart')
+            self.assertEqual(response.status_code, 403)
+
+    def test_csv_is_also_accepted(self):
+        csv_bytes = (
+            'Full Name,Email Address,Assessment Level,Organization\r\n'
+            'Ram Gurung,ram@acme.test,Top Management Level,Acme Bank\r\n'
+        ).encode('utf-8')
+        upload = SimpleUploadedFile('staff.csv', csv_bytes, content_type='text/csv')
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(len(response.data['created']), 1, response.data)
+        self.assertEqual(
+            User.objects.get(email='ram@acme.test').assessment_level, User.AssessmentLevel.SENIOR_MANAGEMENT
+        )
+
+
 class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
     """
     The student-facing flow: dashboard/landing status lookup, starting an
@@ -3128,8 +3296,8 @@ class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
-        self.level = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=2,
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=2,
         )
         question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
 
@@ -3178,14 +3346,29 @@ class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, {'assigned': False})
 
-    def test_not_assigned_when_organization_has_no_configured_level(self):
-        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
-        self.other_org_learner.save()  # other_org has no AssessmentLevel configured
-        self.auth_as(self.other_org_learner)
+    def test_not_assigned_when_user_has_no_organization(self):
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.organization = None
+        self.learner.save()
+        self.auth_as(self.learner)
 
         response = self.client.get('/api/my-assessment-level/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, {'assigned': False})
+
+    def test_assigned_to_own_organizations_level_not_another_orgs(self):
+        # Every org now has all four levels (seeded on creation), so a learner
+        # with an assessment_level set is always assigned — to their own org's.
+        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.other_org_learner.save()
+        self.auth_as(self.other_org_learner)
+
+        response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['assigned'])
+        self.assertEqual(
+            response.data['assessment_level']['organization']['id'], self.other_org_learner.organization_id
+        )
 
     def test_status_not_started_before_any_attempt(self):
         self.auth_as(self.learner)
@@ -3325,8 +3508,8 @@ class LevelAssessmentBadgeTests(TestCase):
 
     def setUp(self):
         self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-badges')
-        self.level = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=5,
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=5,
         )
         question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
         self.questions = []
@@ -3517,8 +3700,8 @@ class LevelAssessmentBadgeIntegrationTests(BaseAPITestCase):
     """Confirms the submit endpoint actually wires up badge awarding, not just the service function in isolation."""
 
     def test_submitting_a_perfect_first_attempt_awards_first_strike_and_perfect_score(self):
-        level = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
         )
         question_set = QuestionSet.objects.create(assessment_level=level, label='Set 1')
         question = LevelQuestion.objects.create(
@@ -3559,11 +3742,11 @@ class LeaderboardLevelAssessmentPointsTests(TestCase):
         self.user = User.objects.create_user(
             email='points@example.com', password='pw', role=User.Role.LEARNER, organization=self.org,
         )
-        self.level_a = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, questions_per_attempt=1,
+        self.level_a = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, questions_per_attempt=1,
         )
-        self.level_b = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1,
+        self.level_b = configure_assessment_level(
+            self.org, User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1,
         )
 
     def make_attempt(self, level, passed):
@@ -3630,8 +3813,8 @@ class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
-        self.level = AssessmentLevel.objects.create(
-            organization=self.org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
         )
         question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
         self.question = LevelQuestion.objects.create(
@@ -3663,8 +3846,8 @@ class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):
     def test_leaderboard_endpoint_stays_organization_scoped_after_a_level_assessment_pass(self):
         # A learner in a *different* organization passes their own level
         # assessment — its points must never surface in self.org's leaderboard.
-        other_level = AssessmentLevel.objects.create(
-            organization=self.other_org, name=User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        other_level = configure_assessment_level(
+            self.other_org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
         )
         other_question_set = QuestionSet.objects.create(assessment_level=other_level, label='Set 1')
         other_question = LevelQuestion.objects.create(

@@ -2,7 +2,23 @@ import random
 
 from django.db import IntegrityError, transaction
 
+from accounts.models import User
+
 from .models import AssessmentLevel, LevelAssessmentAttempt, LevelQuestion
+
+# Every organization gets exactly these four assessment tiers, one row per
+# accounts.User.AssessmentLevel value. pass_threshold / questions_per_attempt
+# start at the model defaults and are then editable per level, per org, by an
+# admin (see AssessmentLevelViewSet.partial_update).
+DEFAULT_LEVEL_NAMES = [choice.value for choice in User.AssessmentLevel]
+
+
+def ensure_assessment_levels_for_organization(organization):
+    """Idempotently create the four AssessmentLevel rows for `organization`.
+    Safe to call repeatedly — used both by the post_save signal on
+    Organization and the one-off backfill migration."""
+    for name in DEFAULT_LEVEL_NAMES:
+        AssessmentLevel.objects.get_or_create(organization=organization, name=name)
 
 
 class LevelAssessmentError(Exception):

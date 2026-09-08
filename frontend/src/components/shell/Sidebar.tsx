@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   Settings,
   Trophy,
+  UserPlus,
   Users,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -89,6 +90,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
             <NavLink to="/admin/learners" className={linkClass} onClick={onNavigate}>
               <Users className="h-[18px] w-[18px]" />
               Learners
+            </NavLink>
+            <NavLink to="/admin/staff-enrollment" className={linkClass} onClick={onNavigate}>
+              <UserPlus className="h-[18px] w-[18px]" />
+              Staff Enrollment
             </NavLink>
             <NavLink to="/admin/organization" className={linkClass} onClick={onNavigate}>
               <Settings className="h-[18px] w-[18px]" />
