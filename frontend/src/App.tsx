@@ -23,6 +23,7 @@ import { CourseSlidesTab } from './pages/admin/CourseSlidesTab'
 import { DemoUsersPage } from './pages/admin/DemoUsersPage'
 import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
+import { LevelQuestionsImportPage } from './pages/admin/LevelQuestionsImportPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
 import { OrganizationsPage } from './pages/admin/OrganizationsPage'
 import { ReportsPage } from './pages/admin/ReportsPage'
@@ -59,6 +60,7 @@ function App() {
               <Route path="bulk-enroll" element={<BulkEnrollPage />} />
               <Route path="certificate-templates" element={<CertificateTemplatesPage />} />
               <Route path="demo-users" element={<DemoUsersPage />} />
+              <Route path="assessment-questions" element={<LevelQuestionsImportPage />} />
             </Route>
 
             <Route path="/admin/courses/:slug" element={<CourseDashboardLayout />}>
