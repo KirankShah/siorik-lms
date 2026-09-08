@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { extractBlankIndexes } from '../../lib/fillBlankMarkup'
-import { decodeHtmlEntitiesIfPresent } from '../../lib/htmlEntities'
+import { decodeHtmlEntitiesIfPresent, htmlToPlainText } from '../../lib/htmlEntities'
 import { deleteQuestion, updateQuestion } from '../../lib/quizApi'
 import type { FillBlankMode, Question, QuestionType } from '../../types/quiz'
 import { AnswerOptionsEditor } from './AnswerOptionsEditor'
@@ -28,7 +28,12 @@ interface QuestionFormProps {
 
 export function QuestionForm({ question, index, onChanged }: QuestionFormProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [questionText, setQuestionText] = useState(question.question_text)
+  // FILL_BLANK question text is plain text with {{N}} placeholders (edited in a
+  // textarea, not RichTextField) — flatten any HTML a legacy rich-text save left
+  // behind so the editor shows clean text.
+  const [questionText, setQuestionText] = useState(
+    question.question_type === 'FILL_BLANK' ? htmlToPlainText(question.question_text) : question.question_text,
+  )
   const [questionType, setQuestionType] = useState(question.question_type)
   const [fillBlankMode, setFillBlankMode] = useState<FillBlankMode>(question.fill_blank_mode ?? 'TEXT_INPUT')
   const [order, setOrder] = useState(question.order)
@@ -118,7 +123,17 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
           <div>
             <label className="block text-xs font-medium text-neutral-700">Question body</label>
             <div className="mt-1">
-              <RichTextField key={question.id} initialHtml={question.question_text} onChange={setQuestionText} placeholder="Question text…" />
+              {questionType === 'FILL_BLANK' ? (
+                <textarea
+                  value={questionText}
+                  onChange={(e) => setQuestionText(e.target.value)}
+                  rows={4}
+                  placeholder="Plain text with numbered blanks, e.g. Money laundering has three stages: {{1}}, {{2}}, and {{3}}."
+                  className="w-full rounded border border-neutral-300 px-2 py-1.5 text-sm"
+                />
+              ) : (
+                <RichTextField key={question.id} initialHtml={question.question_text} onChange={setQuestionText} placeholder="Question text…" />
+              )}
             </div>
             {questionType === 'FILL_BLANK' && (
               <p className="mt-1 text-xs text-neutral-400">
@@ -150,7 +165,13 @@ export function QuestionForm({ question, index, onChanged }: QuestionFormProps) 
               <label className="block text-xs font-medium text-neutral-700">Type</label>
               <select
                 value={questionType}
-                onChange={(e) => setQuestionType(e.target.value as QuestionType)}
+                onChange={(e) => {
+                  const next = e.target.value as QuestionType
+                  setQuestionType(next)
+                  // Moving into FILL_BLANK: its editor is a plain textarea, so
+                  // drop any rich-text markup the previous type left behind.
+                  if (next === 'FILL_BLANK') setQuestionText((t) => htmlToPlainText(t))
+                }}
                 className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
               >
                 {QUESTION_TYPES.map((t) => (

@@ -12,3 +12,25 @@ export function decodeHtmlEntitiesIfPresent(text: string): string {
   el.innerHTML = text
   return el.value
 }
+
+// A rich-text (Quill) value that has leaked into a field meant to hold plain
+// text — most visibly FILL_BLANK question_text, which is split on {{N}} and
+// rendered as React text nodes, so any tags/entities would show up literally
+// ("<p>", "&nbsp;", "&quot;"). Collapses block boundaries to newlines, strips
+// tags, decodes entities once. A string with no "<" or "&" is returned as-is.
+export function htmlToPlainText(value: string): string {
+  if (!/[<&]/.test(value)) return value
+  const withBreaks = value
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/\s*(?:p|div|li|h[1-6]|tr)\s*>/gi, '\n')
+  const el = document.createElement('div')
+  el.innerHTML = withBreaks
+  // `\S` in a JS regex excludes U+00A0, so `[^\S\n]` is "any whitespace except
+  // a newline" — collapses runs of spaces / tabs / decoded &nbsp; to one space
+  // while keeping the paragraph breaks introduced above.
+  return (el.textContent ?? '')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
