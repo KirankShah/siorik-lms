@@ -31,7 +31,7 @@ export function AdminSectionLayout() {
           Demo Users
         </NavLink>
         <NavLink to="/admin/assessment-questions" className={subNavLinkClass}>
-          Assessment Questions
+          Level Assessments
         </NavLink>
       </nav>
       <Outlet />

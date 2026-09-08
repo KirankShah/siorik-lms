@@ -17,17 +17,23 @@ from .serializers import AssessmentLevelSerializer, LevelAssessmentAttemptSerial
 from .services import LevelAssessmentError, assigned_assessment_level_for_user, start_level_assessment_attempt
 
 
-class AssessmentLevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class AssessmentLevelViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
     """
-    Read-only for now (AssessmentLevel/QuestionSet authoring itself isn't
-    exposed here yet) — list/retrieve exist so an admin can pick which level
-    to import questions into. Admin-only, org-scoped same as course content:
-    an ORG_ADMIN/INSTRUCTOR only sees/imports into their own organization's
-    levels; PLATFORM_ADMIN sees every organization's.
+    List/retrieve so an admin can pick which level to import questions into,
+    plus PATCH to tune a level's `pass_threshold` / `questions_per_attempt`
+    (the four tiers themselves are fixed — seeded per organization). Admin-only,
+    org-scoped same as course content: an ORG_ADMIN/INSTRUCTOR only sees/edits
+    their own organization's levels; PLATFORM_ADMIN sees every organization's.
     """
 
     serializer_class = AssessmentLevelSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
+    http_method_names = ['get', 'patch', 'head', 'options', 'post']  # no PUT (partial config edits only)
 
     def get_queryset(self):
         return editable_assessment_levels_for_user(self.request.user).select_related('organization')

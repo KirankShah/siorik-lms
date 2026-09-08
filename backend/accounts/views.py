@@ -14,7 +14,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from audit.models import AuditLog
 from audit.services import log_action
-from core.permissions import IsAdminRole, IsPlatformAdminRole
+from core.permissions import IsAdminRole, IsOrgAdminRole, IsPlatformAdminRole
 
 from .models import Organization, User
 from .serializers import (
@@ -24,7 +24,14 @@ from .serializers import (
     UserPreferenceSerializer,
     UserSerializer,
 )
-from .services import UserProvisioningError, provision_demo_user, provision_org_admin
+from .services import (
+    UserProvisioningError,
+    provision_demo_user,
+    provision_org_admin,
+    provision_staff_learner,
+)
+from .staff_import import StaffImportError, parse_staff_rows
+from .staff_import import resolve_assessment_level as _resolve_staff_level
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
@@ -160,12 +167,13 @@ def _resolve_organization(name_or_slug):
 
 
 def _resolve_assessment_level(raw):
-    """Matches case/spacing-insensitively against the four allowed values
-    (e.g. "Senior Management" or "senior_management" both resolve), returning
-    None for anything else — including a blank cell — so the caller can reject
-    the row rather than silently defaulting it."""
-    normalized = (raw or '').strip().lower().replace(' ', '_').replace('/', '_')
-    return normalized if normalized in User.AssessmentLevel.values else None
+    """The stored assessment-level code for a free-text cell, or None for
+    anything unrecognised (including a blank cell) so the caller can reject the
+    row rather than silently defaulting it. Delegates to the staff-import
+    resolver, which accepts the codes, the current tier labels ("Front-Line
+    Level", ...) and the older ones ("Assistant-Supervisor", ...)."""
+    member = _resolve_staff_level(raw)
+    return str(member) if member is not None else None
 
 
 def _row_cell(row, index):
@@ -325,6 +333,74 @@ class OrgAdminViewSet(viewsets.GenericViewSet):
 
         log_action(request.user, AuditLog.Action.ORG_ADMIN_CREATED, user)
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+
+class StaffEnrollmentViewSet(viewsets.GenericViewSet):
+    """
+    ORG_ADMIN/PLATFORM_ADMIN bulk enrollment of real staff (is_demo=False
+    LEARNER accounts) from the staff-enrollment spreadsheet — .xlsx or .csv,
+    tolerant of the "LBBL_Staff_Enrollment_Template" layout (see staff_import).
+    Each row carries an Assessment Level, which is all that's needed for the
+    learner to be shown the matching role-based assessment
+    (levelassessments.services.assigned_assessment_level_for_user derives it
+    from user.assessment_level + org — no per-user assignment row).
+
+    Org scoping: an ORG_ADMIN only enrolls into their own organization; a row
+    naming a different organization is rejected rather than silently retargeted.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+    serializer_class = DemoUserCreateSerializer  # unused for the action; keeps DRF's schema gen happy
+
+    @action(detail=False, methods=['post'])
+    def bulk(self, request):
+        upload = request.FILES.get('file')
+        if not upload:
+            return Response({'detail': 'A .xlsx or .csv file is required (field name "file").'}, status=400)
+
+        try:
+            rows, failed = parse_staff_rows(upload, upload.name)
+        except StaffImportError as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+        is_platform_admin = request.user.role == User.Role.PLATFORM_ADMIN
+        own_org = request.user.organization
+
+        created = []
+        for row in rows:
+            organization = _resolve_organization(row['organization_name'])
+            if organization is None:
+                failed.append({
+                    'row': None, 'email': row['email'],
+                    'reason': f'Organization "{row["organization_name"]}" was not found.',
+                })
+                continue
+            if not is_platform_admin and organization.id != (own_org.id if own_org else None):
+                failed.append({
+                    'row': None, 'email': row['email'],
+                    'reason': f'Row names organization "{organization.name}", but you can only enrol staff into your own.',
+                })
+                continue
+
+            try:
+                user = provision_staff_learner(
+                    name=row['name'],
+                    email=row['email'],
+                    organization=organization,
+                    phone_number=row['phone_number'],
+                    corporate_title=row['corporate_title'],
+                    functional_title=row['functional_title'],
+                    branch_department=row['branch_department'],
+                    assessment_level=row['assessment_level'],
+                )
+            except UserProvisioningError as exc:
+                failed.append({'row': None, 'email': row['email'], 'reason': str(exc)})
+                continue
+
+            log_action(request.user, AuditLog.Action.STAFF_ENROLLED, user)
+            created.append({'email': user.email, 'assessment_level': user.get_assessment_level_display()})
+
+        return Response({'created': created, 'failed': failed})
 
 
 class SetPasswordView(APIView):

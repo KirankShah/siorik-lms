@@ -58,10 +58,13 @@ class User(AbstractUser):
         NE = 'ne', 'Nepali'
 
     class AssessmentLevel(models.TextChoices):
-        ASSISTANT_SUPERVISOR = 'assistant_supervisor', 'Assistant/Supervisor'
-        OFFICER = 'officer', 'Officer'
-        MANAGEMENT = 'management', 'Management'
-        SENIOR_MANAGEMENT = 'senior_management', 'Senior Management'
+        # Stored codes are unchanged — only the human labels were renamed to the
+        # bank-facing tier names. A learner's `assessment_level` and each
+        # organization's levelassessments.AssessmentLevel.name both use these.
+        ASSISTANT_SUPERVISOR = 'assistant_supervisor', 'Front-Line Level'
+        OFFICER = 'officer', 'Officer Level'
+        MANAGEMENT = 'management', 'Middle Management Level'
+        SENIOR_MANAGEMENT = 'senior_management', 'Top Management Level'
 
     username = None
     email = models.EmailField(unique=True)

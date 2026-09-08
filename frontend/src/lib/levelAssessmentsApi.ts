@@ -16,6 +16,15 @@ export function fetchAssessmentLevels(): Promise<AssessmentLevelSummary[]> {
   return apiFetch<AssessmentLevelSummary[]>('/assessment-levels/')
 }
 
+// Admin-only. Only pass_threshold / questions_per_attempt are writable — the
+// four tiers themselves are fixed per organization.
+export function updateAssessmentLevel(
+  id: number,
+  patch: Partial<Pick<AssessmentLevelSummary, 'pass_threshold' | 'questions_per_attempt'>>,
+): Promise<AssessmentLevelSummary> {
+  return apiFetch<AssessmentLevelSummary>(`/assessment-levels/${id}/`, { method: 'PATCH', body: patch })
+}
+
 // Admin-only bulk import of questions from a "Level Assessment Question
 // Template" .xlsx workbook into one AssessmentLevel. Resolves even when some
 // rows are rejected — inspect `failed` on the result.
