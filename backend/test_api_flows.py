@@ -1414,6 +1414,58 @@ class ModuleLessonBuilderTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class SlideOrderingTests(BaseAPITestCase):
+    """Slide.order is server-authoritative: created at the end of the lesson,
+    kept contiguous 1..N on delete — a gapped sequence (e.g. from a cloned
+    course with its first slides deleted) must never block adding a slide."""
+
+    def setUp(self):
+        super().setUp()
+        # lesson2 starts empty; give it a gapped order sequence like a clone
+        # that had slides 1-3 deleted would have.
+        self.s6 = Slide.objects.create(lesson=self.lesson2, order=6, slide_type=Slide.SlideType.CONTENT)
+        self.s7 = Slide.objects.create(lesson=self.lesson2, order=7, slide_type=Slide.SlideType.CONTENT)
+        self.s8 = Slide.objects.create(lesson=self.lesson2, order=8, slide_type=Slide.SlideType.CONTENT)
+
+    def test_new_slide_appends_past_the_highest_order_not_the_count(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/slides/', {
+            'lesson': self.lesson2.id, 'title': 'Added', 'slide_type': 'CONTENT',
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 9)
+
+    def test_client_supplied_order_is_ignored(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/slides/', {
+            'lesson': self.lesson2.id, 'slide_type': 'CONTENT', 'order': 6,
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 9)
+
+    def test_first_slide_in_an_empty_lesson_gets_order_1(self):
+        empty_lesson = Lesson.objects.create(module=self.module, title='Empty', order=3, estimated_minutes=5)
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/slides/', {'lesson': empty_lesson.id, 'slide_type': 'CONTENT'})
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 1)
+
+    def test_deleting_a_slide_renumbers_the_rest_to_be_contiguous(self):
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/slides/{self.s7.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            list(Slide.objects.filter(lesson=self.lesson2).order_by('order').values_list('id', 'order')),
+            [(self.s6.id, 1), (self.s8.id, 2)],
+        )
+
+    def test_duplicate_places_the_copy_at_the_end(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post(f'/api/slides/{self.s6.id}/duplicate/')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['order'], 9)
+
+
 class QuizBuilderTests(BaseAPITestCase):
     def test_org_admin_can_build_quiz_question_choice(self):
         self.auth_as(self.org_admin)

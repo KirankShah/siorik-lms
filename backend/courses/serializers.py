@@ -271,7 +271,10 @@ class SlideSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        # `order` is server-authoritative — SlideViewSet.perform_create places a
+        # new slide at the end of its lesson, and reorder()/perform_destroy()
+        # keep the sequence contiguous. A client-supplied order is ignored.
+        read_only_fields = ['id', 'order', 'created_at', 'updated_at']
 
 
 class ElementSerializer(serializers.ModelSerializer):

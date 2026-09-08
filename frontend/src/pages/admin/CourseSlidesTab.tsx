@@ -50,7 +50,7 @@ function SortableSlideCard({ slide, courseTemplateId, onDuplicate, onDelete, onU
   )
 }
 
-function AddSlideForm({ lessonId, nextOrder, onAdded }: { lessonId: number; nextOrder: number; onAdded: () => void }) {
+function AddSlideForm({ lessonId, onAdded }: { lessonId: number; onAdded: () => void }) {
   const [isOpen, setIsOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [slideType, setSlideType] = useState<SlideType>('CONTENT')
@@ -59,7 +59,7 @@ function AddSlideForm({ lessonId, nextOrder, onAdded }: { lessonId: number; next
 
   async function handleAdd() {
     try {
-      await createSlide({ lesson: lessonId, title, slide_type: slideType, layout, order: nextOrder })
+      await createSlide({ lesson: lessonId, title, slide_type: slideType, layout })
       setTitle('')
       setSlideType('CONTENT')
       setLayout('STACKED')
@@ -241,7 +241,7 @@ export function CourseSlidesTab() {
 
           {slides.length === 0 && <p className="text-sm text-neutral-400">No slides in this lesson yet.</p>}
 
-          <AddSlideForm lessonId={selectedLesson.id} nextOrder={slides.length + 1} onAdded={refreshSlides} />
+          <AddSlideForm lessonId={selectedLesson.id} onAdded={refreshSlides} />
         </div>
       )}
     </div>
