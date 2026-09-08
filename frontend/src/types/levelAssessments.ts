@@ -62,3 +62,23 @@ export interface MyAssessmentLevelStatus {
   status?: LevelAssessmentStatus
   open_attempt_id?: number | null
 }
+
+// Result of POST /assessment-levels/<id>/import-questions/ — one entry per
+// spreadsheet row that was committed or rejected. `row` is null when the
+// failure is a whole-sheet problem (a header row missing a required column).
+export interface LevelQuestionImportCreated {
+  sheet: string
+  row: number
+  question_set: string
+}
+
+export interface LevelQuestionImportFailure {
+  sheet: string
+  row: number | null
+  reason: string
+}
+
+export interface LevelQuestionImportResult {
+  created: LevelQuestionImportCreated[]
+  failed: LevelQuestionImportFailure[]
+}

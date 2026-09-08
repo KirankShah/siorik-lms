@@ -30,6 +30,9 @@ export function AdminSectionLayout() {
         <NavLink to="/admin/demo-users" className={subNavLinkClass}>
           Demo Users
         </NavLink>
+        <NavLink to="/admin/assessment-questions" className={subNavLinkClass}>
+          Assessment Questions
+        </NavLink>
       </nav>
       <Outlet />
     </div>
