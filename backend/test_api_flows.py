@@ -533,7 +533,7 @@ class LearningPathApiTests(BaseAPITestCase):
         self.assertFalse(officer_tier['is_complete'])
         self.assertEqual(self._state(officer_tier, self.officer_course.id), 'locked')
 
-    def test_completing_foundation_flips_milestone_flag_but_next_tier_stays_locked(self):
+    def test_completing_foundation_unlocks_the_next_tier_immediately(self):
         for course in (self.foundation_1, self.foundation_2):
             Enrollment.objects.create(
                 user=self.learner, course=course,
@@ -548,12 +548,19 @@ class LearningPathApiTests(BaseAPITestCase):
         self.assertEqual(self._state(foundation, self.foundation_1.id), 'completed')
         self.assertEqual(self._state(foundation, self.foundation_2.id), 'completed')
 
-        # No passed level assessment yet — the Officer tier stays locked even
-        # though Foundation is entirely done.
+        # Unlocking is purely sequential — completing every Foundation
+        # course is all it takes for the Officer tier's course to become
+        # reachable next.
         officer_tier = self._tier(response.data['tiers'], User.AssessmentLevel.OFFICER)
-        self.assertEqual(self._state(officer_tier, self.officer_course.id), 'locked')
+        self.assertEqual(self._state(officer_tier, self.officer_course.id), 'current')
 
-    def test_passing_tier_assessment_unlocks_next_tier(self):
+    def test_course_unlock_is_never_gated_by_a_level_assessment(self):
+        # Explicitly confirms the decoupling: even with a FAILED attempt on
+        # record (and none ever passed), the next tier's course is still
+        # reachable purely because the preceding course is done — passing a
+        # Level Assessment is a separate achievement (it gates the single
+        # Learning Path Completion Certificate — see certificates.services),
+        # never a course-access requirement.
         for course in (self.foundation_1, self.foundation_2):
             Enrollment.objects.create(
                 user=self.learner, course=course,
@@ -561,7 +568,7 @@ class LearningPathApiTests(BaseAPITestCase):
             )
         officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
         LevelAssessmentAttempt.objects.create(
-            user=self.learner, assessment_level=officer_level, passed=True, submitted_at=timezone.now(),
+            user=self.learner, assessment_level=officer_level, passed=False, submitted_at=timezone.now(),
         )
         self.auth_as(self.learner)
 
@@ -618,6 +625,141 @@ class LearningPathApiTests(BaseAPITestCase):
 
         path_course_ids = {course['id'] for tier in response.data['tiers'] for course in tier['courses']}
         self.assertNotIn(self.published_org_course.id, path_course_ids)
+
+
+class LearningPathCumulativeTierTests(BaseAPITestCase):
+    """
+    courses.learning_path._path_courses_for_user's tier membership is
+    cumulative (tier_rank "at or below"), matching
+    gamification.services.recalculate_leaderboard_entry's scoring — a
+    learner's path includes every tier at or below their own
+    assessment_level, not just their own exact tier. Mirrors the real
+    production shape that motivated this fix: 3 Foundation + 3
+    Assistant-Supervisor + 2 Officer + 1 Management courses, and no
+    Senior-Management-tier course at all.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.foundation_courses = [
+            Course.objects.create(
+                title=f'Foundation {i}', slug=f'cum-foundation-{i}', organization=self.org,
+                content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=i,
+            )
+            for i in range(1, 4)
+        ]
+        self.assistant_supervisor_courses = [
+            Course.objects.create(
+                title=f'Assistant-Supervisor {i}', slug=f'cum-as-{i}', organization=self.org,
+                content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=3 + i,
+                minimum_assessment_level=User.AssessmentLevel.ASSISTANT_SUPERVISOR,
+            )
+            for i in range(1, 4)
+        ]
+        self.officer_courses = [
+            Course.objects.create(
+                title=f'Officer {i}', slug=f'cum-officer-{i}', organization=self.org,
+                content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=6 + i,
+                minimum_assessment_level=User.AssessmentLevel.OFFICER,
+            )
+            for i in range(1, 3)
+        ]
+        self.management_course = Course.objects.create(
+            title='Management 1', slug='cum-management-1', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=9,
+            minimum_assessment_level=User.AssessmentLevel.MANAGEMENT,
+        )
+        # No senior_management-tier course exists — mirrors production.
+
+    def _set_level(self, level):
+        self.learner.assessment_level = level
+        self.learner.save(update_fields=['assessment_level'])
+
+    def _path_course_ids(self, response):
+        return [course['id'] for tier in response.data['tiers'] for course in tier['courses']]
+
+    def test_senior_management_sees_all_nine_courses_in_path_order(self):
+        self._set_level(User.AssessmentLevel.SENIOR_MANAGEMENT)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+
+        expected_ids = [
+            c.id for c in (
+                self.foundation_courses
+                + self.assistant_supervisor_courses
+                + self.officer_courses
+                + [self.management_course]
+            )
+        ]
+        self.assertEqual(self._path_course_ids(response), expected_ids)
+        self.assertEqual(len(expected_ids), 9)
+
+    def test_management_sees_nine_courses(self):
+        # Same 9 as Senior Management here, since no Senior-Management-tier
+        # course exists yet — Management is the highest tier with content.
+        self._set_level(User.AssessmentLevel.MANAGEMENT)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+        self.assertEqual(len(self._path_course_ids(response)), 9)
+
+    def test_officer_sees_eight_courses_excluding_management(self):
+        self._set_level(User.AssessmentLevel.OFFICER)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+        ids = self._path_course_ids(response)
+        self.assertEqual(len(ids), 8)
+        self.assertNotIn(self.management_course.id, ids)
+
+    def test_assistant_supervisor_sees_six_courses_excluding_higher_tiers(self):
+        self._set_level(User.AssessmentLevel.ASSISTANT_SUPERVISOR)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+        ids = self._path_course_ids(response)
+        self.assertEqual(len(ids), 6)
+        self.assertNotIn(self.officer_courses[0].id, ids)
+        self.assertNotIn(self.management_course.id, ids)
+
+    def test_tier_sections_are_grouped_in_ascending_seniority_order(self):
+        self._set_level(User.AssessmentLevel.MANAGEMENT)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+        tier_keys = [tier['tier_key'] for tier in response.data['tiers']]
+        self.assertEqual(
+            tier_keys,
+            [
+                'FOUNDATION',
+                User.AssessmentLevel.ASSISTANT_SUPERVISOR,
+                User.AssessmentLevel.OFFICER,
+                User.AssessmentLevel.MANAGEMENT,
+            ],
+        )
+
+    def test_lower_tier_course_is_genuinely_reachable_once_unlocked(self):
+        # The core regression this fix addresses: a higher-tier learner's
+        # lower-tier courses must actually be completable via the real API,
+        # not just visible — path_accessible_courses_for_user must grant
+        # real access once a course's state is 'current', for every tier.
+        self._set_level(User.AssessmentLevel.SENIOR_MANAGEMENT)
+        self.auth_as(self.learner)
+
+        first_course = self.foundation_courses[0]
+        module = Module.objects.create(course=first_course, title='M1', order=1)
+        lesson = Lesson.objects.create(module=module, title='L1', order=1)
+        slide = Slide.objects.create(lesson=lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+
+        response = self.client.get(f'/api/courses/{first_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+        enrollment = Enrollment.objects.create(user=self.learner, course=first_course)
+        progress = self.client.post(
+            f'/api/enrollments/{enrollment.id}/slide-progress/', {'slide': slide.id, 'completed': True}
+        )
+        self.assertEqual(progress.status_code, 200)
 
 
 class LearningPathMilestoneTests(BaseAPITestCase):

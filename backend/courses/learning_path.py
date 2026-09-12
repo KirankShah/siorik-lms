@@ -3,26 +3,31 @@ Assembles a learner's "My Learning Path" dashboard section — the single
 sequential trail of path_order'd courses, grouped by tier, with a
 completed/current/locked state per course.
 
-Design notes (see the "Tier unlock rule" / "Path scope" decisions this
-feature was built against):
+Design notes:
 
 - Path membership: every course visible to the learner (visible_courses_for_user)
   that has a path_order set, whether or not they're enrolled yet — enrolling
   happens implicitly the moment they open a path course via its Continue
   button, same as any other course.
-- Tier membership: Course.minimum_assessment_level is null for "Foundation"
-  (open to everyone), or one of accounts.User.AssessmentLevel's codes for a
-  role tier. A learner never sees more than one non-Foundation tier in their
-  own path — levelassessments.services.assigned_assessment_level_for_user is
-  likewise scoped to exactly the single tier matching the learner's own
-  User.assessment_level, never a ladder of lower ones, so there's no existing
-  mechanism for a learner to sit any tier but their own.
-- Sequential unlock: courses unlock strictly in path_order. A course is
-  reachable only once the immediately preceding path course is completed
-  AND (when it starts a new tier) the learner has PASSED that tier's
-  LevelAssessmentAttempt — mirroring the existing "pass the level assessment"
-  flow (levelassessments views/services) rather than inventing a new
-  progression mechanism.
+- Tier membership is CUMULATIVE, not exact-match: Course.minimum_assessment_level
+  is null for "Foundation" (open to everyone), or one of
+  accounts.User.AssessmentLevel's codes for a role tier, and a learner's path
+  includes every tier at or below their own assessment_level — see tier_rank.
+  A Senior Management learner's path includes Foundation + Assistant-Supervisor
+  + Officer + Management + Senior Management tier courses, the same ordinal
+  comparison gamification.services.recalculate_leaderboard_entry uses for
+  scoring, so the two stay consistent with each other.
+- Sequential unlock: courses unlock strictly in path_order, purely on whether
+  the immediately preceding path course is completed. Nothing about a
+  Level Assessment gates a course's unlock state — passing one is a
+  separate, standalone achievement (it gates the single Learning Path
+  Completion Certificate — see certificates.services — and its own
+  tier-complete/streak badges), never a course-access requirement. This is
+  deliberate: levelassessments.services.assigned_assessment_level_for_user
+  only ever lets a learner sit the ONE assessment matching their own exact
+  assessment_level, never a lower tier's — so gating a lower-tier course's
+  unlock on passing that lower tier's assessment would make it permanently
+  unreachable for anyone whose own tier is higher.
 - Milestone tint: once every course in a tier is completed, that tier is
   flagged is_complete so the frontend can shift it to the gold "completed
   milestone" tint instead of the ordinary per-course teal.
@@ -63,18 +68,11 @@ TIER_RANK_ORDER = [choice.value for choice in User.AssessmentLevel]
 def tier_rank(minimum_assessment_level):
     """
     Ordinal rank of a tier for "at or below" comparisons — None (Foundation)
-    ranks below every real tier. Used by
-    gamification.services.recalculate_leaderboard_entry to decide which of a
-    learner's completed courses count toward their leaderboard score (their
-    own tier or any lower one).
-
-    This is a DIFFERENT, looser comparison than the exact-tier-match
-    _path_courses_for_user uses for path membership/gating above (a
-    learner's own Learning Path only ever shows Foundation + their single
-    assigned tier, never a lower one) — tier_rank exists for places an
-    exact single-tier match isn't the right question, like scoring
-    already-completed courses regardless of which tier the learner is
-    currently assigned to.
+    ranks below every real tier. Used both by _path_courses_for_user below
+    (which tiers belong in a learner's own cumulative path) and by
+    gamification.services.recalculate_leaderboard_entry (which of a
+    learner's completed courses count toward their leaderboard score) —
+    the same comparison, so the two stay consistent with each other.
     """
     if minimum_assessment_level is None:
         return -1
@@ -98,10 +96,16 @@ def has_passed_tier_assessment(user, tier_code):
 
 def _path_courses_for_user(user):
     """Path-order'd courses visible to `user`, restricted to Foundation plus
-    (if assigned) the single tier matching their own assessment_level."""
+    every tier at or below their own assessment_level (tier_rank) —
+    cumulative: a Senior Management learner's path includes
+    Assistant-Supervisor/Officer/Management/Senior-Management tier courses,
+    not just Senior Management's own."""
+    user_tier_rank = tier_rank(user.assessment_level)
+    allowed_tiers = [level for level in TIER_RANK_ORDER if tier_rank(level) <= user_tier_rank]
+
     tier_filter = Q(minimum_assessment_level__isnull=True)
-    if user.assessment_level:
-        tier_filter |= Q(minimum_assessment_level=user.assessment_level)
+    if allowed_tiers:
+        tier_filter |= Q(minimum_assessment_level__in=allowed_tiers)
 
     return list(
         visible_courses_for_user(user)
@@ -166,22 +170,15 @@ def build_learning_path(user):
         for enrollment in Enrollment.objects.filter(user=user, course_id__in=course_ids)
     }
 
-    tier_gate_satisfied_cache = {}
-
-    def tier_gate_satisfied(tier_code):
-        if tier_code is None:
-            return True
-        if tier_code not in tier_gate_satisfied_cache:
-            tier_gate_satisfied_cache[tier_code] = has_passed_tier_assessment(user, tier_code)
-        return tier_gate_satisfied_cache[tier_code]
-
     course_states = {}
     previous_course_completed = True  # nothing blocks the very first path course
     current_node_assigned = False
     for course in courses:
         enrollment = enrollment_by_course_id.get(course.id)
         is_completed = bool(enrollment and enrollment.status == Enrollment.Status.COMPLETED)
-        is_unlocked = previous_course_completed and tier_gate_satisfied(course.minimum_assessment_level)
+        # Purely sequential — unlocking never depends on having passed any
+        # Level Assessment (see this module's own docstring for why).
+        is_unlocked = previous_course_completed
 
         if is_completed:
             state = 'completed'
@@ -194,9 +191,8 @@ def build_learning_path(user):
         course_states[course.id] = state
         previous_course_completed = is_completed
 
-    tier_order = [None]
-    if user.assessment_level:
-        tier_order.append(user.assessment_level)
+    user_tier_rank = tier_rank(user.assessment_level)
+    tier_order = [None] + [level for level in TIER_RANK_ORDER if tier_rank(level) <= user_tier_rank]
 
     tiers = []
     for tier_code in tier_order:
