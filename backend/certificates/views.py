@@ -1,5 +1,4 @@
 from django.http import FileResponse, Http404, JsonResponse
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -8,12 +7,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
-from courses.permissions import visible_courses_for_user
 
 from .models import Certificate, CertificateTemplate
 from .permissions import editable_certificate_templates_for_user
 from .serializers import CertificateSerializer, CertificateTemplateSerializer
-from .services import CertificateIssuanceError, generate_certificate
+from .services import CertificateIssuanceError, generate_learning_path_certificate
 
 
 class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
@@ -25,10 +23,16 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
 
     @action(detail=False, methods=['post'])
     def issue(self, request):
-        """Issue (or return the existing valid) certificate for the caller on a given course."""
-        course = get_object_or_404(visible_courses_for_user(request.user), pk=request.data.get('course'))
+        """
+        Issue (or return the existing) certificate for the caller —
+        exactly one per learner, earned by completing their entire
+        assigned Learning Path (every course, including its quizzes) and
+        passing their assigned Level Assessment. Takes no arguments: there
+        is no longer a per-course certificate to ask for. See
+        certificates.services.generate_learning_path_certificate.
+        """
         try:
-            certificate = generate_certificate(request.user, course)
+            certificate = generate_learning_path_certificate(request.user)
         except CertificateIssuanceError as exc:
             raise ValidationError({'detail': str(exc)})
         return Response(CertificateSerializer(certificate, context={'request': request}).data)

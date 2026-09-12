@@ -3,12 +3,18 @@ from rest_framework import serializers
 from accounts.models import Organization
 
 from .models import Certificate, CertificateTemplate
+from .services import _learning_path_completion_title
 
 
 class CertificateSerializer(serializers.ModelSerializer):
-    # For the learner-facing Certificates page card — avoids a separate
-    # course lookup just to show what the certificate is for.
+    # `course` still just anchors the certificate to the last course in the
+    # learner's path (template resolution/record-keeping — see
+    # certificates.services.generate_learning_path_certificate); course_title
+    # is kept for reference, but `title` is what the learner-facing
+    # Certificates page card should show, since it's the same "<Tier>
+    # Learning Path" text actually printed on the certificate PDF.
     course_title = serializers.CharField(source='course.title', read_only=True)
+    title = serializers.SerializerMethodField()
 
     class Meta:
         model = Certificate
@@ -17,6 +23,7 @@ class CertificateSerializer(serializers.ModelSerializer):
             'user',
             'course',
             'course_title',
+            'title',
             'issued_at',
             'certificate_number',
             'verification_token',
@@ -24,6 +31,9 @@ class CertificateSerializer(serializers.ModelSerializer):
             'expires_at',
         ]
         read_only_fields = fields
+
+    def get_title(self, certificate):
+        return _learning_path_completion_title(certificate.user)
 
 
 class CertificateTemplateSerializer(serializers.ModelSerializer):

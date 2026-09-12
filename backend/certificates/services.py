@@ -110,22 +110,103 @@ def generate_certificate(user, course):
     return certificate
 
 
-def try_auto_issue_certificate(user, course):
+LEARNING_PATH_CERTIFICATE_TITLE = 'Certificate of Competency in AML/CFT and Financial Crime Compliance'
+
+
+def _learning_path_completion_title(user):
     """
-    Best-effort automatic issuance, called right after whichever event just
-    changed this user's eligibility for `course` — final slide/lesson
-    completion (courses.views.EnrollmentViewSet.slide_progress/complete_lesson)
-    or a quiz submission that moves their course-wide average across the
-    certificate_pass_threshold (assessments.views.QuizViewSet.submit).
-    Either call site may fire before the learner is actually eligible (e.g.
-    slides finish before quizzes are attempted) — that's expected, this is a
-    silent no-op in that case rather than an error. generate_certificate()
-    is itself idempotent (returns the existing certificate if one is still
-    valid), so calling this from both events is safe even if both end up
-    eligible at once.
+    Display text for the certificate's "course name" field — under the
+    current policy there's only ever ONE certificate per learner, issued
+    for finishing their entire Learning Path, not any single course. Fixed
+    and identical for every learner regardless of assessment level/tier —
+    not the course's title, and not a per-tier variant (see
+    generate_learning_path_certificate — the underlying Certificate row
+    still points at a real course, for template-resolution and
+    record-keeping, but that's not what gets drawn here).
+    """
+    return LEARNING_PATH_CERTIFICATE_TITLE
+
+
+def learning_path_certificate_ineligibility_reason(user):
+    """
+    None if `user` is eligible for their Learning Path Completion
+    Certificate — the ONLY certificate issued under the current policy; a
+    learner is never issued a separate certificate per course. Otherwise a
+    human-readable reason they aren't (yet).
+
+    Eligibility:
+    - The learner must have a Learning Path assigned at all (at least one
+      path_order'd course visible to them — see
+      courses.learning_path.build_learning_path).
+    - Every course in that path (Foundation, plus their assigned tier if
+      any) must be completed AND meet ITS OWN quiz-average threshold —
+      reuses certificate_ineligibility_reason per course rather than
+      re-deriving that math.
+    - If the learner has an assigned assessment tier, they must have
+      PASSED that tier's Level Assessment — the same gate that already
+      unlocks the tier itself (courses.learning_path.has_passed_tier_assessment).
+    """
+    from courses.learning_path import build_learning_path, has_passed_tier_assessment
+    from courses.models import Course
+
+    path = build_learning_path(user)
+    all_path_courses = [course for tier in path['tiers'] for course in tier['courses']]
+    if not all_path_courses:
+        return 'No Learning Path has been assigned yet.'
+
+    for course_row in all_path_courses:
+        if course_row['state'] != 'completed':
+            return f'"{course_row["title"]}" has not been completed yet.'
+        reason = certificate_ineligibility_reason(user, Course.objects.get(pk=course_row['id']))
+        if reason:
+            return f'"{course_row["title"]}": {reason}'
+
+    if user.assessment_level and not has_passed_tier_assessment(user, user.assessment_level):
+        return 'The assigned Level Assessment has not been passed yet.'
+
+    return None
+
+
+def generate_learning_path_certificate(user):
+    """
+    Issues (or returns the existing) certificate for completing `user`'s
+    entire Learning Path — see learning_path_certificate_ineligibility_reason
+    for the full eligibility rule this enforces. Anchored to the last
+    course in their path (by path_order) purely for template-resolution
+    and record-keeping — reuses the existing generate_certificate(user,
+    course) machinery unchanged (same idempotency, same PDF rendering),
+    just always called with that one course and gated by the stricter
+    whole-path rule above instead of that single course's own eligibility.
+    """
+    from courses.learning_path import build_learning_path
+    from courses.models import Course
+
+    reason = learning_path_certificate_ineligibility_reason(user)
+    if reason:
+        raise CertificateIssuanceError(reason)
+
+    path = build_learning_path(user)
+    all_path_courses = [c for tier in path['tiers'] for c in tier['courses']]
+    finale_course = Course.objects.get(pk=max(all_path_courses, key=lambda c: c['path_order'])['id'])
+    return generate_certificate(user, finale_course)
+
+
+def try_issue_learning_path_certificate(user):
+    """
+    Best-effort issuance of the single Learning Path Completion
+    Certificate, called right after any event that could newly satisfy
+    eligibility: a course completing (courses.views.EnrollmentViewSet.
+    slide_progress/complete_lesson), a quiz submission crossing a course's
+    own certificate_pass_threshold (assessments.views.QuizViewSet.submit),
+    or a level assessment attempt being passed (levelassessments.views).
+    Any of these may fire well before the learner is actually eligible
+    (most of their path isn't done yet) — that's expected, this is a
+    silent no-op in that case. generate_learning_path_certificate() is
+    itself idempotent, so calling this from every contributing event is
+    safe even if more than one ends up newly eligible at once.
     """
     try:
-        return generate_certificate(user, course)
+        return generate_learning_path_certificate(user)
     except CertificateIssuanceError:
         return None
 
@@ -222,11 +303,15 @@ def _render_certificate_pdf(certificate):
         staff_name_font, template.staff_name_text_align, template.staff_name_color,
     )
 
+    # Not course.title — see _learning_path_completion_title: this
+    # certificate represents finishing the whole Learning Path, not this
+    # one (anchor) course.
+    course_name_text = _learning_path_completion_title(certificate.user)
     course_name_font = _fit_font(
-        template.course_name_font_file, template.course_name_font_size, course.title, draw, max_text_width_px
+        template.course_name_font_file, template.course_name_font_size, course_name_text, draw, max_text_width_px
     )
     _draw_field(
-        draw, width, height, course.title,
+        draw, width, height, course_name_text,
         template.course_name_x_percent, template.course_name_y_percent,
         course_name_font, template.course_name_text_align, template.course_name_color,
     )

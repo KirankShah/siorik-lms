@@ -5,11 +5,13 @@ export function fetchCertificates(): Promise<Certificate[]> {
   return apiFetch<Certificate[]>('/certificates/')
 }
 
-export function issueCertificate(courseId: number): Promise<Certificate> {
-  return apiFetch<Certificate>('/certificates/issue/', {
-    method: 'POST',
-    body: { course: courseId },
-  })
+// Exactly one certificate per learner — earned by completing their entire
+// Learning Path (every course, including its quizzes) and passing their
+// assigned Level Assessment. Takes no course argument: there's no longer a
+// per-course certificate to ask for. See backend
+// certificates.services.generate_learning_path_certificate.
+export function issueCertificate(): Promise<Certificate> {
+  return apiFetch<Certificate>('/certificates/issue/', { method: 'POST' })
 }
 
 export async function downloadCertificate(certificateId: number, filename: string): Promise<void> {

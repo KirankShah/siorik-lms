@@ -208,7 +208,6 @@ export function CourseDetailPage() {
   const completionModalNode = showCompletionModal && enrollment && (
     <CourseCompletionModal
       courseName={course.title}
-      courseId={course.id}
       isEligible={!enrollment.certificate_ineligible_reason}
       isRetaking={isRetaking}
       newlyCompletedTiers={completionMilestones?.newly_completed_tiers}

@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from certificates.services import try_auto_issue_certificate
+from certificates.services import try_issue_learning_path_certificate
 from core.permissions import IsAdminRole
 from courses.models import Enrollment
 from courses.permissions import editable_courses_for_user, exclude_demo_locked, path_accessible_courses_for_user
@@ -215,14 +215,17 @@ class QuizViewSet(
             record_learning_activity(request.user)
 
         # If every slide is already complete, this submission's score may be
-        # the last piece needed to cross the certificate pass threshold — see
-        # try_auto_issue_certificate. Skipped when slides aren't all done yet
-        # (still ineligible regardless of this score), so a routine quiz
-        # attempt on an in-progress course doesn't pay for the eligibility
-        # check.
+        # the last piece needed to cross this course's own certificate
+        # threshold — which, if every other course in the learner's path is
+        # also already done, may be the last piece needed for their single
+        # Learning Path Completion Certificate. See
+        # try_issue_learning_path_certificate. Skipped when slides aren't
+        # all done yet (still ineligible regardless of this score), so a
+        # routine quiz attempt on an in-progress course doesn't pay for the
+        # eligibility check.
         course = quiz.slide.lesson.module.course
         if Enrollment.objects.filter(user=request.user, course=course, status=Enrollment.Status.COMPLETED).exists():
-            try_auto_issue_certificate(request.user, course)
+            try_issue_learning_path_certificate(request.user)
 
         return Response(QuizAttemptSerializer(attempt).data, status=201)
 

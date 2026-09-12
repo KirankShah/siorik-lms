@@ -1,8 +1,15 @@
 export interface Certificate {
   id: number
   user: number
+  // Anchors the certificate to the last course in the learner's path
+  // (template resolution/record-keeping only) — course_title is kept for
+  // reference, but `title` (the same "<Tier> Learning Path" text actually
+  // printed on the certificate PDF) is what should be shown to the learner,
+  // since this certificate represents finishing their whole path, not one
+  // course. See backend certificates.services.generate_learning_path_certificate.
   course: number
   course_title: string
+  title: string
   issued_at: string
   certificate_number: string
   verification_token: string

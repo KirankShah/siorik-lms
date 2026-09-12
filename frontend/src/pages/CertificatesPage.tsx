@@ -28,7 +28,7 @@ function CertificateCard({ certificate }: { certificate: Certificate }) {
       </div>
 
       <div>
-        <p className="text-sm font-semibold text-neutral-900">{certificate.course_title}</p>
+        <p className="text-sm font-semibold text-neutral-900">{certificate.title}</p>
         <p className="mt-1 text-xs text-neutral-500">Issued {new Date(certificate.issued_at).toLocaleDateString()}</p>
         <p className="mt-1 font-mono text-[11px] text-neutral-400">{certificate.certificate_number}</p>
       </div>
@@ -69,9 +69,10 @@ export function CertificatesPage() {
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-navy/10 text-brand-navy">
             <Award className="h-6 w-6" />
           </div>
-          <p className="text-sm font-medium text-neutral-900">No certificates yet</p>
+          <p className="text-sm font-medium text-neutral-900">No certificate yet</p>
           <p className="max-w-sm text-sm text-neutral-500">
-            Complete a course with a passing average and your certificate will appear here automatically.
+            Complete every course in your assigned Learning Path (including their quizzes) and pass your assigned
+            Level Assessment, and your certificate will appear here automatically.
           </p>
         </Card>
       ) : (

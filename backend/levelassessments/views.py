@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from audit.models import AuditLog
 from audit.services import log_action
+from certificates.services import try_issue_learning_path_certificate
 from core.permissions import IsAdminRole
 from gamification.services import award_badges_for_level_assessment_attempt, update_gamification_for_user
 
@@ -158,5 +159,10 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
             # in sync with this attempt's outcome immediately.
             update_gamification_for_user(request.user)
             award_badges_for_level_assessment_attempt(attempt)
+            # Passing this may be the last piece needed for the learner's
+            # single Learning Path Completion Certificate, if every course
+            # in their path is already done — see
+            # certificates.services.try_issue_learning_path_certificate.
+            try_issue_learning_path_certificate(request.user)
 
         return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
