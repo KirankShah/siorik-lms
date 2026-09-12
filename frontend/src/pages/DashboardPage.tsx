@@ -255,6 +255,17 @@ interface PendingAssignment {
   courseSlug: string
 }
 
+// Unifies the two different "outstanding to-do" sources (an unstarted/failed
+// Level Assessment, and pending assignment submissions) into one list for
+// the dashboard's Pending card — see the combined `pendingItems` below.
+// Kept row-shape-identical (title/subtitle/link) so both render the same way.
+interface PendingItem {
+  key: string
+  title: string
+  subtitle: string
+  to: string
+}
+
 function LearnerDashboard({ user }: { user: User }) {
   const [enrollments, setEnrollments] = useState<Enrollment[] | null>(null)
   const [courses, setCourses] = useState<CourseListItem[]>([])
@@ -359,6 +370,36 @@ function LearnerDashboard({ user }: { user: User }) {
 
   const myPoints = leaderboard?.find((entry) => entry.user_id === user.id)?.total_points ?? 0
 
+  // An unstarted or failed Level Assessment is just as much an outstanding
+  // to-do as a pending assignment — surfaced here too so the Pending card
+  // never says "you're all caught up" while one is sitting unaddressed
+  // right above it (see LevelAssessmentCard, which links to the same place).
+  const isLevelAssessmentPending =
+    myLevelAssessment?.assigned &&
+    (myLevelAssessment.status === 'NOT_STARTED' || myLevelAssessment.status === 'FAILED')
+  const pendingItems: PendingItem[] = [
+    ...(isLevelAssessmentPending
+      ? [
+          {
+            key: 'level-assessment',
+            title: `${myLevelAssessment.assessment_level?.name_display} Assessment`,
+            subtitle: LEVEL_ASSESSMENT_STATUS_LABEL[myLevelAssessment.status ?? 'NOT_STARTED'],
+            to: '/level-assessment',
+          },
+        ]
+      : []),
+    ...(pendingAssignments ?? []).map(({ assignment, slideTitle, courseTitle, courseSlug }) => ({
+      key: `assignment-${assignment.id}`,
+      title: slideTitle,
+      subtitle: courseTitle,
+      to: `/courses/${courseSlug}`,
+    })),
+  ]
+  // Loading until BOTH sources have resolved, so the list doesn't flash
+  // "nothing pending" before the (separately-fetched) Level Assessment
+  // status arrives.
+  const isPendingListLoading = pendingAssignments === null || myLevelAssessment === null
+
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -442,11 +483,11 @@ function LearnerDashboard({ user }: { user: User }) {
         </Card>
 
         <Card>
-          <h2 className="text-sm font-semibold text-neutral-900">Pending Assignments</h2>
+          <h2 className="text-sm font-semibold text-neutral-900">Pending</h2>
 
-          {!pendingAssignments ? (
+          {isPendingListLoading ? (
             <p className="mt-4 text-sm text-neutral-500">Loading…</p>
-          ) : pendingAssignments.length === 0 ? (
+          ) : pendingItems.length === 0 ? (
             <div className="mt-4 flex flex-col items-center gap-2 py-6 text-center">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-navy/10 text-brand-navy">
                 <ClipboardList className="h-5 w-5" />
@@ -455,11 +496,11 @@ function LearnerDashboard({ user }: { user: User }) {
             </div>
           ) : (
             <ul className="mt-4 space-y-3">
-              {pendingAssignments.map(({ assignment, slideTitle, courseTitle, courseSlug }) => (
-                <li key={assignment.id}>
-                  <Link to={`/courses/${courseSlug}`} className="block rounded-md border border-neutral-200 p-3 hover:bg-neutral-50">
-                    <p className="text-sm font-medium text-neutral-900">{slideTitle}</p>
-                    <p className="text-xs text-neutral-500">{courseTitle}</p>
+              {pendingItems.map(({ key, title, subtitle, to }) => (
+                <li key={key}>
+                  <Link to={to} className="block rounded-md border border-neutral-200 p-3 hover:bg-neutral-50">
+                    <p className="text-sm font-medium text-neutral-900">{title}</p>
+                    <p className="text-xs text-neutral-500">{subtitle}</p>
                   </Link>
                 </li>
               ))}
