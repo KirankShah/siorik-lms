@@ -107,6 +107,14 @@ class CourseListSerializer(serializers.ModelSerializer):
     # a locked course is still just a teaser card, since retrieving it
     # (and everything beneath it) stays gated by visible_courses_for_user.
     is_locked = serializers.SerializerMethodField()
+    # Non-null only when this listing is the path-scoped catalog for a
+    # non-demo learner with an assigned path (see CourseViewSet.get_queryset/
+    # get_serializer_context) — 'completed' | 'current' | 'locked', the exact
+    # same value the Learning Path dashboard widget shows for this course,
+    # so the catalog and the widget never disagree. Null for every other
+    # listing (admin/instructor catalogs, a learner with no path yet, demo
+    # catalogs).
+    path_state = serializers.SerializerMethodField()
     organization_name = serializers.CharField(source='organization.name', read_only=True, default=None)
     cloned_from_title = serializers.CharField(source='cloned_from.title', read_only=True, default=None)
 
@@ -129,6 +137,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'is_locked',
+            'path_state',
             'cloned_from_title',
         ]
 
@@ -141,6 +150,10 @@ class CourseListSerializer(serializers.ModelSerializer):
         if assigned_ids is not None:
             return course.pk not in assigned_ids
         return not visible_courses_for_user(user).filter(pk=course.pk).exists()
+
+    def get_path_state(self, course):
+        states = self.context.get('path_course_states')
+        return states.get(course.pk) if states is not None else None
 
 
 class CourseAccessSerializer(serializers.ModelSerializer):

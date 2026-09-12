@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from core.permissions import IsPlatformAdminRole
 from courses.models import Slide
-from courses.permissions import visible_courses_for_user
+from courses.permissions import path_accessible_courses_for_user
 
 from .models import SlideNarration
 from .serializers import SlideNarrationSerializer
@@ -31,7 +31,7 @@ class SlideNarrationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
 
     def get_queryset(self):
         queryset = SlideNarration.objects.filter(
-            slide__lesson__module__course__in=visible_courses_for_user(self.request.user)
+            slide__lesson__module__course__in=path_accessible_courses_for_user(self.request.user)
         )
         slide_id = self.request.query_params.get('slide')
         if slide_id:

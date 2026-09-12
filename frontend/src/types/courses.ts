@@ -1,4 +1,5 @@
 import type { Organization } from './auth'
+import type { LearningPathCourseState } from './learningPath'
 import type { SlideProgress, SlideSummary } from './slides'
 
 export type LessonType = 'VIDEO' | 'SLIDES' | 'DOCUMENT' | 'TEXT'
@@ -65,6 +66,13 @@ export interface CourseListItem {
   // A locked course is a teaser card only: its detail/content stays 404
   // server-side even if the id/slug is known.
   is_locked: boolean
+  // Non-null only when this listing is the caller's own Learning Path
+  // catalog (a non-demo learner with an assigned path) — the exact same
+  // state the Learning Path dashboard widget computes for this course, so
+  // the catalog can render identical completed/current/locked treatment.
+  // Null for every other listing (admin/instructor, demo, or a learner with
+  // no path assigned yet, which falls back to the full catalog).
+  path_state: LearningPathCourseState | null
 }
 
 export interface CourseAccessGrant {

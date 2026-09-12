@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   ClipboardList,
+  GraduationCap,
   LayoutDashboard,
   LogOut,
   PanelLeftClose,
@@ -44,6 +45,12 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // both already exist, this just picks the useful one per role.
     { to: admin ? '/admin/courses' : '/courses', label: 'Courses', icon: BookOpen },
     { to: '/assessments', label: 'Assessments', icon: ClipboardList },
+    // Distinct from "Assessments" above (course-embedded quizzes, Phase
+    // 4/17) — this is the standalone role-based knowledge check
+    // (levelassessments app). A separate top-level entry, not folded into
+    // "Assessments", so the two never get confused for one another — see
+    // LevelAssessmentPage.tsx.
+    { to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap },
     { to: '/certificates', label: 'Certificates', icon: Award },
     { to: '/achievements', label: 'Achievements', icon: Trophy },
     // Admins get the cross-learner report; everyone else gets their own progress.

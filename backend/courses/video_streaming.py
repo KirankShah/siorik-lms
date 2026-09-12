@@ -22,7 +22,7 @@ from django.shortcuts import get_object_or_404
 from accounts.models import User
 
 from .models import Element
-from .permissions import is_lesson_locked_for_demo_user, visible_courses_for_user
+from .permissions import is_lesson_locked_for_demo_user, path_accessible_courses_for_user
 
 _TOKEN_SALT = 'courses.element.video-stream'
 # Generous rather than tight — long enough that a learner mid-way through a
@@ -91,7 +91,7 @@ def stream_element_video(request, pk):
     element = get_object_or_404(
         Element.objects.filter(
             element_type=Element.ElementType.VIDEO_AUDIO,
-            slide__lesson__module__course__in=visible_courses_for_user(user),
+            slide__lesson__module__course__in=path_accessible_courses_for_user(user),
         ),
         pk=element_id,
     )

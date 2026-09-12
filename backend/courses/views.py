@@ -48,6 +48,7 @@ from .permissions import (
     editable_courses_for_user,
     exclude_demo_locked,
     is_lesson_locked_for_demo_user,
+    path_accessible_courses_for_user,
     visible_courses_for_user,
 )
 from .learning_path import build_learning_path, check_learning_path_milestones
@@ -134,9 +135,28 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if self.action == 'list':
-            return catalog_courses_for_user(self.request.user).select_related('organization', 'cloned_from')
+            user = self.request.user
+            # A non-demo learner with at least one path-ordered course
+            # available to them sees ONLY their Learning Path — same
+            # course set, same path_order sequence, same lock states as the
+            # dashboard widget (courses.learning_path.build_learning_path),
+            # so the two views can never contradict each other. A learner
+            # with no path assigned yet (path_order not configured for any
+            # course they can see) falls back to the ordinary full catalog
+            # below, rather than showing an empty page.
+            if user.role == User.Role.LEARNER and not getattr(user, 'is_demo', False):
+                path = build_learning_path(user)
+                course_ids = [course['id'] for tier in path['tiers'] for course in tier['courses']]
+                if course_ids:
+                    self._learner_path = path
+                    return (
+                        Course.objects.filter(id__in=course_ids)
+                        .select_related('organization', 'cloned_from')
+                        .order_by('path_order', 'id')
+                    )
+            return catalog_courses_for_user(user).select_related('organization', 'cloned_from')
         if self.action == 'retrieve':
-            return visible_courses_for_user(self.request.user)
+            return path_accessible_courses_for_user(self.request.user)
         return editable_courses_for_user(self.request.user)
 
     def get_serializer_class(self):
@@ -148,13 +168,25 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        if self.action == 'list' and getattr(self.request.user, 'is_demo', False):
-            # Precomputed once here (rather than per-row in the serializer)
-            # so CourseListSerializer.get_is_locked is a plain set-membership
-            # check instead of an N+1 query per course in the catalog.
-            context['assigned_course_ids'] = set(
-                visible_courses_for_user(self.request.user).values_list('id', flat=True)
-            )
+        if self.action == 'list':
+            user = self.request.user
+            if getattr(user, 'is_demo', False):
+                # Precomputed once here (rather than per-row in the serializer)
+                # so CourseListSerializer.get_is_locked is a plain set-membership
+                # check instead of an N+1 query per course in the catalog.
+                context['assigned_course_ids'] = set(
+                    visible_courses_for_user(user).values_list('id', flat=True)
+                )
+            elif getattr(self, '_learner_path', None) is not None:
+                # Set only when get_queryset above served the path-scoped
+                # catalog for this same request — reused here (rather than
+                # recomputed) so CourseListSerializer.get_path_state is a
+                # plain dict lookup, not another build_learning_path call.
+                context['path_course_states'] = {
+                    course['id']: course['state']
+                    for tier in self._learner_path['tiers']
+                    for course in tier['courses']
+                }
         return context
 
     def perform_create(self, serializer):
@@ -605,7 +637,7 @@ class ElementViewSet(viewsets.ModelViewSet):
         if self.action in WRITE_ACTIONS or self.action == 'reorder':
             courses = editable_courses_for_user(self.request.user)
         else:
-            courses = visible_courses_for_user(self.request.user)
+            courses = path_accessible_courses_for_user(self.request.user)
         queryset = Element.objects.filter(slide__lesson__module__course__in=courses)
         if self.action not in WRITE_ACTIONS and self.action != 'reorder':
             queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
@@ -739,7 +771,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         course = serializer.validated_data['course']
-        if not visible_courses_for_user(self.request.user).filter(pk=course.pk).exists():
+        if not path_accessible_courses_for_user(self.request.user).filter(pk=course.pk).exists():
             raise ValidationError({'course': 'This course is not available to you.'})
         enrollment = serializer.save()
         log_action(self.request.user, AuditLog.Action.ENROLLMENT_CREATED, enrollment)

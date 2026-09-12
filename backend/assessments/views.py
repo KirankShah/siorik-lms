@@ -10,7 +10,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from certificates.services import try_auto_issue_certificate
 from core.permissions import IsAdminRole
 from courses.models import Enrollment
-from courses.permissions import editable_courses_for_user, exclude_demo_locked, visible_courses_for_user
+from courses.permissions import editable_courses_for_user, exclude_demo_locked, path_accessible_courses_for_user
 from gamification.services import record_learning_activity, update_gamification_for_user
 
 from .models import (
@@ -71,7 +71,7 @@ class QuizViewSet(
         # (the admin Assessments page) stays editable-only.
         if self.action in ('retrieve', 'submit') or slide_id:
             queryset = super().get_queryset().filter(
-                slide__lesson__module__course__in=visible_courses_for_user(self.request.user)
+                slide__lesson__module__course__in=path_accessible_courses_for_user(self.request.user)
             )
             queryset = exclude_demo_locked(queryset, self.request.user, 'slide__lesson')
         else:
