@@ -56,25 +56,61 @@ def _average(values):
 
 def recalculate_leaderboard_entry(user):
     """
-    Recomputes and persists this user's LeaderboardEntry: 100 points per
-    completed course, plus up to 50 bonus points scaled linearly to that
-    course's own quiz average (each quiz counted once, at its best score),
-    plus LEVEL_ASSESSMENT_PASS_POINTS per distinct level assessment passed
-    (each level counted once, no matter how many attempts/retakes it took to
-    pass it — same "count the outcome, not the attempts" shape as
-    courses_completed_count below, so retaking an already-passed level can't
-    be farmed for repeat points). Not called on every dashboard read — only
-    from the events that can change it (course completion, quiz attempt,
-    level assessment submission, certificate generation); see
-    update_gamification_for_user.
+    Recomputes and persists this user's LeaderboardEntry:
+
+    - 100 points per completed course THAT'S ACTUALLY PART OF THE LEARNER'S
+      OWN LEARNING PATH — course.path_order must be set, and
+      course.minimum_assessment_level must be null (Foundation, open to
+      everyone) or at-or-below the learner's own assessment_level, using
+      courses.learning_path.tier_rank's ordinal comparison. A completed
+      course outside the learner's assigned path (or one never given a
+      path_order at all) contributes nothing — this is deliberately a
+      LOOSER "at or below" comparison than the exact single-tier match
+      courses.learning_path.build_learning_path uses for path
+      membership/gating (a Senior Management learner's own dashboard path
+      only ever shows Foundation + Senior Management, but a
+      previously-completed Officer-tier course still counts here).
+      Plus up to 50 bonus points scaled linearly to that course's own quiz
+      average (each quiz counted once, at its best score).
+    - round(LEVEL_ASSESSMENT_PASS_POINTS * score_percent / 100) for each
+      DISTINCT level assessment the learner has ever passed, using their
+      best PASSING attempt's score for that level if they passed it more
+      than once (a failed attempt always contributes 0, same as before —
+      only a passed one's own score now scales the bonus instead of it
+      being a flat award). Still "count the outcome once, not the
+      attempts" for which levels count at all — same shape as
+      courses_completed_count below, so retaking an already-passed level
+      can't be farmed for repeat points beyond a genuinely higher score.
+
+    courses_completed_count and average_quiz_score are NOT scoped to the
+    path — they're an honest "how much have you done, ever" stat (and feed
+    the first_course_complete/five_courses_complete/high_achiever badge
+    conditions), distinct from the path-scoped points above.
+
+    Not called on every dashboard read — only from the events that can
+    change it (course completion, quiz attempt, level assessment
+    submission, certificate generation); see update_gamification_for_user.
     """
     if user.organization_id is None:
         return None
 
+    # Deferred import: courses.learning_path imports this module at its own
+    # top level (award_badges_by_keys), so importing it back at module level
+    # here would be a circular import.
+    from courses.learning_path import tier_rank
+
     completed_enrollments = Enrollment.objects.filter(user=user, status=Enrollment.Status.COMPLETED)
 
+    user_tier_rank = tier_rank(user.assessment_level)
+    path_scoped_enrollments = [
+        enrollment
+        for enrollment in completed_enrollments.select_related('course')
+        if enrollment.course.path_order is not None
+        and tier_rank(enrollment.course.minimum_assessment_level) <= user_tier_rank
+    ]
+
     total_points = 0
-    for enrollment in completed_enrollments:
+    for enrollment in path_scoped_enrollments:
         course_scores = _best_scores_per_quiz(user, {'quiz__slide__lesson__module__course': enrollment.course_id})
         course_average = _average(course_scores)
         total_points += COURSE_COMPLETION_POINTS + round(MAX_QUIZ_BONUS_POINTS * (course_average / 100))
@@ -84,10 +120,16 @@ def recalculate_leaderboard_entry(user):
     # only ever starts an attempt against assigned_assessment_level_for_user(user),
     # which is itself filtered to user.organization_id — so this can't pull in
     # another organization's level or leak a cross-org attempt into this total.
-    passed_level_ids = set(
-        LevelAssessmentAttempt.objects.filter(user=user, passed=True).values_list('assessment_level_id', flat=True)
-    )
-    total_points += len(passed_level_ids) * LEVEL_ASSESSMENT_PASS_POINTS
+    best_passing_scores_by_level = {
+        row['assessment_level_id']: row['best']
+        for row in (
+            LevelAssessmentAttempt.objects.filter(user=user, passed=True)
+            .values('assessment_level_id')
+            .annotate(best=Max('score_percent'))
+        )
+    }
+    for best_score in best_passing_scores_by_level.values():
+        total_points += round(LEVEL_ASSESSMENT_PASS_POINTS * (best_score / 100))
 
     overall_average = _average(_best_scores_per_quiz(user))
 
@@ -99,7 +141,7 @@ def recalculate_leaderboard_entry(user):
             'courses_completed_count': completed_enrollments.count(),
             'average_quiz_score': overall_average,
             'certificates_earned_count': Certificate.objects.filter(user=user).count(),
-            'level_assessments_passed_count': len(passed_level_ids),
+            'level_assessments_passed_count': len(best_passing_scores_by_level),
         },
     )
     return entry
