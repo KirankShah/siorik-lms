@@ -31,6 +31,8 @@ feature was built against):
 from django.db.models import Count, Q
 
 from accounts.models import User
+from gamification.models import UserBadge
+from gamification.services import award_badges_by_keys
 from levelassessments.models import LevelAssessmentAttempt
 
 from .models import Course, Enrollment
@@ -194,3 +196,71 @@ def build_learning_path(user):
         'branch_percentile': branch_completion_percentile(user, course_ids),
         'tiers': tiers,
     }
+
+
+# One "<Tier> Complete" badge per tier a learner's path can include, keyed by
+# the same tier_key build_learning_path produces (FOUNDATION_TIER_KEY or one
+# of accounts.User.AssessmentLevel's codes). Seeded in
+# gamification/migrations/0009_seed_tier_and_streak_badges.py.
+TIER_COMPLETE_BADGE_KEYS = {
+    FOUNDATION_TIER_KEY: 'tier_complete_foundation',
+    User.AssessmentLevel.ASSISTANT_SUPERVISOR: 'tier_complete_assistant_supervisor',
+    User.AssessmentLevel.OFFICER: 'tier_complete_officer',
+    User.AssessmentLevel.MANAGEMENT: 'tier_complete_management',
+    User.AssessmentLevel.SENIOR_MANAGEMENT: 'tier_complete_senior_management',
+}
+
+
+def check_learning_path_milestones(user):
+    """
+    Call this whenever a course belonging to `user`'s Learning Path has just
+    become complete (see the `newly_completed` hook in
+    courses.views.EnrollmentViewSet.slide_progress/complete_lesson).
+
+    Re-derives the path fresh via build_learning_path — there's no persisted
+    "is this tier complete" flag to diff against, see that function's own
+    docstring — and:
+    - awards this tier's "<Tier> Complete" badge for every tier that's now
+      fully done. award_badges_by_keys is idempotent, so calling this after
+      every completion (not just the one that actually finished a tier) is
+      safe and simpler than tracking the transition separately.
+    - reports back which tier(s) THIS call newly completed (i.e. the badge
+      wasn't already earned a moment ago), for the frontend's one-time
+      congratulatory mascot message, and whether the entire path is now
+      done, for the certificate reveal moment.
+
+    Returns {'newly_completed_tiers': [{'tier_key', 'tier_label', 'course_count'}, ...],
+    'path_fully_completed': bool}.
+    """
+    already_earned_tier_badges = set(
+        UserBadge.objects.filter(
+            user=user, badge__key__in=TIER_COMPLETE_BADGE_KEYS.values()
+        ).values_list('badge__key', flat=True)
+    )
+
+    path = build_learning_path(user)
+
+    newly_completed_tiers = []
+    badge_keys_to_award = []
+    for tier in path['tiers']:
+        if not tier['is_complete']:
+            continue
+        badge_key = TIER_COMPLETE_BADGE_KEYS.get(tier['tier_key'])
+        if badge_key is None:
+            continue
+        badge_keys_to_award.append(badge_key)
+        if badge_key not in already_earned_tier_badges:
+            newly_completed_tiers.append({
+                'tier_key': tier['tier_key'],
+                'tier_label': tier['tier_label'],
+                'course_count': len(tier['courses']),
+            })
+
+    award_badges_by_keys(user, badge_keys_to_award)
+
+    all_path_courses = [course for tier in path['tiers'] for course in tier['courses']]
+    path_fully_completed = bool(all_path_courses) and all(
+        course['state'] == 'completed' for course in all_path_courses
+    )
+
+    return {'newly_completed_tiers': newly_completed_tiers, 'path_fully_completed': path_fully_completed}

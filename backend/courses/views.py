@@ -27,7 +27,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from certificates.services import certificate_ineligibility_reason, try_auto_issue_certificate
 from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
-from gamification.services import update_gamification_for_user
+from gamification.services import record_learning_activity, update_gamification_for_user
 from scenarios.models import ScenarioAttempt
 
 from .models import (
@@ -50,7 +50,7 @@ from .permissions import (
     is_lesson_locked_for_demo_user,
     visible_courses_for_user,
 )
-from .learning_path import build_learning_path
+from .learning_path import build_learning_path, check_learning_path_milestones
 from .services import clone_course
 from .serializers import (
     CourseAccessSerializer,
@@ -774,11 +774,18 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.IN_PROGRESS
 
         enrollment.save()
+        record_learning_activity(request.user)
+        milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
             try_auto_issue_certificate(enrollment.user, enrollment.course)
+            if enrollment.course.path_order is not None:
+                milestones = check_learning_path_milestones(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
-        return Response(EnrollmentSerializer(enrollment).data)
+        data = EnrollmentSerializer(enrollment).data
+        if milestones is not None:
+            data['milestones'] = milestones
+        return Response(data)
 
     @action(detail=True, methods=['post'], url_path='slide-progress')
     def slide_progress(self, request, pk=None):
@@ -825,11 +832,18 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.IN_PROGRESS
 
         enrollment.save()
+        record_learning_activity(request.user)
+        milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
             try_auto_issue_certificate(enrollment.user, enrollment.course)
+            if enrollment.course.path_order is not None:
+                milestones = check_learning_path_milestones(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
-        return Response(EnrollmentSerializer(enrollment).data)
+        data = EnrollmentSerializer(enrollment).data
+        if milestones is not None:
+            data['milestones'] = milestones
+        return Response(data)
 
     @action(detail=True, methods=['post'], url_path='retake')
     def retake(self, request, pk=None):

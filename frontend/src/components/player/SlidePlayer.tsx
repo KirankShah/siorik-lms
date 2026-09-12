@@ -6,6 +6,7 @@ import { QuizSlidePlayer } from './QuizSlidePlayer'
 import { ScenarioSlidePlayer } from './ScenarioSlidePlayer'
 import { saveSlideProgress } from '../../lib/coursesApi'
 import type { Enrollment } from '../../types/courses'
+import type { LearningPathMilestones } from '../../types/learningPath'
 import type { SlideProgress, SlideSummary } from '../../types/slides'
 
 // How often accumulated dwell time is flushed to the server, in local ticks
@@ -19,6 +20,10 @@ interface SlidePlayerProps {
   enrollmentId: number
   existingProgress: SlideProgress | undefined
   onProgressSynced: (enrollment: Enrollment) => void
+  // Fired only alongside a completing flush whose response carried a
+  // `milestones` payload (i.e. the just-completed course belongs to the
+  // learner's Learning Path) — see CourseDetailPage for how it's used.
+  onMilestones?: (milestones: LearningPathMilestones) => void
   onCanAdvanceChange: (canAdvance: boolean, secondsRemaining: number, nextDisabledReason?: string) => void
   onEnterFullscreen?: () => void
   isFullscreen?: boolean
@@ -30,6 +35,7 @@ export function SlidePlayer({
   enrollmentId,
   existingProgress,
   onProgressSynced,
+  onMilestones,
   onCanAdvanceChange,
   onEnterFullscreen,
   isFullscreen,
@@ -59,6 +65,7 @@ export function SlidePlayer({
         ...(markCompleted ? { completed: true } : {}),
       })
       onProgressSynced(enrollment)
+      if (enrollment.milestones) onMilestones?.(enrollment.milestones)
       if (markCompleted) {
         setIsMarkedComplete(true)
         completeSentRef.current = true

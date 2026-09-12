@@ -11,7 +11,7 @@ from certificates.services import try_auto_issue_certificate
 from core.permissions import IsAdminRole
 from courses.models import Enrollment
 from courses.permissions import editable_courses_for_user, exclude_demo_locked, visible_courses_for_user
-from gamification.services import update_gamification_for_user
+from gamification.services import record_learning_activity, update_gamification_for_user
 
 from .models import (
     CategorizeItem,
@@ -212,6 +212,7 @@ class QuizViewSet(
 
             attempt.calculate_score_percent()
             update_gamification_for_user(request.user)
+            record_learning_activity(request.user)
 
         # If every slide is already complete, this submission's score may be
         # the last piece needed to cross the certificate pass threshold — see

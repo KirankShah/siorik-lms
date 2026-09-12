@@ -4,22 +4,55 @@ import { Link } from 'react-router-dom'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
 import { fetchMyLearningPath } from '../lib/learningPathApi'
-import type { LearningPath, LearningPathCourse, LearningPathTier } from '../types/learningPath'
+import type { LearningPath, LearningPathCourse, LearningPathCourseState, LearningPathTier } from '../types/learningPath'
 
 // This is the "what do I do next" view — a single sequential trail, distinct
 // from the general course catalog (/courses) which stays for browsing
 // everything available.
 
-function PathNode({ course, isMilestoneTier }: { course: LearningPathCourse; isMilestoneTier: boolean }) {
+// Remembers each course's node state across loads (this browser tab only)
+// purely so a course that just flipped current -> completed can get its
+// one-shot completion flourish — see justCompletedIds below. Never used for
+// anything else; an empty/missing cache (private window, cleared storage,
+// first-ever visit) just means the flourish doesn't play, nothing else reads
+// this.
+const NODE_STATE_CACHE_KEY = 'learning-path-node-states-v1'
+
+function readCachedNodeStates(): Record<number, LearningPathCourseState> {
+  try {
+    const raw = sessionStorage.getItem(NODE_STATE_CACHE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeCachedNodeStates(states: Record<number, LearningPathCourseState>) {
+  try {
+    sessionStorage.setItem(NODE_STATE_CACHE_KEY, JSON.stringify(states))
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function PathNode({
+  course,
+  isMilestoneTier,
+  isJustCompleted,
+}: {
+  course: LearningPathCourse
+  isMilestoneTier: boolean
+  isJustCompleted: boolean
+}) {
   if (course.state === 'completed') {
     return (
       <li className="relative flex items-start gap-4">
         <span
           className={`relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
             isMilestoneTier ? 'bg-brand-gold text-brand-navy' : 'bg-teal-600 text-white'
-          }`}
+          } ${isJustCompleted ? 'path-node-complete' : ''}`}
         >
-          <Check className="h-5 w-5" />
+          <Check className={`h-5 w-5 ${isJustCompleted ? 'path-node-checkmark' : ''}`} />
         </span>
         <div className="pt-2">
           <p className="text-sm font-medium text-neutral-900">{course.title}</p>
@@ -58,7 +91,7 @@ function PathNode({ course, isMilestoneTier }: { course: LearningPathCourse; isM
   )
 }
 
-function TierGroup({ tier }: { tier: LearningPathTier }) {
+function TierGroup({ tier, justCompletedIds }: { tier: LearningPathTier; justCompletedIds: Set<number> }) {
   return (
     <div>
       <p
@@ -71,7 +104,12 @@ function TierGroup({ tier }: { tier: LearningPathTier }) {
       </p>
       <ul className="space-y-5">
         {tier.courses.map((course) => (
-          <PathNode key={course.id} course={course} isMilestoneTier={tier.is_complete} />
+          <PathNode
+            key={course.id}
+            course={course}
+            isMilestoneTier={tier.is_complete}
+            isJustCompleted={justCompletedIds.has(course.id)}
+          />
         ))}
       </ul>
     </div>
@@ -81,12 +119,32 @@ function TierGroup({ tier }: { tier: LearningPathTier }) {
 export function LearningPathSection() {
   const [path, setPath] = useState<LearningPath | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Node ids that transitioned current -> completed since this browser
+  // tab's last load of the path — the subtle "felt, not announced" flourish
+  // plays only for these, once, never on a plain revisit/refresh.
+  const [justCompletedIds, setJustCompletedIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     let cancelled = false
     fetchMyLearningPath()
       .then((data) => {
-        if (!cancelled) setPath(data)
+        if (cancelled) return
+
+        const previousStates = readCachedNodeStates()
+        const nextStates: Record<number, LearningPathCourseState> = {}
+        const newlyCompleted = new Set<number>()
+        for (const tier of data.tiers) {
+          for (const course of tier.courses) {
+            if (previousStates[course.id] === 'current' && course.state === 'completed') {
+              newlyCompleted.add(course.id)
+            }
+            nextStates[course.id] = course.state
+          }
+        }
+        writeCachedNodeStates(nextStates)
+
+        setJustCompletedIds(newlyCompleted)
+        setPath(data)
       })
       .catch(() => {
         if (!cancelled) setError('Could not load your learning path.')
@@ -122,7 +180,7 @@ export function LearningPathSection() {
             <div className="absolute bottom-2 left-[19px] top-2 w-0.5 bg-neutral-200" aria-hidden="true" />
             <div className="space-y-8">
               {path.tiers.map((tier) => (
-                <TierGroup key={tier.tier_key} tier={tier} />
+                <TierGroup key={tier.tier_key} tier={tier} justCompletedIds={justCompletedIds} />
               ))}
             </div>
           </div>

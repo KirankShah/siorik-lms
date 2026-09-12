@@ -9,6 +9,12 @@ import type {
   Enrollment,
   LessonType,
 } from '../types/courses'
+import type { LearningPathMilestones } from '../types/learningPath'
+
+// The slide-progress/complete-lesson endpoints attach this only when the
+// just-completed course belongs to the learner's Learning Path — see
+// backend courses.views.EnrollmentViewSet.
+export type EnrollmentWithMilestones = Enrollment & { milestones?: LearningPathMilestones }
 
 export function fetchCourses(): Promise<CourseListItem[]> {
   return apiFetch<CourseListItem[]>('/courses/')
@@ -27,8 +33,8 @@ export function enrollInCourse(courseId: number): Promise<Enrollment> {
   return apiFetch<Enrollment>('/enrollments/', { method: 'POST', body: { course: courseId } })
 }
 
-export function completeLesson(enrollmentId: number, lessonId: number): Promise<Enrollment> {
-  return apiFetch<Enrollment>(`/enrollments/${enrollmentId}/complete-lesson/`, {
+export function completeLesson(enrollmentId: number, lessonId: number): Promise<EnrollmentWithMilestones> {
+  return apiFetch<EnrollmentWithMilestones>(`/enrollments/${enrollmentId}/complete-lesson/`, {
     method: 'POST',
     body: { lesson: lessonId },
   })
@@ -39,8 +45,8 @@ export function completeLesson(enrollmentId: number, lessonId: number): Promise<
 export function saveSlideProgress(
   enrollmentId: number,
   input: { slide: number; time_spent_seconds?: number; completed?: boolean },
-): Promise<Enrollment> {
-  return apiFetch<Enrollment>(`/enrollments/${enrollmentId}/slide-progress/`, {
+): Promise<EnrollmentWithMilestones> {
+  return apiFetch<EnrollmentWithMilestones>(`/enrollments/${enrollmentId}/slide-progress/`, {
     method: 'POST',
     body: input,
   })

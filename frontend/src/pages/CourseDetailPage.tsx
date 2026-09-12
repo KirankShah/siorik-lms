@@ -10,6 +10,7 @@ import { Card } from '../components/ui/Card'
 import { enrollInCourse, fetchCourseDetail, fetchEnrollments, retakeCourse } from '../lib/coursesApi'
 import { computeReachedSlideIds, flattenCourseSlides } from '../lib/slideSequence'
 import type { CourseDetail, Enrollment } from '../types/courses'
+import type { LearningPathMilestones } from '../types/learningPath'
 
 export function CourseDetailPage() {
   const { id: slug } = useParams<{ id: string }>()
@@ -27,6 +28,12 @@ export function CourseDetailPage() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showCompletionModal, setShowCompletionModal] = useState(false)
   const [isRetaking, setIsRetaking] = useState(false)
+  // Set only when the completing slide-progress/complete-lesson call carried
+  // a `milestones` payload — i.e. this course belongs to the learner's
+  // Learning Path. Drives the tier-completion mascot message and the
+  // certificate reveal in CourseCompletionModal; cleared on Retake so a
+  // stale milestone doesn't linger into the next run-through.
+  const [completionMilestones, setCompletionMilestones] = useState<LearningPathMilestones | null>(null)
 
   useEffect(() => {
     if (!slug) return
@@ -113,6 +120,7 @@ export function CourseDetailPage() {
       const freshEnrollment = await retakeCourse(enrollment.id)
       setEnrollment(freshEnrollment)
       setShowCompletionModal(false)
+      setCompletionMilestones(null)
       goToFirst()
     } catch {
       setError('Could not reset your progress for a retake. Please try again.')
@@ -181,6 +189,7 @@ export function CourseDetailPage() {
       enrollmentId={enrollment.id}
       existingProgress={enrollment.slide_progress.find((p) => p.slide === activeEntry.slide.id)}
       onProgressSynced={setEnrollment}
+      onMilestones={setCompletionMilestones}
       onCanAdvanceChange={(advance, remaining, disabledReason) => {
         setCanAdvance(advance)
         setSecondsRemaining(remaining)
@@ -202,6 +211,8 @@ export function CourseDetailPage() {
       courseId={course.id}
       isEligible={!enrollment.certificate_ineligible_reason}
       isRetaking={isRetaking}
+      newlyCompletedTiers={completionMilestones?.newly_completed_tiers}
+      isPathFinale={completionMilestones?.path_fully_completed}
       onRetake={() => void handleRetake()}
       onBackToCourse={() => setShowCompletionModal(false)}
       onMaybeLater={() => {

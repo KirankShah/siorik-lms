@@ -1,6 +1,8 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import Max
+from django.utils import timezone
 
 from assessments.models import QuizAttempt
 from certificates.models import Certificate
@@ -25,6 +27,17 @@ LEVEL_ASSESSMENT_PASS_POINTS = round(COURSE_COMPLETION_POINTS * LEVEL_ASSESSMENT
 # single lucky attempt doesn't trigger it.
 HIGH_ACHIEVER_MIN_QUIZZES = 3
 HIGH_ACHIEVER_MIN_AVERAGE = Decimal('90')
+
+# Ascending consecutive-active-day thresholds that award a streak badge — the
+# only place a longer streak (7-day, 30-day, ...) needs to be added later:
+# append (threshold_days, badge_key) here and seed the matching Badge row the
+# same way 0009_seed_tier_and_streak_badges.py does. record_learning_activity
+# re-checks every threshold on each update (not just the one it might have
+# just crossed), so this stays correct even if a future threshold is added
+# above one a learner has already passed.
+STREAK_BADGE_THRESHOLDS = [
+    (3, 'streak_3_day'),
+]
 
 
 def _best_scores_per_quiz(user, quiz_filter=None):
@@ -92,6 +105,30 @@ def recalculate_leaderboard_entry(user):
     return entry
 
 
+def award_badges_by_keys(user, keys):
+    """
+    Idempotently awards each badge in `keys` to `user` — the shared
+    already-earned-check + get_or_create primitive behind every award_*
+    helper below, plus courses.learning_path's tier-completion check and
+    record_learning_activity's streak check, so that idempotency logic (and
+    the "key doesn't match a seeded Badge" no-op) lives in exactly one place.
+    """
+    if not keys:
+        return
+    already_earned = set(
+        UserBadge.objects.filter(user=user, badge__key__in=keys).values_list('badge__key', flat=True)
+    )
+    to_award = [key for key in keys if key not in already_earned]
+    if not to_award:
+        return
+
+    badges_by_key = {badge.key: badge for badge in Badge.objects.filter(key__in=to_award)}
+    for key in to_award:
+        badge = badges_by_key.get(key)
+        if badge:
+            UserBadge.objects.get_or_create(user=user, badge=badge)
+
+
 def award_badges_for_user(user):
     """Awards any badge whose condition is now met and wasn't already earned."""
     entry = LeaderboardEntry.objects.filter(user=user).first()
@@ -112,14 +149,40 @@ def award_badges_for_user(user):
         if quiz_count >= HIGH_ACHIEVER_MIN_QUIZZES and entry.average_quiz_score >= HIGH_ACHIEVER_MIN_AVERAGE:
             to_award.append('high_achiever')
 
-    if not to_award:
+    award_badges_by_keys(user, to_award)
+
+
+def record_learning_activity(user):
+    """
+    Updates `user`'s current_streak_days/last_active_date the first time they
+    make genuine learning progress today — slide progress, a quiz
+    submission, or a course completion (see call sites in courses.views and
+    assessments.views.QuizViewSet.submit). Idempotent within a day: a second
+    call the same day is a no-op, so every progress-saving endpoint can call
+    this unconditionally rather than each needing its own "did I already
+    count today" guard.
+
+    - last_active_date == today: no change (already counted today).
+    - last_active_date == yesterday: streak continues, +1.
+    - anything else (None, or more than a day ago): streak resets to 1.
+
+    Awards any STREAK_BADGE_THRESHOLDS newly reached.
+    """
+    today = timezone.localdate()
+    if user.last_active_date == today:
         return
 
-    badges_by_key = {badge.key: badge for badge in Badge.objects.filter(key__in=to_award)}
-    for key in to_award:
-        badge = badges_by_key.get(key)
-        if badge:
-            UserBadge.objects.get_or_create(user=user, badge=badge)
+    if user.last_active_date == today - timedelta(days=1):
+        user.current_streak_days += 1
+    else:
+        user.current_streak_days = 1
+    user.last_active_date = today
+    user.save(update_fields=['current_streak_days', 'last_active_date'])
+
+    eligible_streak_badges = [
+        key for threshold, key in STREAK_BADGE_THRESHOLDS if user.current_streak_days >= threshold
+    ]
+    award_badges_by_keys(user, eligible_streak_badges)
 
 
 def update_gamification_for_user(user):
@@ -224,11 +287,4 @@ def award_badges_for_level_assessment_attempt(attempt):
     if 'branch_pride' not in already_earned and _is_first_in_branch_to_pass(attempt):
         to_award.append('branch_pride')
 
-    if not to_award:
-        return
-
-    badges_by_key = {badge.key: badge for badge in Badge.objects.filter(key__in=to_award)}
-    for key in to_award:
-        badge = badges_by_key.get(key)
-        if badge:
-            UserBadge.objects.get_or_create(user=user, badge=badge)
+    award_badges_by_keys(user, to_award)

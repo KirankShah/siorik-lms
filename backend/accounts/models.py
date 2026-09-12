@@ -98,6 +98,15 @@ class User(AbstractUser):
     preferred_narration_language = models.CharField(
         max_length=5, choices=NarrationLanguage.choices, default=NarrationLanguage.EN
     )
+    # Consecutive days with at least one genuine learning action (slide
+    # progress, a quiz submission, or a course completion) — see
+    # gamification.services.record_learning_activity, the only place these
+    # two fields are ever written. 0 until the learner's first tracked
+    # activity.
+    current_streak_days = models.PositiveIntegerField(default=0)
+    # The last date current_streak_days was updated. Null until the
+    # learner's first tracked activity.
+    last_active_date = models.DateField(null=True, blank=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
