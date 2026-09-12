@@ -389,6 +389,18 @@ class SlideProgressSerializer(serializers.ModelSerializer):
 class EnrollmentSerializer(serializers.ModelSerializer):
     completed_lesson_ids = serializers.SerializerMethodField()
     slide_progress = SlideProgressSerializer(many=True, read_only=True)
+    # Lets a consumer (the learner dashboard's "My Courses" list, in
+    # particular) render an enrollment's course without a separate lookup
+    # against GET /api/courses/ — that list is path-scoped for a learner
+    # with an assigned Learning Path (see CourseViewSet.get_queryset), so it
+    # can legitimately omit a course this same learner is still enrolled in
+    # (e.g. one outside their current path). An Enrollment should always be
+    # able to describe its own course regardless of catalog scoping.
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    course_slug = serializers.CharField(source='course.slug', read_only=True)
+    course_completion_deadline_days = serializers.IntegerField(
+        source='course.completion_deadline_days', read_only=True
+    )
     # Null once the enrollment isn't COMPLETED yet, or once the learner is
     # actually eligible for a certificate. Otherwise the human-readable
     # reason they aren't (yet) — currently always the course-wide average
@@ -404,6 +416,9 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'id',
             'user',
             'course',
+            'course_title',
+            'course_slug',
+            'course_completion_deadline_days',
             'enrolled_at',
             'completed_at',
             'status',
@@ -413,7 +428,8 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'certificate_ineligible_reason',
         ]
         read_only_fields = [
-            'id', 'user', 'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress',
+            'id', 'user', 'course_title', 'course_slug', 'course_completion_deadline_days',
+            'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress',
             'certificate_ineligible_reason',
         ]
 

@@ -107,6 +107,13 @@ export interface Enrollment {
   id: number
   user: number
   course: number
+  // The enrollment's own course display fields — use these (not a
+  // cross-reference against fetchCourses(), which is path-scoped for a
+  // learner with an assigned Learning Path and can legitimately omit a
+  // course they're still enrolled in) to render an enrollment on its own.
+  course_title: string
+  course_slug: string
+  course_completion_deadline_days: number | null
   enrolled_at: string
   completed_at: string | null
   status: EnrollmentStatus

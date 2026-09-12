@@ -268,7 +268,6 @@ interface PendingItem {
 
 function LearnerDashboard({ user }: { user: User }) {
   const [enrollments, setEnrollments] = useState<Enrollment[] | null>(null)
-  const [courses, setCourses] = useState<CourseListItem[]>([])
   const [pendingAssignments, setPendingAssignments] = useState<PendingAssignment[] | null>(null)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[] | null>(null)
   const [myBadges, setMyBadges] = useState<UserBadge[] | null>(null)
@@ -299,17 +298,16 @@ function LearnerDashboard({ user }: { user: User }) {
 
     async function load() {
       try {
-        const [enrollmentList, courseList] = await Promise.all([fetchEnrollments(), fetchCourses()])
+        const enrollmentList = await fetchEnrollments()
         if (cancelled) return
         setEnrollments(enrollmentList)
-        setCourses(courseList)
 
-        const courseById = new Map(courseList.map((course) => [course.id, course]))
-        const enrolledCourses = enrollmentList
-          .map((enrollment) => courseById.get(enrollment.course))
-          .filter((course): course is CourseListItem => !!course)
-
-        const details = await Promise.all(enrolledCourses.map((course) => fetchCourseDetail(course.slug).catch(() => null)))
+        // Each enrollment already carries its own course_slug — no need to
+        // cross-reference the (path-scoped, for a learner with an assigned
+        // path) catalog just to resolve which course it's for.
+        const details = await Promise.all(
+          enrollmentList.map((enrollment) => fetchCourseDetail(enrollment.course_slug).catch(() => null)),
+        )
         if (cancelled) return
 
         // Slide id -> which enrolled course/slide it belongs to, so a flat
@@ -365,8 +363,6 @@ function LearnerDashboard({ user }: { user: User }) {
       cancelled = true
     }
   }, [])
-
-  const courseById = new Map(courses.map((course) => [course.id, course]))
 
   const myPoints = leaderboard?.find((entry) => entry.user_id === user.id)?.total_points ?? 0
 
@@ -436,11 +432,11 @@ function LearnerDashboard({ user }: { user: User }) {
           ) : (
             <ul className="mt-4 space-y-4">
               {enrollments.map((enrollment) => {
-                const course = courseById.get(enrollment.course)
                 const deadline =
-                  course?.completion_deadline_days != null
+                  enrollment.course_completion_deadline_days != null
                     ? new Date(
-                        new Date(enrollment.enrolled_at).getTime() + course.completion_deadline_days * 24 * 60 * 60 * 1000,
+                        new Date(enrollment.enrolled_at).getTime()
+                          + enrollment.course_completion_deadline_days * 24 * 60 * 60 * 1000,
                       )
                     : null
                 const isOverdue = deadline !== null && deadline.getTime() < Date.now() && enrollment.status !== 'COMPLETED'
@@ -448,9 +444,7 @@ function LearnerDashboard({ user }: { user: User }) {
                 return (
                   <li key={enrollment.id}>
                     <div className="flex items-center justify-between gap-3">
-                      <p className="truncate text-sm font-medium text-neutral-900">
-                        {course?.title ?? `Course #${enrollment.course}`}
-                      </p>
+                      <p className="truncate text-sm font-medium text-neutral-900">{enrollment.course_title}</p>
                       <Badge variant={STATUS_BADGE[enrollment.status] ?? 'neutral'}>
                         {STATUS_LABEL[enrollment.status] ?? enrollment.status}
                       </Badge>
@@ -464,11 +458,11 @@ function LearnerDashboard({ user }: { user: User }) {
                         {isOverdue ? 'Overdue — was due' : 'Due'} {deadline.toLocaleDateString()}
                       </p>
                     )}
-                    {enrollment.status === 'COMPLETED' && enrollment.certificate_ineligible_reason && course && (
+                    {enrollment.status === 'COMPLETED' && enrollment.certificate_ineligible_reason && (
                       <div className="mt-1.5">
                         <p className="text-xs text-amber-700">{enrollment.certificate_ineligible_reason}</p>
                         <Link
-                          to={`/courses/${course.slug}`}
+                          to={`/courses/${enrollment.course_slug}`}
                           className="text-xs font-medium text-brand-navy hover:underline"
                         >
                           Retake Course
