@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { BadgesWidget } from '../components/BadgesWidget'
 import { LeaderboardWidget } from '../components/LeaderboardWidget'
 import { LearnerWelcomeBanner } from '../components/LearnerWelcomeBanner'
+import { LearningPathSection } from '../components/LearningPathSection'
 import { Badge } from '../components/ui/Badge'
 import type { BadgeVariant } from '../components/ui/Badge'
 import { Banner } from '../components/ui/Banner'
@@ -369,6 +370,8 @@ function LearnerDashboard({ user }: { user: User }) {
         points={leaderboard ? myPoints : null}
         badgesEarned={myBadges?.length ?? null}
       />
+
+      <LearningPathSection />
 
       <LeaderboardWidget entries={leaderboard} />
 

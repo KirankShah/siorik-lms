@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxLengthValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 
-from accounts.models import Organization
+from accounts.models import Organization, User
 from accounts.validators import validate_image_size
 
 from .validators import LESSON_TYPE_ALLOWED_EXTENSIONS, validate_lesson_file_size
@@ -121,6 +121,23 @@ class Course(models.Model):
         null=True,
         blank=True,
         related_name='created_courses',
+    )
+    # This course's position in the single learner-facing sequential Learning
+    # Path (see courses.learning_path). Null means the course isn't part of
+    # the path at all — it's still reachable from the general catalog like
+    # any other course, just not shown as a path node. Every path-order'd
+    # course shares one ascending sequence; ties broken by id.
+    path_order = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    # Null means this course sits in the path's "Foundation" tier — open to
+    # every learner regardless of role. Otherwise one of
+    # accounts.User.AssessmentLevel's codes: only a learner whose own
+    # User.assessment_level matches this value ever sees the course in their
+    # path, mirroring levelassessments.services.assigned_assessment_level_for_user
+    # (a learner is only ever assigned the single tier matching their own
+    # assessment_level, never a ladder of lower ones) — see
+    # courses.learning_path for the full gating rule.
+    minimum_assessment_level = models.CharField(
+        max_length=30, choices=User.AssessmentLevel.choices, blank=True, null=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

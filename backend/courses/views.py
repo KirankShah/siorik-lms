@@ -50,6 +50,7 @@ from .permissions import (
     is_lesson_locked_for_demo_user,
     visible_courses_for_user,
 )
+from .learning_path import build_learning_path
 from .services import clone_course
 from .serializers import (
     CourseAccessSerializer,
@@ -664,6 +665,21 @@ class SlideTemplateViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SlideTemplate.objects.all()
     serializer_class = SlideTemplateSerializer
     permission_classes = [IsAuthenticated]
+
+
+class LearningPathView(APIView):
+    """
+    Learner-facing GET /api/learning-path/ — assembles the caller's "My
+    Learning Path" dashboard section (see courses.learning_path for the full
+    tier/gating rules). Read-only: enrolling into a path course happens
+    implicitly when the learner opens it via the Continue button, same as any
+    other course.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(build_learning_path(request.user))
 
 
 class MediaUploadView(APIView):

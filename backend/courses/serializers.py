@@ -124,6 +124,8 @@ class CourseListSerializer(serializers.ModelSerializer):
             'is_published',
             'template',
             'completion_deadline_days',
+            'path_order',
+            'minimum_assessment_level',
             'created_at',
             'updated_at',
             'is_locked',
@@ -169,6 +171,8 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
+            'path_order',
+            'minimum_assessment_level',
             'is_demo_available',
             'created_by',
             'created_at',
@@ -195,6 +199,8 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
+            'path_order',
+            'minimum_assessment_level',
             'is_demo_available',
         ]
 
