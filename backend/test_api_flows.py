@@ -379,6 +379,16 @@ class EnrollmentFlowTests(BaseAPITestCase):
         listing = self.client.get('/api/enrollments/')
         self.assertEqual(len(listing.data), 1)
         self.assertEqual(listing.data[0]['course'], self.published_org_course.id)
+        # An enrollment carries its own course display fields — the learner
+        # dashboard's "My Courses" list relies on these instead of
+        # cross-referencing GET /api/courses/, since that catalog is
+        # path-scoped for a learner with an assigned path and can
+        # legitimately omit a course they're still enrolled in.
+        self.assertEqual(listing.data[0]['course_title'], self.published_org_course.title)
+        self.assertEqual(listing.data[0]['course_slug'], self.published_org_course.slug)
+        self.assertEqual(
+            listing.data[0]['course_completion_deadline_days'], self.published_org_course.completion_deadline_days
+        )
 
     def test_duplicate_enrollment_rejected(self):
         self.auth_as(self.learner)
