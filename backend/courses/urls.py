@@ -9,6 +9,7 @@ from .views import (
     EnrollmentReportView,
     EnrollmentViewSet,
     LearnerRosterView,
+    LearningPathView,
     LessonViewSet,
     MediaUploadView,
     ModuleViewSet,
@@ -26,6 +27,7 @@ router.register('elements', ElementViewSet, basename='element')
 router.register('slide-templates', SlideTemplateViewSet, basename='slide-template')
 
 urlpatterns = router.urls + [
+    path('learning-path/', LearningPathView.as_view(), name='learning-path'),
     path('reports/enrollments/', EnrollmentReportView.as_view(), name='enrollment-report'),
     path('reports/learners/', LearnerRosterView.as_view(), name='learner-roster'),
     path('reports/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),

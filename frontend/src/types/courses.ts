@@ -27,6 +27,9 @@ export interface Module {
 
 export type ContentOwner = 'PLATFORM' | 'ORGANIZATION'
 
+// Mirrors backend accounts.User.AssessmentLevel's codes.
+export type AssessmentLevelCode = 'assistant_supervisor' | 'officer' | 'management' | 'senior_management'
+
 export interface CourseListItem {
   id: number
   title: string
@@ -43,6 +46,13 @@ export interface CourseListItem {
   // Null means the pre-templates default look — see backend Course.template.
   template: number | null
   completion_deadline_days: number | null
+  // This course's position in the learner-facing "My Learning Path" (see
+  // LearningPathSection.tsx) — null means it isn't part of the path.
+  path_order: number | null
+  // Null means this course sits in the path's Foundation tier (open to
+  // everyone); otherwise the single AssessmentLevel tier a learner needs
+  // (accounts.User.assessment_level) to have it appear in their path.
+  minimum_assessment_level: AssessmentLevelCode | null
   // Set only when this course was produced by cloning another course (a
   // platform course forked for an org, or an org course pulled up into the
   // platform library) — see courses.services.clone_course.

@@ -14,8 +14,17 @@ import { createCourse, createModule, fetchCourseDetail, updateCourse } from '../
 import { fetchSlideTemplates } from '../../lib/slideTemplatesApi'
 import { slugify } from '../../lib/slugify'
 import type { Organization } from '../../types/auth'
-import type { CourseDetail } from '../../types/courses'
+import type { AssessmentLevelCode, CourseDetail } from '../../types/courses'
 import type { SlideTemplate } from '../../types/slides'
+
+// Mirrors accounts.User.AssessmentLevel's four codes, in seniority order —
+// same labels used across the app (see StaffEnrollmentPage's LEVEL_NAMES).
+const ASSESSMENT_LEVEL_OPTIONS: { value: AssessmentLevelCode; label: string }[] = [
+  { value: 'assistant_supervisor', label: 'Front-Line Level' },
+  { value: 'officer', label: 'Officer Level' },
+  { value: 'management', label: 'Middle Management Level' },
+  { value: 'senior_management', label: 'Top Management Level' },
+]
 
 function describeSaveError(err: unknown): string {
   if (err instanceof ApiError && err.body && typeof err.body === 'object') {
@@ -53,6 +62,8 @@ export function CourseEditorPage() {
   const [coverImage, setCoverImage] = useState<File | null>(null)
   const [templateId, setTemplateId] = useState<number | null>(null)
   const [completionDeadlineDays, setCompletionDeadlineDays] = useState<number | ''>('')
+  const [pathOrder, setPathOrder] = useState<number | ''>('')
+  const [minimumAssessmentLevel, setMinimumAssessmentLevel] = useState<AssessmentLevelCode | ''>('')
 
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -82,6 +93,8 @@ export function CourseEditorPage() {
         setIsPublished(detail.is_published)
         setTemplateId(detail.template)
         setCompletionDeadlineDays(detail.completion_deadline_days ?? '')
+        setPathOrder(detail.path_order ?? '')
+        setMinimumAssessmentLevel(detail.minimum_assessment_level ?? '')
       })
       .catch(() => setLoadError('Could not load this course.'))
   }
@@ -105,6 +118,8 @@ export function CourseEditorPage() {
         cover_image: coverImage,
         template: templateId,
         completion_deadline_days: completionDeadlineDays === '' ? null : Number(completionDeadlineDays),
+        path_order: pathOrder === '' ? null : Number(pathOrder),
+        minimum_assessment_level: minimumAssessmentLevel === '' ? null : minimumAssessmentLevel,
       }
       if (isCreateMode) {
         const created = await createCourse(payload)
@@ -245,6 +260,41 @@ export function CourseEditorPage() {
             onChange={(e) => setCompletionDeadlineDays(e.target.value === '' ? '' : Number(e.target.value))}
             placeholder="No deadline"
           />
+
+          <div>
+            <Input
+              id="course-path-order"
+              label="Learning Path position"
+              type="number"
+              min={1}
+              value={pathOrder}
+              onChange={(e) => setPathOrder(e.target.value === '' ? '' : Number(e.target.value))}
+              placeholder="Not on the path"
+            />
+            <p className="mt-1 text-xs text-neutral-400">
+              Leave blank to keep this course out of learners' "My Learning Path" — it stays browsable from the
+              catalog either way. Courses share one ascending sequence.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">Learning Path tier</label>
+            <select
+              value={minimumAssessmentLevel}
+              onChange={(e) => setMinimumAssessmentLevel(e.target.value as AssessmentLevelCode | '')}
+              className="mt-1 w-full max-w-xs rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            >
+              <option value="">Foundation (open to everyone)</option>
+              {ASSESSMENT_LEVEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-neutral-400">
+              Only a learner whose own Assessment Level matches sees this course in that tier of their path.
+            </p>
+          </div>
 
           {saveError && <p className="text-sm text-red-600">{saveError}</p>}
           {saveSuccess && <p className="text-sm text-emerald-600">Saved.</p>}

@@ -450,6 +450,141 @@ class EnrollmentFlowTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class LearningPathApiTests(BaseAPITestCase):
+    """GET /api/learning-path/ — the "My Learning Path" dashboard section:
+    sequential completed/current/locked gating, per-tier milestone
+    completion, and the branch-comparison line."""
+
+    def setUp(self):
+        super().setUp()
+        self.foundation_1 = Course.objects.create(
+            title='Foundation 1', slug='foundation-1', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=1,
+        )
+        self.foundation_2 = Course.objects.create(
+            title='Foundation 2', slug='foundation-2', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=2,
+        )
+        self.officer_course = Course.objects.create(
+            title='Officer Tier Course', slug='officer-tier-course', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=3,
+            minimum_assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+
+    def _tier(self, tiers, tier_key):
+        return next(tier for tier in tiers if tier['tier_key'] == tier_key)
+
+    def _state(self, tier, course_id):
+        return next(course['state'] for course in tier['courses'] if course['id'] == course_id)
+
+    def test_partial_foundation_progress_states(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.foundation_1,
+            status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+        )
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+        self.assertEqual(response.status_code, 200)
+
+        foundation = self._tier(response.data['tiers'], 'FOUNDATION')
+        self.assertFalse(foundation['is_complete'])
+        self.assertEqual(self._state(foundation, self.foundation_1.id), 'completed')
+        self.assertEqual(self._state(foundation, self.foundation_2.id), 'current')
+
+        officer_tier = self._tier(response.data['tiers'], User.AssessmentLevel.OFFICER)
+        self.assertFalse(officer_tier['is_complete'])
+        self.assertEqual(self._state(officer_tier, self.officer_course.id), 'locked')
+
+    def test_completing_foundation_flips_milestone_flag_but_next_tier_stays_locked(self):
+        for course in (self.foundation_1, self.foundation_2):
+            Enrollment.objects.create(
+                user=self.learner, course=course,
+                status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+            )
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+
+        foundation = self._tier(response.data['tiers'], 'FOUNDATION')
+        self.assertTrue(foundation['is_complete'])
+        self.assertEqual(self._state(foundation, self.foundation_1.id), 'completed')
+        self.assertEqual(self._state(foundation, self.foundation_2.id), 'completed')
+
+        # No passed level assessment yet — the Officer tier stays locked even
+        # though Foundation is entirely done.
+        officer_tier = self._tier(response.data['tiers'], User.AssessmentLevel.OFFICER)
+        self.assertEqual(self._state(officer_tier, self.officer_course.id), 'locked')
+
+    def test_passing_tier_assessment_unlocks_next_tier(self):
+        for course in (self.foundation_1, self.foundation_2):
+            Enrollment.objects.create(
+                user=self.learner, course=course,
+                status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+            )
+        officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=officer_level, passed=True, submitted_at=timezone.now(),
+        )
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+
+        officer_tier = self._tier(response.data['tiers'], User.AssessmentLevel.OFFICER)
+        self.assertEqual(self._state(officer_tier, self.officer_course.id), 'current')
+
+    def test_branch_percentile_computed_from_colleagues_completed_counts(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.foundation_1,
+            status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+        )
+        self.learner.branch_department = 'Retail Banking'
+        self.learner.save(update_fields=['branch_department'])
+
+        behind_colleague = User.objects.create_user(
+            email='behind@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org, branch_department='Retail Banking',
+        )
+        ahead_colleague = User.objects.create_user(
+            email='ahead@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org, branch_department='retail banking',  # case-insensitive match
+        )
+        for course in (self.foundation_1, self.foundation_2, self.officer_course):
+            Enrollment.objects.create(
+                user=ahead_colleague, course=course,
+                status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+            )
+        # Different branch — must never count towards the comparison.
+        User.objects.create_user(
+            email='other-branch@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=self.org, branch_department='Compliance',
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/learning-path/')
+
+        # 1 of 2 branch colleagues (behind_colleague) completed fewer path
+        # courses than the learner's 1 — exactly 50%, not a placeholder.
+        self.assertEqual(response.data['branch_percentile'], 50)
+
+    def test_branch_percentile_omitted_without_a_branch_department(self):
+        self.assertIsNone(self.learner.branch_department)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/learning-path/')
+
+        self.assertIsNone(response.data['branch_percentile'])
+
+    def test_courses_without_path_order_are_excluded_from_the_path(self):
+        self.auth_as(self.learner)
+        response = self.client.get('/api/learning-path/')
+
+        path_course_ids = {course['id'] for tier in response.data['tiers'] for course in tier['courses']}
+        self.assertNotIn(self.published_org_course.id, path_course_ids)
+
+
 class EnrollmentRetakeTests(BaseAPITestCase):
     """"Retake Course" (CourseCompletionModal.tsx) resets an enrollment to a
     fresh state — progress, quiz attempts (so max_attempts starts over), and

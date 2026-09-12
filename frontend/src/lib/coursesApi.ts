@@ -1,6 +1,7 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
 import type { AnalyticsOrganizationGroup, BulkEnrollResult, ReportRow } from '../types/admin'
 import type {
+  AssessmentLevelCode,
   CourseAccessGrant,
   CourseDetail,
   CourseListItem,
@@ -78,6 +79,8 @@ export interface CourseInput {
   certificate_pass_threshold?: number
   certificate_expiry_months?: number | null
   completion_deadline_days?: number | null
+  path_order?: number | null
+  minimum_assessment_level?: AssessmentLevelCode | null
   is_demo_available?: boolean
 }
 
