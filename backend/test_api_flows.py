@@ -4251,7 +4251,10 @@ class LeaderboardLevelAssessmentPointsTests(TestCase):
     """
     gamification.services.recalculate_leaderboard_entry's level-assessment
     contribution — exercised directly against manually-built attempts so the
-    exact pass/fail/retake history is under test control.
+    exact pass/fail/retake/score history is under test control. The bonus is
+    round(LEVEL_ASSESSMENT_PASS_POINTS * score_percent / 100) for each
+    distinct passed level (that level's own best PASSING score if passed
+    more than once) — not a flat award for merely passing.
     """
 
     def setUp(self):
@@ -4266,62 +4269,194 @@ class LeaderboardLevelAssessmentPointsTests(TestCase):
             self.org, User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1,
         )
 
-    def make_attempt(self, level, passed):
+    def make_attempt(self, level, passed, score_percent=Decimal('0')):
         return LevelAssessmentAttempt.objects.create(
-            user=self.user, assessment_level=level, questions_drawn=[], submitted_at=timezone.now(), passed=passed,
+            user=self.user, assessment_level=level, questions_drawn=[], submitted_at=timezone.now(),
+            passed=passed, score_percent=score_percent,
         )
 
-    def test_a_passed_level_assessment_is_worth_more_than_a_single_course_completion(self):
-        # The task's explicit requirement: weighted above, not equal to, an
-        # ordinary course completion, reflecting its higher-stakes status.
+    def test_max_achievable_level_assessment_bonus_exceeds_a_single_course_completion(self):
+        # LEVEL_ASSESSMENT_PASS_POINTS is the bonus at a perfect 100% score —
+        # the task's explicit requirement is that a level assessment CAN be
+        # worth more than an ordinary course completion, reflecting its
+        # higher-stakes status — not that a bare pass always is, now that
+        # the bonus scales with score.
         self.assertGreater(LEVEL_ASSESSMENT_PASS_POINTS, COURSE_COMPLETION_POINTS)
 
-    def test_passed_level_assessment_awards_configured_points(self):
-        self.make_attempt(self.level_a, passed=True)
+    def test_passed_level_assessment_awards_points_scaled_by_its_score(self):
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('80'))
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, round(LEVEL_ASSESSMENT_PASS_POINTS * Decimal('0.8')))
+        self.assertEqual(entry.level_assessments_passed_count, 1)
+
+    def test_perfect_score_awards_the_full_configured_amount(self):
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('100'))
 
         entry = recalculate_leaderboard_entry(self.user)
 
         self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
-        self.assertEqual(entry.level_assessments_passed_count, 1)
 
-    def test_failed_attempt_awards_no_points(self):
-        self.make_attempt(self.level_a, passed=False)
+    def test_failed_attempt_awards_no_points_regardless_of_score(self):
+        self.make_attempt(self.level_a, passed=False, score_percent=Decimal('65'))
 
         entry = recalculate_leaderboard_entry(self.user)
 
         self.assertEqual(entry.total_points, 0)
         self.assertEqual(entry.level_assessments_passed_count, 0)
 
-    def test_retaking_an_already_passed_level_does_not_double_count(self):
-        self.make_attempt(self.level_a, passed=False)
-        self.make_attempt(self.level_a, passed=True)
-        self.make_attempt(self.level_a, passed=True)  # retake after already having passed
+    def test_retake_uses_the_best_passing_score_not_the_latest_attempt(self):
+        self.make_attempt(self.level_a, passed=False, score_percent=Decimal('40'))
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('90'))
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('75'))  # retake, scored lower
 
         entry = recalculate_leaderboard_entry(self.user)
 
-        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
+        self.assertEqual(entry.total_points, round(LEVEL_ASSESSMENT_PASS_POINTS * Decimal('0.9')))
         self.assertEqual(entry.level_assessments_passed_count, 1)
 
-    def test_passing_two_distinct_levels_counts_both(self):
-        self.make_attempt(self.level_a, passed=True)
-        self.make_attempt(self.level_b, passed=True)
+    def test_passing_two_distinct_levels_sums_each_ones_own_scaled_bonus(self):
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('80'))
+        self.make_attempt(self.level_b, passed=True, score_percent=Decimal('60'))
 
         entry = recalculate_leaderboard_entry(self.user)
 
-        self.assertEqual(entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS * 2)
+        expected = round(LEVEL_ASSESSMENT_PASS_POINTS * Decimal('0.8')) + round(
+            LEVEL_ASSESSMENT_PASS_POINTS * Decimal('0.6')
+        )
+        self.assertEqual(entry.total_points, expected)
         self.assertEqual(entry.level_assessments_passed_count, 2)
 
-    def test_combines_with_course_completion_points(self):
+    def test_combines_with_path_scoped_course_completion_points(self):
+        # path_order is required for a course to contribute points at all —
+        # see LeaderboardPathScopedCoursePointsTests.
         course = Course.objects.create(
             title='Compliance 101', slug='compliance-101-points', organization=self.org,
-            content_owner=Course.ContentOwner.ORGANIZATION,
+            content_owner=Course.ContentOwner.ORGANIZATION, path_order=1,
         )
         Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
-        self.make_attempt(self.level_a, passed=True)
+        self.make_attempt(self.level_a, passed=True, score_percent=Decimal('100'))
 
         entry = recalculate_leaderboard_entry(self.user)
 
         self.assertEqual(entry.total_points, COURSE_COMPLETION_POINTS + LEVEL_ASSESSMENT_PASS_POINTS)
+
+
+class LeaderboardPathScopedCoursePointsTests(TestCase):
+    """
+    gamification.services.recalculate_leaderboard_entry's course-completion
+    points only count a course actually in the learner's own assigned
+    Learning Path: path_order must be set, and minimum_assessment_level
+    must be null (Foundation) or at-or-below the learner's own
+    assessment_level (courses.learning_path.tier_rank — an "at or below"
+    ordinal comparison, deliberately looser than the exact single-tier
+    match build_learning_path uses for path membership/gating).
+    """
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-path-points')
+        self.user = User.objects.create_user(
+            email='pathpoints@example.com', password='pw', role=User.Role.LEARNER, organization=self.org,
+        )
+
+    def _make_course(self, slug, path_order=None, minimum_assessment_level=None):
+        return Course.objects.create(
+            title=slug, slug=slug, organization=self.org, content_owner=Course.ContentOwner.ORGANIZATION,
+            path_order=path_order, minimum_assessment_level=minimum_assessment_level,
+        )
+
+    def test_course_with_no_path_order_contributes_nothing(self):
+        course = self._make_course('no-path-order')
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, 0)
+
+    def test_foundation_course_always_counts(self):
+        course = self._make_course('foundation-1', path_order=1)
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, COURSE_COMPLETION_POINTS)
+
+    def test_course_matching_the_users_own_tier_counts(self):
+        self.user.assessment_level = User.AssessmentLevel.OFFICER
+        self.user.save(update_fields=['assessment_level'])
+        course = self._make_course('officer-1', path_order=2, minimum_assessment_level=User.AssessmentLevel.OFFICER)
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, COURSE_COMPLETION_POINTS)
+
+    def test_course_above_the_users_own_tier_contributes_nothing(self):
+        # Ordinarily unreachable via normal path gating (a learner can't
+        # complete a tier above their own), but exercised directly to prove
+        # the leaderboard's own scoping rule holds regardless.
+        self.user.assessment_level = User.AssessmentLevel.ASSISTANT_SUPERVISOR
+        self.user.save(update_fields=['assessment_level'])
+        course = self._make_course('officer-1', path_order=2, minimum_assessment_level=User.AssessmentLevel.OFFICER)
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, 0)
+
+    def test_course_below_the_users_own_tier_still_counts(self):
+        # A Senior Management learner's previously-completed Officer-tier
+        # course counts — tier_rank is "at or below", not an exact match.
+        self.user.assessment_level = User.AssessmentLevel.SENIOR_MANAGEMENT
+        self.user.save(update_fields=['assessment_level'])
+        course = self._make_course('officer-1', path_order=2, minimum_assessment_level=User.AssessmentLevel.OFFICER)
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, COURSE_COMPLETION_POINTS)
+
+    def test_courses_completed_count_is_not_path_scoped(self):
+        # A separate stat from points — feeds the first_course_complete/
+        # five_courses_complete badges — deliberately counts every
+        # completed course regardless of path membership.
+        course = self._make_course('no-path-order-2')
+        Enrollment.objects.create(user=self.user, course=course, status=Enrollment.Status.COMPLETED)
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        self.assertEqual(entry.total_points, 0)
+        self.assertEqual(entry.courses_completed_count, 1)
+
+    def test_full_hand_calculation_matches_a_realistic_multi_course_scenario(self):
+        # One path course, one non-path (legacy/ad-hoc) course, and a passed
+        # level assessment at a partial score — hand-computed expected total.
+        self.user.assessment_level = User.AssessmentLevel.OFFICER
+        self.user.save(update_fields=['assessment_level'])
+
+        path_course = self._make_course('path-course', path_order=1)
+        Enrollment.objects.create(user=self.user, course=path_course, status=Enrollment.Status.COMPLETED)
+
+        outside_path_course = self._make_course('outside-path-course')  # no path_order
+        Enrollment.objects.create(user=self.user, course=outside_path_course, status=Enrollment.Status.COMPLETED)
+
+        level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER, questions_per_attempt=1)
+        LevelAssessmentAttempt.objects.create(
+            user=self.user, assessment_level=level, questions_drawn=[], submitted_at=timezone.now(),
+            passed=True, score_percent=Decimal('80'),
+        )
+
+        entry = recalculate_leaderboard_entry(self.user)
+
+        # path_course: 100 + 0 quiz bonus (no quizzes attempted) = 100.
+        # outside_path_course: excluded entirely (no path_order) = 0.
+        # Level assessment: round(150 * 0.8) = 120.
+        expected_total = COURSE_COMPLETION_POINTS + round(LEVEL_ASSESSMENT_PASS_POINTS * Decimal('0.8'))
+        self.assertEqual(expected_total, 220)
+        self.assertEqual(entry.total_points, expected_total)
+        # courses_completed_count stays unscoped (both completions count).
+        self.assertEqual(entry.courses_completed_count, 2)
 
 
 class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):

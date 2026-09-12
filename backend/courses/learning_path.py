@@ -54,6 +54,33 @@ def _tier_label(minimum_assessment_level):
     return _ASSESSMENT_LEVEL_LABELS.get(minimum_assessment_level, minimum_assessment_level)
 
 
+# Ordinal seniority of each tier, matching accounts.User.AssessmentLevel's
+# own declared order (ascending: assistant_supervisor, officer, management,
+# senior_management).
+TIER_RANK_ORDER = [choice.value for choice in User.AssessmentLevel]
+
+
+def tier_rank(minimum_assessment_level):
+    """
+    Ordinal rank of a tier for "at or below" comparisons — None (Foundation)
+    ranks below every real tier. Used by
+    gamification.services.recalculate_leaderboard_entry to decide which of a
+    learner's completed courses count toward their leaderboard score (their
+    own tier or any lower one).
+
+    This is a DIFFERENT, looser comparison than the exact-tier-match
+    _path_courses_for_user uses for path membership/gating above (a
+    learner's own Learning Path only ever shows Foundation + their single
+    assigned tier, never a lower one) — tier_rank exists for places an
+    exact single-tier match isn't the right question, like scoring
+    already-completed courses regardless of which tier the learner is
+    currently assigned to.
+    """
+    if minimum_assessment_level is None:
+        return -1
+    return TIER_RANK_ORDER.index(minimum_assessment_level)
+
+
 def has_passed_tier_assessment(user, tier_code):
     """Whether `user` has ever passed the LevelAssessmentAttempt for the
     AssessmentLevel named `tier_code` within their own organization — the
