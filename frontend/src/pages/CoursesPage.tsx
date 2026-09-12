@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Lock } from 'lucide-react'
+import { Check, Lock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ProgressBar } from '../components/ProgressBar'
 import { Badge } from '../components/ui/Badge'
@@ -8,7 +8,11 @@ import { Card } from '../components/ui/Card'
 import { enrollInCourse, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
 import type { CourseListItem, Enrollment } from '../types/courses'
 
-const LOCKED_MESSAGE = 'Locked — contact admin for access'
+const DEMO_LOCKED_MESSAGE = 'Locked — contact admin for access'
+// This card only ever renders for path_state === 'locked', which the
+// backend only ever returns for a course the learner hasn't reached yet in
+// their own Learning Path — see courses.permissions.path_accessible_courses_for_user.
+const PATH_LOCKED_MESSAGE = "Locked — complete the earlier courses in your Learning Path first"
 
 export function CoursesPage() {
   const navigate = useNavigate()
@@ -67,11 +71,12 @@ export function CoursesPage() {
       ) : (
         <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {courses.map((course) => {
-            if (course.is_locked) {
+            if (course.is_locked || course.path_state === 'locked') {
               return (
                 <LockedCourseCard
                   key={course.id}
                   course={course}
+                  message={course.is_locked ? DEMO_LOCKED_MESSAGE : PATH_LOCKED_MESSAGE}
                   showNotice={lockedNoticeCourseId === course.id}
                   onToggleNotice={() =>
                     setLockedNoticeCourseId((prev) => (prev === course.id ? null : course.id))
@@ -86,8 +91,25 @@ export function CoursesPage() {
                 <button
                   type="button"
                   onClick={() => navigate(`/courses/${course.slug}`)}
-                  className="aspect-video w-full bg-neutral-100 text-left"
+                  className="relative aspect-video w-full bg-neutral-100 text-left"
                 >
+                  {course.path_state && (
+                    <span
+                      className={`absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium shadow-sm ${
+                        course.path_state === 'completed'
+                          ? 'bg-teal-600 text-white'
+                          : 'bg-brand-navy text-white'
+                      }`}
+                    >
+                      {course.path_state === 'completed' ? (
+                        <>
+                          <Check className="h-3 w-3" /> Completed
+                        </>
+                      ) : (
+                        'Up Next'
+                      )}
+                    </span>
+                  )}
                   {course.cover_image ? (
                     <img
                       src={course.cover_image}
@@ -157,15 +179,19 @@ export function CoursesPage() {
 }
 
 // Rendered for a demo user viewing a course outside their org's assignment
-// (CourseListItem.is_locked) — a teaser only. It never links anywhere: the
-// backend denies retrieval/enrollment for this course regardless, so there's
-// nothing for a click here to navigate to.
+// (CourseListItem.is_locked), or a course the learner hasn't reached yet in
+// their own Learning Path (path_state === 'locked') — either way, a teaser
+// only. It never links anywhere: the backend denies retrieval/enrollment for
+// this course regardless (visible_courses_for_user / path_accessible_courses_for_user),
+// so there's nothing for a click here to navigate to.
 function LockedCourseCard({
   course,
+  message,
   showNotice,
   onToggleNotice,
 }: {
   course: CourseListItem
+  message: string
   showNotice: boolean
   onToggleNotice: () => void
 }) {
@@ -174,7 +200,7 @@ function LockedCourseCard({
       <button
         type="button"
         onClick={onToggleNotice}
-        title={LOCKED_MESSAGE}
+        title={message}
         className="group relative aspect-video w-full cursor-not-allowed bg-neutral-100 text-left"
       >
         {course.cover_image ? (
@@ -193,7 +219,7 @@ function LockedCourseCard({
         <button
           type="button"
           onClick={onToggleNotice}
-          title={LOCKED_MESSAGE}
+          title={message}
           className="flex items-center gap-1.5 text-left text-sm font-semibold text-neutral-400"
         >
           <Lock className="h-3.5 w-3.5 shrink-0" />
@@ -207,7 +233,7 @@ function LockedCourseCard({
           <Badge variant="neutral" className="w-full justify-center py-2 text-neutral-500">
             Locked
           </Badge>
-          {showNotice && <p className="mt-2 text-xs text-neutral-500">{LOCKED_MESSAGE}</p>}
+          {showNotice && <p className="mt-2 text-xs text-neutral-500">{message}</p>}
         </div>
       </div>
     </Card>

@@ -98,6 +98,47 @@ def editable_courses_for_user(user):
     return Course.objects.none()
 
 
+def path_accessible_courses_for_user(user):
+    """
+    Same as visible_courses_for_user, additionally excluding any course that
+    belongs to the learner's own Learning Path (Course.path_order is set)
+    but is currently 'locked' for them there — see
+    courses.learning_path.build_learning_path. Use this (not
+    visible_courses_for_user) at every point a learner's course/lesson
+    CONTENT is actually served — course detail, slide elements, quizzes,
+    assignments, scenarios, video/narration streaming, and enrollment
+    creation — so a path lock is a real server-side denial (a direct API
+    request 404s/400s) and not just a visual treatment in the Learning Path
+    dashboard widget. Mirrors the exact same "additive, narrower-than-visible"
+    shape as is_lesson_locked_for_demo_user/exclude_demo_locked above, just
+    at course instead of lesson granularity.
+
+    Deliberately NOT folded into visible_courses_for_user itself: the
+    Learning Path widget needs to see EVERY course in a learner's path,
+    including locked ones, precisely so it can render them as locked — this
+    function is for content-serving/enrollment endpoints only. A no-op for
+    every non-LEARNER role, so it's safe to use in place of
+    visible_courses_for_user anywhere an admin/instructor might also hit
+    the same code path.
+    """
+    base = visible_courses_for_user(user)
+    if user.role != user.Role.LEARNER:
+        return base
+
+    # Deferred import: courses.learning_path imports visible_courses_for_user
+    # from this module, so importing it back at module level here would be a
+    # circular import.
+    from .learning_path import build_learning_path
+
+    locked_ids = {
+        course['id']
+        for tier in build_learning_path(user)['tiers']
+        for course in tier['courses']
+        if course['state'] == 'locked'
+    }
+    return base.exclude(id__in=locked_ids) if locked_ids else base
+
+
 def is_lesson_locked_for_demo_user(user, lesson):
     """
     True only for a demo user (accounts.User.is_demo=True) opening a lesson

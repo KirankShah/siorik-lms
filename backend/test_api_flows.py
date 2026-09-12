@@ -748,6 +748,187 @@ class LearningStreakTests(TestCase):
         self.assertEqual(UserBadge.objects.filter(user=self.user, badge__key=badge_key).count(), 1)
 
 
+class PathAccessEnforcementTests(BaseAPITestCase):
+    """
+    Server-side denial for a course a learner hasn't reached yet in their own
+    Learning Path — courses.permissions.path_accessible_courses_for_user,
+    used everywhere a learner's course/lesson content is actually served
+    (course detail, slide elements, quizzes, enrollment creation). Confirms
+    this is a real permission check, not just the dashboard widget's visual
+    treatment.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.foundation_1 = self._make_course('Foundation 1', 'pe-foundation-1', path_order=1)
+        self.foundation_2 = self._make_course('Foundation 2', 'pe-foundation-2', path_order=2)
+        self.officer_course = self._make_course(
+            'Officer Tier Course', 'pe-officer-course', path_order=3,
+            minimum_assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+
+        # _make_course already created one module/lesson/CONTENT slide for
+        # officer_course — reuse that lesson (rather than a second module,
+        # which would collide on the (course, order) unique constraint) and
+        # add a QUIZ slide alongside it, so there's real quiz content too.
+        lesson = Lesson.objects.get(module__course=self.officer_course)
+        self.locked_content_slide = Slide.objects.get(lesson=lesson)
+        self.locked_quiz_slide = Slide.objects.create(lesson=lesson, order=2, slide_type=Slide.SlideType.QUIZ)
+        Quiz.objects.create(slide=self.locked_quiz_slide, title='Locked Quiz', pass_percentage=50)
+
+    def _make_course(self, title, slug, path_order, minimum_assessment_level=None):
+        course = Course.objects.create(
+            title=title, slug=slug, organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+            path_order=path_order, minimum_assessment_level=minimum_assessment_level,
+        )
+        module = Module.objects.create(course=course, title='M1', order=1)
+        lesson = Lesson.objects.create(module=module, title='L1', order=1)
+        Slide.objects.create(lesson=lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+        return course
+
+    def test_locked_course_detail_is_denied(self):
+        # officer_course is several steps ahead: neither foundation course is
+        # complete, and even if they were, the Officer tier assessment
+        # hasn't been passed.
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/courses/{self.officer_course.slug}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_locked_course_elements_endpoint_returns_nothing(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/elements/?slide={self.locked_content_slide.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_locked_course_quiz_endpoint_returns_nothing(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/quizzes/?slide={self.locked_quiz_slide.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_cannot_enroll_directly_in_a_locked_course(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/enrollments/', {'course': self.officer_course.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Enrollment.objects.filter(user=self.learner, course=self.officer_course).exists())
+
+    def test_current_course_remains_accessible(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/courses/{self.foundation_1.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_completed_course_remains_accessible(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.foundation_1,
+            status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+        )
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/courses/{self.foundation_1.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_unlocking_the_tier_grants_real_access(self):
+        for course in (self.foundation_1, self.foundation_2):
+            Enrollment.objects.create(
+                user=self.learner, course=course,
+                status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+            )
+        officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=officer_level, passed=True, submitted_at=timezone.now(),
+        )
+        self.auth_as(self.learner)
+
+        response = self.client.get(f'/api/courses/{self.officer_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_admin_bypasses_path_gating_entirely(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(f'/api/courses/{self.officer_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_course_without_path_order_is_never_path_gated(self):
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/courses/{self.published_org_course.slug}/')
+        self.assertEqual(response.status_code, 200)
+
+
+class LearnerCatalogPathViewTests(BaseAPITestCase):
+    """GET /api/courses/ (the general Courses catalog) for a LEARNER — must
+    match the Learning Path widget exactly once a path is assigned (same
+    courses, same path_order sequence, same lock states), and fall back to
+    the ordinary full catalog for a learner with no path assigned yet."""
+
+    def setUp(self):
+        super().setUp()
+        self.foundation_1 = Course.objects.create(
+            title='Foundation 1', slug='cat-foundation-1', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=1,
+        )
+        self.foundation_2 = Course.objects.create(
+            title='Foundation 2', slug='cat-foundation-2', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=2,
+        )
+
+    def test_catalog_falls_back_to_full_listing_without_a_path(self):
+        # A learner in an org where no course has path_order set at all —
+        # the catalog should behave exactly as it did before this feature,
+        # not show an empty page.
+        other_org = Organization.objects.create(name='No Path Org', slug='no-path-org')
+        pathless_course = Course.objects.create(
+            title='Pathless', slug='pathless-course', organization=other_org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+        pathless_learner = User.objects.create_user(
+            email='pathless@example.com', password='pass12345',
+            role=User.Role.LEARNER, organization=other_org,
+        )
+        self.auth_as(pathless_learner)
+
+        response = self.client.get('/api/courses/')
+
+        self.assertEqual(response.status_code, 200)
+        returned_ids = {course['id'] for course in response.data}
+        self.assertIn(pathless_course.id, returned_ids)
+        self.assertTrue(all(course['path_state'] is None for course in response.data))
+
+    def test_catalog_shows_only_path_courses_in_path_order_with_matching_states(self):
+        Enrollment.objects.create(
+            user=self.learner, course=self.foundation_1,
+            status=Enrollment.Status.COMPLETED, completed_at=timezone.now(),
+        )
+        self.auth_as(self.learner)
+
+        catalog_response = self.client.get('/api/courses/')
+        path_response = self.client.get('/api/learning-path/')
+
+        self.assertEqual(catalog_response.status_code, 200)
+        returned_ids = [course['id'] for course in catalog_response.data]
+        # Only the two path courses — not published_org_course/platform_course/
+        # etc. from BaseAPITestCase, none of which have a path_order.
+        self.assertEqual(returned_ids, [self.foundation_1.id, self.foundation_2.id])
+
+        widget_states = {
+            course['id']: course['state']
+            for tier in path_response.data['tiers']
+            for course in tier['courses']
+        }
+        catalog_states = {course['id']: course['path_state'] for course in catalog_response.data}
+        self.assertEqual(catalog_states, widget_states)
+        self.assertEqual(catalog_states[self.foundation_1.id], 'completed')
+        self.assertEqual(catalog_states[self.foundation_2.id], 'current')
+
+    def test_admin_catalog_is_unaffected_by_learner_path_scoping(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/courses/')
+        returned_ids = {course['id'] for course in response.data}
+        # Sees the org's ordinary courses, not narrowed to path courses only.
+        self.assertIn(self.published_org_course.id, returned_ids)
+        self.assertTrue(all(course['path_state'] is None for course in response.data))
+
+
 class EnrollmentRetakeTests(BaseAPITestCase):
     """"Retake Course" (CourseCompletionModal.tsx) resets an enrollment to a
     fresh state — progress, quiz attempts (so max_attempts starts over), and
