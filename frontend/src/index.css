@@ -77,6 +77,28 @@ body {
   animation: mascot-idle-bob 2.6s ease-in-out infinite;
 }
 
+/* Learning Path per-course completion flourish (LearningPathSection.tsx) —
+   a brief, one-shot "fill in" on the node that just transitioned from
+   current to completed. Restrained (a quick scale settle, no color flash,
+   no bounce) to match the mascot animations' subtlety above; never replayed
+   on a plain revisit/refresh — see justCompletedIds. */
+@keyframes path-node-complete {
+  0% { transform: scale(0.85); }
+  60% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+.path-node-complete {
+  animation: path-node-complete 480ms ease-out;
+}
+
+@keyframes path-node-checkmark {
+  0% { opacity: 0; transform: scale(0.5); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.path-node-checkmark {
+  animation: path-node-checkmark 320ms ease-out 180ms both;
+}
+
 /* "Download as PDF" on a Content page — print (or "Save as PDF") only the
    element marked .print-target, hiding the rest of the app chrome. */
 @media print {

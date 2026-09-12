@@ -5,6 +5,7 @@ Run with:
     python manage.py test test_api_flows
 """
 import io
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -45,13 +46,16 @@ from courses.models import (
     Slide,
     SlideProgress,
 )
+from courses.learning_path import TIER_COMPLETE_BADGE_KEYS, check_learning_path_milestones
 from courses.video_streaming import build_video_stream_token
 from gamification.models import Badge, LeaderboardEntry, UserBadge
 from gamification.services import (
     COURSE_COMPLETION_POINTS,
     LEVEL_ASSESSMENT_PASS_POINTS,
+    STREAK_BADGE_THRESHOLDS,
     award_badges_for_level_assessment_attempt,
     recalculate_leaderboard_entry,
+    record_learning_activity,
 )
 from levelassessments.models import (
     AssessmentLevel,
@@ -583,6 +587,165 @@ class LearningPathApiTests(BaseAPITestCase):
 
         path_course_ids = {course['id'] for tier in response.data['tiers'] for course in tier['courses']}
         self.assertNotIn(self.published_org_course.id, path_course_ids)
+
+
+class LearningPathMilestoneTests(BaseAPITestCase):
+    """Tier-completion badges (courses.learning_path.check_learning_path_milestones)
+    and the 'milestones' payload slide-progress attaches to its response once
+    a path course completes — backs the mascot congratulation + certificate
+    reveal moments."""
+
+    def setUp(self):
+        super().setUp()
+        self.foundation_1 = self._make_single_slide_course('Foundation 1', 'ms-foundation-1', path_order=1)
+        self.foundation_2 = self._make_single_slide_course('Foundation 2', 'ms-foundation-2', path_order=2)
+        self.officer_course = self._make_single_slide_course(
+            'Officer Tier Course', 'ms-officer-course', path_order=3,
+            minimum_assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+
+    def _make_single_slide_course(self, title, slug, path_order, minimum_assessment_level=None):
+        course = Course.objects.create(
+            title=title, slug=slug, organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+            path_order=path_order, minimum_assessment_level=minimum_assessment_level,
+        )
+        module = Module.objects.create(course=course, title='M1', order=1)
+        lesson = Lesson.objects.create(module=module, title='L1', order=1)
+        Slide.objects.create(lesson=lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+        return course
+
+    def _complete_course(self, course):
+        enrollment, _ = Enrollment.objects.get_or_create(user=self.learner, course=course)
+        slide = Slide.objects.get(lesson__module__course=course)
+        return self.client.post(
+            f'/api/enrollments/{enrollment.id}/slide-progress/', {'slide': slide.id, 'completed': True}
+        )
+
+    def earned_keys(self):
+        return set(UserBadge.objects.filter(user=self.learner).values_list('badge__key', flat=True))
+
+    def test_completing_a_mid_path_course_awards_no_tier_badge(self):
+        self.auth_as(self.learner)
+        response = self._complete_course(self.foundation_1)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['milestones']['newly_completed_tiers'], [])
+        self.assertFalse(response.data['milestones']['path_fully_completed'])
+        self.assertEqual(self.earned_keys() & set(TIER_COMPLETE_BADGE_KEYS.values()), set())
+
+    def test_completing_the_whole_tier_awards_its_badge_and_reports_the_milestone(self):
+        self.auth_as(self.learner)
+        self._complete_course(self.foundation_1)
+        response = self._complete_course(self.foundation_2)
+
+        self.assertIn('tier_complete_foundation', self.earned_keys())
+        self.assertIn('milestones', response.data)
+        newly_completed = response.data['milestones']['newly_completed_tiers']
+        self.assertEqual(len(newly_completed), 1)
+        self.assertEqual(newly_completed[0]['tier_key'], 'FOUNDATION')
+        self.assertEqual(newly_completed[0]['course_count'], 2)
+        self.assertFalse(response.data['milestones']['path_fully_completed'])
+
+    def test_completing_the_final_tier_reports_path_fully_completed(self):
+        self.auth_as(self.learner)
+        self._complete_course(self.foundation_1)
+        self._complete_course(self.foundation_2)
+
+        officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=officer_level, passed=True, submitted_at=timezone.now(),
+        )
+
+        response = self._complete_course(self.officer_course)
+
+        newly_completed = response.data['milestones']['newly_completed_tiers']
+        self.assertEqual([tier['tier_key'] for tier in newly_completed], [User.AssessmentLevel.OFFICER])
+        self.assertTrue(response.data['milestones']['path_fully_completed'])
+        self.assertIn('tier_complete_officer', self.earned_keys())
+
+    def test_tier_badge_not_re_awarded_on_repeat_checks(self):
+        self.auth_as(self.learner)
+        self._complete_course(self.foundation_1)
+        self._complete_course(self.foundation_2)
+        self.assertEqual(
+            UserBadge.objects.filter(user=self.learner, badge__key='tier_complete_foundation').count(), 1
+        )
+
+        check_learning_path_milestones(self.learner)
+
+        self.assertEqual(
+            UserBadge.objects.filter(user=self.learner, badge__key='tier_complete_foundation').count(), 1
+        )
+
+
+class LearningStreakTests(TestCase):
+    """gamification.services.record_learning_activity — streak increment/reset
+    and the 3-Day Streak badge, driven directly rather than through the API
+    so each day's date is under test control."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Acme Bank', slug='acme-bank-streaks')
+        self.user = User.objects.create_user(
+            email='streaker@example.com', password='pw', role=User.Role.LEARNER, organization=self.org,
+        )
+
+    def _record_on(self, day):
+        with patch('gamification.services.timezone.localdate', return_value=day):
+            record_learning_activity(self.user)
+        self.user.refresh_from_db()
+
+    def earned_keys(self):
+        return set(UserBadge.objects.filter(user=self.user).values_list('badge__key', flat=True))
+
+    def test_first_ever_activity_sets_streak_to_one(self):
+        self._record_on(date(2026, 1, 1))
+        self.assertEqual(self.user.current_streak_days, 1)
+        self.assertEqual(self.user.last_active_date, date(2026, 1, 1))
+
+    def test_second_call_same_day_is_a_no_op(self):
+        self._record_on(date(2026, 1, 1))
+        self._record_on(date(2026, 1, 1))
+        self.assertEqual(self.user.current_streak_days, 1)
+
+    def test_consecutive_day_increments_streak(self):
+        self._record_on(date(2026, 1, 1))
+        self._record_on(date(2026, 1, 2))
+        self.assertEqual(self.user.current_streak_days, 2)
+
+    def test_skipped_day_resets_streak_to_one(self):
+        self._record_on(date(2026, 1, 1))
+        self._record_on(date(2026, 1, 2))
+        self._record_on(date(2026, 1, 4))  # skipped Jan 3
+        self.assertEqual(self.user.current_streak_days, 1)
+
+    def test_streak_badge_awarded_the_first_day_it_reaches_threshold(self):
+        streak_threshold = dict(STREAK_BADGE_THRESHOLDS)
+        badge_key = next(key for threshold, key in STREAK_BADGE_THRESHOLDS if threshold == 3)
+        self.assertIn(3, streak_threshold)  # sanity: the 3-day badge this test drives still exists
+
+        start = date(2026, 1, 1)
+        self._record_on(start)
+        self.assertNotIn(badge_key, self.earned_keys())
+        self._record_on(start + timedelta(days=1))
+        self.assertNotIn(badge_key, self.earned_keys())
+        self._record_on(start + timedelta(days=2))
+
+        self.assertIn(badge_key, self.earned_keys())
+        self.assertEqual(self.user.current_streak_days, 3)
+
+    def test_streak_badge_not_re_awarded_after_reset(self):
+        badge_key = next(key for threshold, key in STREAK_BADGE_THRESHOLDS if threshold == 3)
+        start = date(2026, 1, 1)
+        for offset in range(3):
+            self._record_on(start + timedelta(days=offset))
+        self.assertEqual(UserBadge.objects.filter(user=self.user, badge__key=badge_key).count(), 1)
+
+        self._record_on(start + timedelta(days=10))  # streak resets to 1
+        self.assertEqual(self.user.current_streak_days, 1)
+        self.assertEqual(UserBadge.objects.filter(user=self.user, badge__key=badge_key).count(), 1)
 
 
 class EnrollmentRetakeTests(BaseAPITestCase):

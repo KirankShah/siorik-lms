@@ -1,6 +1,41 @@
+import { useEffect, useState } from 'react'
 import { CertificateButton } from './CertificateButton'
+import { MilestoneMascot } from './MilestoneMascot'
 import { Button } from './ui/Button'
 import { Modal } from './ui/Modal'
+import type { CompletedTierMilestone } from '../types/learningPath'
+
+// Brief pause + fade/slide before the certificate button appears, only for
+// the actual finale of a learner's whole Learning Path — see isPathFinale.
+// Presentation polish on the existing certificate flow, not a new
+// certificate type: CertificateButton itself is untouched.
+const CERTIFICATE_REVEAL_DELAY_MS = 1100
+
+function CertificateReveal({ courseId, onDownloaded }: { courseId: number; onDownloaded: () => void }) {
+  const [revealed, setRevealed] = useState(false)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRevealed(true), CERTIFICATE_REVEAL_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  return (
+    <div className="relative min-h-[42px]">
+      <p
+        className={`absolute inset-0 flex items-center text-sm text-neutral-500 transition-opacity duration-500 ${
+          revealed ? 'pointer-events-none opacity-0' : 'opacity-100'
+        }`}
+      >
+        Preparing your certificate…
+      </p>
+      <div
+        className={`transition-all duration-500 ease-out ${revealed ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}
+      >
+        <CertificateButton courseId={courseId} onDownloaded={onDownloaded} />
+      </div>
+    </div>
+  )
+}
 
 interface CourseCompletionModalProps {
   courseName: string
@@ -14,6 +49,14 @@ interface CourseCompletionModalProps {
   // True while the retake reset request is in flight — disables the button
   // and swaps its label so a slow request can't be double-submitted.
   isRetaking?: boolean
+  // Tier(s) this specific completion just finished (see backend
+  // courses.learning_path.check_learning_path_milestones) — when non-empty,
+  // Mr. Siorik's milestone congratulation replaces the plain "Congratulations"
+  // line. Almost always at most one entry.
+  newlyCompletedTiers?: CompletedTierMilestone[]
+  // True once this completion finished the learner's ENTIRE assigned
+  // Learning Path — triggers the certificate reveal moment below.
+  isPathFinale?: boolean
   onRetake: () => void
   // Dismisses the modal only — the learner stays on the course (used for the
   // "Back to Course" button, and for the modal's own X/backdrop close in
@@ -35,17 +78,31 @@ export function CourseCompletionModal({
   courseId,
   isEligible,
   isRetaking = false,
+  newlyCompletedTiers,
+  isPathFinale = false,
   onRetake,
   onBackToCourse,
   onMaybeLater,
   onCertificateDownloaded,
 }: CourseCompletionModalProps) {
   if (isEligible) {
+    const tierJustCompleted = newlyCompletedTiers?.[0]
+
     return (
       <Modal title="Course Complete" onClose={onBackToCourse}>
-        <p className="text-sm text-neutral-700">Congratulations — you've completed {courseName}!</p>
+        {tierJustCompleted ? (
+          <MilestoneMascot
+            message={`${tierJustCompleted.tier_label} complete — nice work, ${tierJustCompleted.course_count} down!`}
+          />
+        ) : (
+          <p className="text-sm text-neutral-700">Congratulations — you've completed {courseName}!</p>
+        )}
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <CertificateButton courseId={courseId} onDownloaded={onCertificateDownloaded} />
+          {isPathFinale ? (
+            <CertificateReveal courseId={courseId} onDownloaded={onCertificateDownloaded} />
+          ) : (
+            <CertificateButton courseId={courseId} onDownloaded={onCertificateDownloaded} />
+          )}
           <Button variant="outline" onClick={onBackToCourse}>
             Back to Course
           </Button>
