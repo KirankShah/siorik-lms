@@ -11,7 +11,7 @@ import type { CompletedTierMilestone } from '../types/learningPath'
 // certificate type: CertificateButton itself is untouched.
 const CERTIFICATE_REVEAL_DELAY_MS = 1100
 
-function CertificateReveal({ courseId, onDownloaded }: { courseId: number; onDownloaded: () => void }) {
+function CertificateReveal({ onDownloaded }: { onDownloaded: () => void }) {
   const [revealed, setRevealed] = useState(false)
 
   useEffect(() => {
@@ -31,7 +31,7 @@ function CertificateReveal({ courseId, onDownloaded }: { courseId: number; onDow
       <div
         className={`transition-all duration-500 ease-out ${revealed ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}
       >
-        <CertificateButton courseId={courseId} onDownloaded={onDownloaded} />
+        <CertificateButton onDownloaded={onDownloaded} />
       </div>
     </div>
   )
@@ -39,12 +39,12 @@ function CertificateReveal({ courseId, onDownloaded }: { courseId: number; onDow
 
 interface CourseCompletionModalProps {
   courseName: string
-  courseId: number
   // Whether the learner's course-wide average quiz score meets the course's
   // certificate_pass_threshold (Phase 34) — computed by the caller from
   // Enrollment.certificate_ineligible_reason (null = eligible), reusing the
   // existing backend-verified decision rather than re-deriving the 70% math
-  // here.
+  // here. Governs only the retake-vs-congratulate branch below — no longer
+  // implies a certificate is available (see isPathFinale for that).
   isEligible: boolean
   // True while the retake reset request is in flight — disables the button
   // and swaps its label so a slow request can't be double-submitted.
@@ -55,7 +55,9 @@ interface CourseCompletionModalProps {
   // line. Almost always at most one entry.
   newlyCompletedTiers?: CompletedTierMilestone[]
   // True once this completion finished the learner's ENTIRE assigned
-  // Learning Path — triggers the certificate reveal moment below.
+  // Learning Path — the only time a certificate exists to show. There's
+  // exactly one certificate per learner (not one per course), so it never
+  // appears for an ordinary, non-finale course completion.
   isPathFinale?: boolean
   onRetake: () => void
   // Dismisses the modal only — the learner stays on the course (used for the
@@ -67,7 +69,7 @@ interface CourseCompletionModalProps {
   // list), since there's nothing left to do on this course's player right
   // now (it isn't complete, and they've declined to retake it).
   onMaybeLater: () => void
-  // Eligible branch only: fired after the certificate has actually
+  // isPathFinale branch only: fired after the certificate has actually
   // downloaded — see CertificateButton. Navigates to the course list,
   // since this is the one action in this modal that represents "done".
   onCertificateDownloaded: () => void
@@ -75,7 +77,6 @@ interface CourseCompletionModalProps {
 
 export function CourseCompletionModal({
   courseName,
-  courseId,
   isEligible,
   isRetaking = false,
   newlyCompletedTiers,
@@ -98,11 +99,7 @@ export function CourseCompletionModal({
           <p className="text-sm text-neutral-700">Congratulations — you've completed {courseName}!</p>
         )}
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          {isPathFinale ? (
-            <CertificateReveal courseId={courseId} onDownloaded={onCertificateDownloaded} />
-          ) : (
-            <CertificateButton courseId={courseId} onDownloaded={onCertificateDownloaded} />
-          )}
+          {isPathFinale && <CertificateReveal onDownloaded={onCertificateDownloaded} />}
           <Button variant="outline" onClick={onBackToCourse}>
             Back to Course
           </Button>

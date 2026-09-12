@@ -54,7 +54,7 @@ def _tier_label(minimum_assessment_level):
     return _ASSESSMENT_LEVEL_LABELS.get(minimum_assessment_level, minimum_assessment_level)
 
 
-def _has_passed_tier_assessment(user, tier_code):
+def has_passed_tier_assessment(user, tier_code):
     """Whether `user` has ever passed the LevelAssessmentAttempt for the
     AssessmentLevel named `tier_code` within their own organization — the
     same (user, org, name) lookup MyAssessmentLevelView/start() use via
@@ -145,7 +145,7 @@ def build_learning_path(user):
         if tier_code is None:
             return True
         if tier_code not in tier_gate_satisfied_cache:
-            tier_gate_satisfied_cache[tier_code] = _has_passed_tier_assessment(user, tier_code)
+            tier_gate_satisfied_cache[tier_code] = has_passed_tier_assessment(user, tier_code)
         return tier_gate_satisfied_cache[tier_code]
 
     course_states = {}

@@ -1264,6 +1264,12 @@ class CertificateFlowTests(BaseAPITestCase):
         retrieve = self.client.get(f'/api/certificates/{self.certificate.id}/')
         self.assertEqual(retrieve.status_code, 200)
         self.assertEqual(retrieve.data['certificate_number'], self.certificate.certificate_number)
+        # Learner-facing display title — not course_title, since this
+        # certificate represents completing a whole Learning Path, not one
+        # course. Fixed and identical for every learner regardless of tier.
+        self.assertEqual(
+            retrieve.data['title'], 'Certificate of Competency in AML/CFT and Financial Crime Compliance'
+        )
 
     def test_other_learner_cannot_see_certificate(self):
         self.auth_as(self.other_org_learner)
@@ -1291,57 +1297,95 @@ class CertificateFlowTests(BaseAPITestCase):
 
 
 class CertificateIssueEndpointTests(BaseAPITestCase):
-    def test_issue_endpoint_creates_certificate_once_eligible(self):
-        Enrollment.objects.create(
-            user=self.learner, course=self.published_org_course,
-            status=Enrollment.Status.COMPLETED,
-        )
-        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+    """
+    POST /api/certificates/issue/ — takes no arguments and grants the
+    learner's single Learning Path Completion Certificate once (a) every
+    course in their path is completed and meets its own quiz-average
+    threshold, and (b) their assigned Level Assessment (if any) has been
+    passed. Per-course certificates no longer exist.
+    """
 
+    def setUp(self):
+        super().setUp()
+        self.foundation_1 = self._make_single_slide_course('Foundation 1', 'cert-foundation-1', path_order=1)
+        self.foundation_2 = self._make_single_slide_course('Foundation 2', 'cert-foundation-2', path_order=2)
+
+    def _make_single_slide_course(self, title, slug, path_order, minimum_assessment_level=None):
+        course = Course.objects.create(
+            title=title, slug=slug, organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+            path_order=path_order, minimum_assessment_level=minimum_assessment_level,
+        )
+        module = Module.objects.create(course=course, title='M1', order=1)
+        lesson = Lesson.objects.create(module=module, title='L1', order=1)
+        Slide.objects.create(lesson=lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+        return course
+
+    def _complete_via_api(self, course):
+        enrollment, _ = Enrollment.objects.get_or_create(user=self.learner, course=course)
+        slide = Slide.objects.get(lesson__module__course=course)
+        return self.client.post(
+            f'/api/enrollments/{enrollment.id}/slide-progress/', {'slide': slide.id, 'completed': True}
+        )
+
+    def test_issue_endpoint_rejects_when_no_path_is_assigned(self):
+        self.auth_as(self.other_org_learner)  # no path-ordered courses at all in their org
+        response = self.client.post('/api/certificates/issue/')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('No Learning Path', response.data['detail'])
+
+    def test_issue_endpoint_rejects_before_the_whole_path_is_complete(self):
         self.auth_as(self.learner)
-        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
+        self._complete_via_api(self.foundation_1)  # only one of two path courses done
+
+        response = self.client.post('/api/certificates/issue/')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('has not been completed yet', response.data['detail'])
+
+    def test_issue_endpoint_grants_certificate_once_whole_path_is_complete(self):
+        self.auth_as(self.learner)
+        self._complete_via_api(self.foundation_1)
+        self._complete_via_api(self.foundation_2)
+
+        response = self.client.post('/api/certificates/issue/')
         self.assertEqual(response.status_code, 200)
         self.assertIn('certificate_number', response.data)
         self.assertTrue(response.data['pdf_file'])
 
-    def test_issue_endpoint_rejects_when_quiz_not_attempted(self):
-        Enrollment.objects.create(
-            user=self.learner, course=self.published_org_course,
-            status=Enrollment.Status.COMPLETED,
-        )
-        self.auth_as(self.learner)
-        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('has not been attempted yet', response.data['detail'])
-
     def test_issue_endpoint_is_idempotent(self):
-        Enrollment.objects.create(
-            user=self.learner, course=self.published_org_course,
-            status=Enrollment.Status.COMPLETED,
+        self.auth_as(self.learner)
+        self._complete_via_api(self.foundation_1)
+        self._complete_via_api(self.foundation_2)
+
+        first = self.client.post('/api/certificates/issue/')
+        second = self.client.post('/api/certificates/issue/')
+        self.assertEqual(first.data['id'], second.data['id'])
+        self.assertEqual(Certificate.objects.filter(user=self.learner).count(), 1)
+
+    def test_issue_endpoint_requires_passing_the_assigned_level_assessment(self):
+        officer_course = self._make_single_slide_course(
+            'Officer Course', 'cert-officer-course', path_order=3,
+            minimum_assessment_level=User.AssessmentLevel.OFFICER,
         )
-        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
 
         self.auth_as(self.learner)
-        first = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        second = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        self.assertEqual(first.data['id'], second.data['id'])
+        self._complete_via_api(self.foundation_1)
+        self._complete_via_api(self.foundation_2)
+        # officer_course is still locked (tier assessment not yet passed),
+        # so the whole path can't be complete yet either way.
+        response = self.client.post('/api/certificates/issue/')
+        self.assertEqual(response.status_code, 400)
 
-    def test_issue_endpoint_rejects_course_outside_requesters_organization(self):
-        # Directly construct an eligible-looking Enrollment/QuizAttempt for a
-        # learner in a different org than the course, bypassing the normal
-        # enroll-time visible_courses_for_user gate, to prove the issue
-        # endpoint itself also org-scopes the course lookup as defense in depth.
-        Enrollment.objects.create(
-            user=self.other_org_learner, course=self.published_org_course,
-            status=Enrollment.Status.COMPLETED,
+        officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=officer_level, passed=True, submitted_at=timezone.now(),
         )
-        QuizAttempt.objects.create(
-            user=self.other_org_learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100
-        )
+        self._complete_via_api(officer_course)
 
-        self.auth_as(self.other_org_learner)
-        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        self.assertEqual(response.status_code, 404)
+        response = self.client.post('/api/certificates/issue/')
+        self.assertEqual(response.status_code, 200)
 
 
 class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
@@ -1371,13 +1415,12 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=100)
         # Average = (40 + 100) / 2 = 70, meets the 70% threshold — even though
         # self.quiz was individually failed against its own pass_percentage=50.
+        # (Endpoint-level issuance is exercised in CertificateIssueEndpointTests
+        # now that a single certificate requires the learner's WHOLE Learning
+        # Path, not just this one course — orthogonal to the average-vs-
+        # threshold math this class is about.)
 
         self.assertIsNone(certificate_ineligibility_reason(self.learner, self.published_org_course))
-
-        self.auth_as(self.learner)
-        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(Certificate.objects.filter(user=self.learner, course=self.published_org_course).exists())
 
     def test_certificate_denied_when_average_below_threshold_despite_one_quiz_individually_passed(self):
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
@@ -1388,11 +1431,6 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
         reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
         self.assertIsNotNone(reason)
         self.assertIn('60.0%', reason)
-
-        self.auth_as(self.learner)
-        response = self.client.post('/api/certificates/issue/', {'course': self.published_org_course.id})
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(Certificate.objects.filter(user=self.learner, course=self.published_org_course).exists())
 
     def test_unattempted_quiz_blocks_issuance_even_with_a_high_score_elsewhere(self):
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)

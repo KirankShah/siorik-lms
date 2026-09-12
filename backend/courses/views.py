@@ -25,7 +25,7 @@ from assessments.models import Quiz, QuizAttempt
 from assignments.models import AssignmentSubmission
 from audit.models import AuditLog
 from audit.services import log_action
-from certificates.services import certificate_ineligibility_reason, try_auto_issue_certificate
+from certificates.services import certificate_ineligibility_reason, try_issue_learning_path_certificate
 from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
 from gamification.services import record_learning_activity, update_gamification_for_user
 from scenarios.models import ScenarioAttempt
@@ -810,9 +810,9 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
-            try_auto_issue_certificate(enrollment.user, enrollment.course)
             if enrollment.course.path_order is not None:
                 milestones = check_learning_path_milestones(enrollment.user)
+            try_issue_learning_path_certificate(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         data = EnrollmentSerializer(enrollment).data
         if milestones is not None:
@@ -868,9 +868,9 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
-            try_auto_issue_certificate(enrollment.user, enrollment.course)
             if enrollment.course.path_order is not None:
                 milestones = check_learning_path_milestones(enrollment.user)
+            try_issue_learning_path_certificate(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
         data = EnrollmentSerializer(enrollment).data
         if milestones is not None:

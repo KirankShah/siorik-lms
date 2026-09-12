@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { downloadCertificate, issueCertificate } from '../lib/certificatesApi'
 
 interface CertificateButtonProps {
-  courseId: number
   // Fired only after a successful download (never on error, so a failed
   // attempt leaves the learner on the button to retry rather than getting
   // swept away by the caller's post-download navigation).
   onDownloaded?: () => void
 }
 
-export function CertificateButton({ courseId, onDownloaded }: CertificateButtonProps) {
+// Only ever rendered once the caller has confirmed this is the learner's
+// Learning Path finale (see CourseCompletionModal) — there's exactly one
+// certificate per learner, so no course to identify it by.
+export function CertificateButton({ onDownloaded }: CertificateButtonProps) {
   const [certificateId, setCertificateId] = useState<number | null>(null)
   const [isPreparing, setIsPreparing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -19,7 +21,7 @@ export function CertificateButton({ courseId, onDownloaded }: CertificateButtonP
     setError(null)
     try {
       if (!certificateId) {
-        const certificate = await issueCertificate(courseId)
+        const certificate = await issueCertificate()
         setCertificateId(certificate.id)
         await downloadCertificate(certificate.id, `${certificate.certificate_number}.pdf`)
       } else {

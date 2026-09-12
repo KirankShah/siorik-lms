@@ -44,17 +44,23 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // Admins land on the management table; everyone else gets the catalog —
     // both already exist, this just picks the useful one per role.
     { to: admin ? '/admin/courses' : '/courses', label: 'Courses', icon: BookOpen },
-    { to: '/assessments', label: 'Assessments', icon: ClipboardList },
-    // Distinct from "Assessments" above (course-embedded quizzes, Phase
-    // 4/17) — this is the standalone role-based knowledge check
-    // (levelassessments app). A separate top-level entry, not folded into
-    // "Assessments", so the two never get confused for one another — see
+    // Course-embedded quizzes (Phase 4/17) are an admin authoring/management
+    // view only — the unfiltered list is deliberately editable-only
+    // server-side (assessments.views.QuizViewSet.get_queryset), so a
+    // learner can never see anything here regardless of org content.
+    // Admin-only in the nav so it's never confused with Level Assessment.
+    ...(admin ? [{ to: '/assessments', label: 'Assessments', icon: ClipboardList }] : []),
+    // Distinct from "Assessments" above — this is the standalone role-based
+    // knowledge check (levelassessments app). A separate top-level entry
+    // so the two never get confused for one another — see
     // LevelAssessmentPage.tsx.
     { to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap },
     { to: '/certificates', label: 'Certificates', icon: Award },
     { to: '/achievements', label: 'Achievements', icon: Trophy },
-    // Admins get the cross-learner report; everyone else gets their own progress.
-    { to: admin ? '/admin/reports' : '/reports', label: admin ? 'Reports' : 'My Reports', icon: BarChart3 },
+    // Admins get the cross-learner report; a learner's own progress is
+    // already visible throughout their dashboard, so there's no separate
+    // reports page for them.
+    ...(admin ? [{ to: '/admin/reports', label: 'Reports', icon: BarChart3 }] : []),
   ]
 
   return (
