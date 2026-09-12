@@ -197,6 +197,27 @@ class AuthFlowTests(BaseAPITestCase):
         response = self.client.post('/api/auth/login/', {'email': 'learner@example.com', 'password': 'wrong'})
         self.assertEqual(response.status_code, 401)
 
+    def test_login_updates_last_login(self):
+        # rest_framework_simplejwt's TokenObtainPairSerializer never sends
+        # Django's user_logged_in signal (it isn't django.contrib.auth.login()),
+        # so last_login only updates here because ThrottledTokenObtainPairView
+        # calls update_last_login explicitly.
+        self.assertIsNone(self.learner.last_login)
+        before = timezone.now()
+
+        response = self.client.post('/api/auth/login/', {'email': 'learner@example.com', 'password': 'pass12345'})
+
+        self.assertEqual(response.status_code, 200)
+        self.learner.refresh_from_db()
+        self.assertIsNotNone(self.learner.last_login)
+        self.assertGreaterEqual(self.learner.last_login, before)
+
+    def test_failed_login_does_not_update_last_login(self):
+        self.client.post('/api/auth/login/', {'email': 'learner@example.com', 'password': 'wrong'})
+
+        self.learner.refresh_from_db()
+        self.assertIsNone(self.learner.last_login)
+
     def test_refresh_returns_new_access_token(self):
         login = self.client.post('/api/auth/login/', {'email': 'learner@example.com', 'password': 'pass12345'})
         response = self.client.post('/api/auth/refresh/', {'refresh': login.data['refresh']})

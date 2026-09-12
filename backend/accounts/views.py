@@ -1,6 +1,7 @@
 import csv
 import io
 
+from django.contrib.auth.models import update_last_login
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -35,7 +36,18 @@ from .staff_import import resolve_assessment_level as _resolve_staff_level
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
-    """Login is rate-limited and audit-logged on success — brute-force defense."""
+    """
+    Login is rate-limited and audit-logged on success — brute-force defense.
+
+    TokenObtainPairSerializer.validate() only checks the password and mints
+    tokens — unlike Django's own django.contrib.auth.login(), it never sends
+    the user_logged_in signal, so Django's normal auto-update of
+    User.last_login (via django.contrib.auth.models.update_last_login,
+    connected to that signal by AuthConfig.ready()) never fires for a JWT
+    login. Called explicitly here so last_login behaves the way it would
+    for session-based auth, consistent with the LOGIN entry already written
+    to the audit log on the same request.
+    """
 
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'login'
@@ -48,6 +60,7 @@ class ThrottledTokenObtainPairView(TokenObtainPairView):
         except TokenError as e:
             raise InvalidToken(e.args[0])
 
+        update_last_login(None, serializer.user)
         log_action(serializer.user, AuditLog.Action.LOGIN, serializer.user)
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
