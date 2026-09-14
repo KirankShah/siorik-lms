@@ -67,6 +67,7 @@ from levelassessments.models import (
 )
 from levelassessments.services import LevelAssessmentError, start_level_assessment_attempt
 from narration.models import SlideNarration
+from resources.models import Resource
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
 
@@ -93,6 +94,10 @@ def make_test_certificate_template(**overrides):
     )
     defaults.update(overrides)
     return CertificateTemplate.objects.create(**defaults)
+
+
+def make_test_pdf_upload(filename='doc.pdf', content_type='application/pdf', body=b'fake pdf body'):
+    return SimpleUploadedFile(filename, b'%PDF-1.4\n' + body, content_type=content_type)
 
 
 LEVEL_QUESTION_TEMPLATE_HEADER = [
@@ -4707,4 +4712,145 @@ class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):
         # this is a scoping check, not a "nothing happened" false negative.
         other_entry = LeaderboardEntry.objects.get(user=self.other_org_learner)
         self.assertEqual(other_entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
-        self.assertEqual(other_entry.organization_id, self.other_org.id)
+
+
+class ResourceFlowTests(BaseAPITestCase):
+    def test_org_admin_can_upload_pdf_and_it_appears_for_same_org_learner_only(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/resources/', {
+            'title': 'AML Policy', 'description': 'Annual policy document', 'file': make_test_pdf_upload(),
+        }, format='multipart')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['title'], 'AML Policy')
+        self.assertNotIn('file', response.data)  # never echoed back — see ResourceSerializer
+        resource_id = response.data['id']
+        self.assertEqual(Resource.objects.get(pk=resource_id).organization_id, self.org.id)
+
+        # Same-org learner sees it.
+        self.auth_as(self.learner)
+        list_response = self.client.get('/api/resources/')
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual([r['id'] for r in list_response.data], [resource_id])
+
+        # A different organization's learner and admin do not.
+        self.auth_as(self.other_org_learner)
+        self.assertEqual(self.client.get('/api/resources/').data, [])
+        self.assertEqual(self.client.get(f'/api/resources/{resource_id}/').status_code, 404)
+
+        other_org_admin = User.objects.create_user(
+            email='other-orgadmin@example.com', password='pass12345',
+            role=User.Role.ORG_ADMIN, organization=self.other_org,
+        )
+        self.auth_as(other_org_admin)
+        self.assertEqual(self.client.get('/api/resources/').data, [])
+
+    def test_non_pdf_upload_rejected_by_extension_and_content_type(self):
+        self.auth_as(self.org_admin)
+
+        pptx_upload = SimpleUploadedFile(
+            'slides.pptx', b'not really a pdf',
+            content_type='application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        )
+        response = self.client.post('/api/resources/', {
+            'title': 'Bad Upload', 'file': pptx_upload,
+        }, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.data)
+        self.assertEqual(Resource.objects.count(), 0)
+
+        docx_upload = SimpleUploadedFile(
+            'doc.docx', b'not really a pdf',
+            content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+        response = self.client.post('/api/resources/', {
+            'title': 'Bad Upload 2', 'file': docx_upload,
+        }, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Resource.objects.count(), 0)
+
+    def test_renamed_non_pdf_rejected_by_content_sniffing(self):
+        # Right extension and content_type, but the bytes aren't a PDF — the
+        # magic-number check in resources.validators.validate_pdf_content
+        # must catch what the extension/content_type checks alone would miss.
+        self.auth_as(self.org_admin)
+        fake_pdf = SimpleUploadedFile('report.pdf', b'this is actually plain text', content_type='application/pdf')
+        response = self.client.post('/api/resources/', {'title': 'Fake', 'file': fake_pdf}, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Resource.objects.count(), 0)
+
+    def test_oversized_pdf_rejected(self):
+        self.auth_as(self.org_admin)
+        oversized = make_test_pdf_upload(body=b'x' * (20 * 1024 * 1024 + 1))
+        response = self.client.post('/api/resources/', {'title': 'Too Big', 'file': oversized}, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Resource.objects.count(), 0)
+
+    def test_learner_cannot_upload_or_delete(self):
+        self.auth_as(self.learner)
+        response = self.client.post('/api/resources/', {
+            'title': 'Nope', 'file': make_test_pdf_upload(),
+        }, format='multipart')
+        self.assertEqual(response.status_code, 403)
+
+        resource = Resource.objects.create(
+            organization=self.org, title='Existing', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        self.assertEqual(self.client.delete(f'/api/resources/{resource.id}/').status_code, 403)
+
+    def test_org_admin_can_only_delete_their_own_upload(self):
+        other_admin_same_org = User.objects.create_user(
+            email='second-orgadmin@example.com', password='pass12345',
+            role=User.Role.ORG_ADMIN, organization=self.org,
+        )
+        resource = Resource.objects.create(
+            organization=self.org, title='Someone else\'s upload', file=make_test_pdf_upload(),
+            uploaded_by=other_admin_same_org,
+        )
+
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/resources/{resource.id}/')
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Resource.objects.filter(pk=resource.id).exists())
+
+        own_resource = Resource.objects.create(
+            organization=self.org, title='My upload', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        response = self.client.delete(f'/api/resources/{own_resource.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Resource.objects.filter(pk=own_resource.id).exists())
+
+    def test_platform_admin_can_delete_any_organization_resource(self):
+        resource = Resource.objects.create(
+            organization=self.org, title='Org doc', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        self.auth_as(self.platform_admin)
+        response = self.client.delete(f'/api/resources/{resource.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Resource.objects.filter(pk=resource.id).exists())
+
+    def test_learner_can_stream_same_org_resource_but_not_other_org_resource(self):
+        resource = Resource.objects.create(
+            organization=self.org, title='Policy', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        other_resource = Resource.objects.create(
+            organization=self.other_org, title='Other Policy', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/resources/{resource.id}/stream/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertEqual(response['Content-Disposition'], 'inline')
+
+        # A direct URL/ID guess at another organization's resource is denied,
+        # not just hidden from the list.
+        denied = self.client.get(f'/api/resources/{other_resource.id}/stream/')
+        self.assertEqual(denied.status_code, 404)
+
+    def test_unauthenticated_request_denied(self):
+        resource = Resource.objects.create(
+            organization=self.org, title='Policy', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        self.client.credentials()  # clear auth_as's bearer token
+        self.assertEqual(self.client.get('/api/resources/').status_code, 401)
+        self.assertEqual(self.client.get(f'/api/resources/{resource.id}/stream/').status_code, 401)

@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'audit',
     'dialogue',
     'narration',
+    'resources',
 ]
 
 MIDDLEWARE = [

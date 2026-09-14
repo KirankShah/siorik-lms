@@ -7,6 +7,8 @@ import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LevelAssessmentPage } from './pages/LevelAssessmentPage'
 import { LoginPage } from './pages/LoginPage'
+import { ResourcesPage } from './pages/ResourcesPage'
+import { ResourceViewerPage } from './pages/ResourceViewerPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
 import { AdminSectionLayout } from './pages/admin/AdminSectionLayout'
 import { AnalyticsPage } from './pages/admin/AnalyticsPage'
@@ -39,6 +41,11 @@ function App() {
       <Route path="/login" element={<LoginPage />} />
 
       <Route element={<ProtectedRoute />}>
+        {/* Outside AppLayout: a distraction-free full-bleed reader with no
+            sidebar, opened in a new tab from ResourcesPage's "View" button —
+            still requires auth via ProtectedRoute above. */}
+        <Route path="/resources/:id/view" element={<ResourceViewerPage />} />
+
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/courses" element={<CoursesPage />} />
@@ -47,6 +54,7 @@ function App() {
           <Route path="/level-assessment" element={<LevelAssessmentPage />} />
           <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />
+          <Route path="/resources" element={<ResourcesPage />} />
 
           <Route element={<AdminRoute />}>
             <Route path="/admin" element={<AdminSectionLayout />}>

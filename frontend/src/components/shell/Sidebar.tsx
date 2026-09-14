@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   ClipboardList,
+  FileText,
   GraduationCap,
   LayoutDashboard,
   LogOut,
@@ -57,6 +58,12 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     { to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap },
     { to: '/certificates', label: 'Certificates', icon: Award },
     { to: '/achievements', label: 'Achievements', icon: Trophy },
+    // Deliberately LEARNER/ORG_ADMIN only — not INSTRUCTOR, not
+    // PLATFORM_ADMIN — per the Resources feature spec; upload is
+    // ORG_ADMIN-only (see ResourcesPage), learners get a read-only list.
+    ...(user?.role === 'LEARNER' || user?.role === 'ORG_ADMIN'
+      ? [{ to: '/resources', label: 'Resources', icon: FileText }]
+      : []),
     // Admins get the cross-learner report; a learner's own progress is
     // already visible throughout their dashboard, so there's no separate
     // reports page for them.
