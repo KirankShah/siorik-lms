@@ -148,6 +148,9 @@ def clone_course(source_course, created_by, *, organization=None, title=None, sl
     informational Course.cloned_from FK, and no learner-generated data
     (enrollments, attempts, submissions, certificates, SlideRevision history)
     is ever copied — see the plan this implements for the full rationale.
+    SlideNarration IS copied (script text, audio file, voice) since it's
+    admin-authored content tied to the slide's text, not learner data —
+    otherwise every clone would silently start with zero narration.
 
     Ownership of the copy follows `organization`:
 
@@ -161,6 +164,8 @@ def clone_course(source_course, created_by, *, organization=None, title=None, sl
     `title` overrides the copy's title (defaults to the source's). `slug_seed`
     overrides the base slug that gets disambiguated against existing courses.
     """
+    from narration.models import SlideNarration
+
     if organization is not None:
         content_owner = Course.ContentOwner.ORGANIZATION
         default_slug_seed = f'{source_course.slug}-{organization.slug}'
@@ -211,6 +216,16 @@ def clone_course(source_course, created_by, *, organization=None, title=None, sl
                     template_override=slide.template_override,
                     estimated_minutes=slide.estimated_minutes,
                 )
+
+                for narration in slide.narrations.all():
+                    SlideNarration.objects.create(
+                        slide=cloned_slide,
+                        language=narration.language,
+                        script_text=narration.script_text,
+                        audio_file=narration.audio_file,
+                        voice_name=narration.voice_name,
+                        generated_by=narration.generated_by,
+                    )
 
                 if slide.slide_type == Slide.SlideType.CONTENT:
                     for element in slide.elements.order_by('order'):

@@ -1850,6 +1850,9 @@ class CourseCloneTests(BaseAPITestCase):
 
         self.content_slide = Slide.objects.create(lesson=self.lesson, order=1, slide_type=Slide.SlideType.CONTENT)
         Element.objects.create(slide=self.content_slide, order=1, element_type=Element.ElementType.TEXT, rich_text='Hello')
+        SlideNarration.objects.create(
+            slide=self.content_slide, language='en', script_text='Hello there.', voice_name='en-US-JennyNeural',
+        )
 
         self.quiz_slide2 = Slide.objects.create(lesson=self.lesson, order=2, slide_type=Slide.SlideType.QUIZ)
         quiz = Quiz.objects.create(slide=self.quiz_slide2, title='Quiz', pass_percentage=60)
@@ -1891,6 +1894,9 @@ class CourseCloneTests(BaseAPITestCase):
         cloned_content_slide = Slide.objects.get(lesson=cloned_lesson, order=1)
         self.assertEqual(cloned_content_slide.elements.count(), 1)
         self.assertEqual(cloned_content_slide.elements.first().rich_text, 'Hello')
+        cloned_narration = SlideNarration.objects.get(slide=cloned_content_slide, language='en')
+        self.assertEqual(cloned_narration.script_text, 'Hello there.')
+        self.assertEqual(cloned_narration.voice_name, 'en-US-JennyNeural')
 
         cloned_quiz_slide = Slide.objects.get(lesson=cloned_lesson, order=2)
         cloned_question = Question.objects.get(quiz__slide=cloned_quiz_slide)
