@@ -30,12 +30,16 @@ function extractErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-// Generation authoring UI, restricted to PLATFORM_ADMIN — hiding this panel
-// for other roles is a UX nicety only; the real restriction is enforced
-// server-side (narration.views.SlideNarrationViewSet.get_permissions), since
-// a hidden UI control is not a permission check.
+// Status + playback is visible to any admin who can see this slide (the
+// backend allows it — narration.views.SlideNarrationViewSet is read-only for
+// any authenticated user who can see the slide's course). Generation is
+// restricted to PLATFORM_ADMIN: hiding the Generate/Regenerate button for
+// other roles is a UX nicety only, the real restriction is enforced
+// server-side (get_permissions), since a hidden UI control is not a
+// permission check.
 export function NarrationPanel({ slideId }: NarrationPanelProps) {
   const { user } = useAuth()
+  const canGenerate = isPlatformAdminRole(user?.role)
   const [narrations, setNarrations] = useState<SlideNarration[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [generatingLanguage, setGeneratingLanguage] = useState<NarrationLanguage | null>(null)
@@ -49,8 +53,6 @@ export function NarrationPanel({ slideId }: NarrationPanelProps) {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [slideId])
-
-  if (!isPlatformAdminRole(user?.role)) return null
 
   async function handleGenerate(language: NarrationLanguage) {
     setGeneratingLanguage(language)
@@ -96,14 +98,16 @@ export function NarrationPanel({ slideId }: NarrationPanelProps) {
                     </span>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  variant={narration ? 'outline' : 'primary'}
-                  disabled={isGenerating}
-                  onClick={() => void handleGenerate(code)}
-                >
-                  {isGenerating ? 'Generating…' : narration ? 'Regenerate' : 'Generate'}
-                </Button>
+                {canGenerate && (
+                  <Button
+                    size="sm"
+                    variant={narration ? 'outline' : 'primary'}
+                    disabled={isGenerating}
+                    onClick={() => void handleGenerate(code)}
+                  >
+                    {isGenerating ? 'Generating…' : narration ? 'Regenerate' : 'Generate'}
+                  </Button>
+                )}
               </div>
 
               {isGenerating && (
