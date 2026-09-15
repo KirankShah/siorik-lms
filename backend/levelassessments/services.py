@@ -7,9 +7,9 @@ from accounts.models import User
 from .models import AssessmentLevel, LevelAssessmentAttempt, LevelQuestion
 
 # Every organization gets exactly these four assessment tiers, one row per
-# accounts.User.AssessmentLevel value. pass_threshold / questions_per_attempt
-# start at the model defaults and are then editable per level, per org, by an
-# admin (see AssessmentLevelViewSet.partial_update).
+# accounts.User.AssessmentLevel value. Pass mark / questions-per-attempt are
+# org-wide (org_settings.OrganizationSettings), not per level — see
+# start_level_assessment_attempt below.
 DEFAULT_LEVEL_NAMES = [choice.value for choice in User.AssessmentLevel]
 
 
@@ -42,8 +42,8 @@ def start_level_assessment_attempt(*, user, assessment_level):
     """
     Starts a new LevelAssessmentAttempt for `user` under `assessment_level`.
 
-    Draws a fresh random sample of `assessment_level.questions_per_attempt`
-    LevelQuestion ids from the full pool across ALL of that level's
+    Draws a fresh random sample of `assessment_level.organization.settings.
+    questions_per_attempt` LevelQuestion ids from the full pool across ALL of that level's
     QuestionSets combined — QuestionSet is an authoring label only, so Set
     boundaries never affect the draw — and stores the drawn ids on the
     attempt itself so a graded attempt's exact question set stays auditable
@@ -62,7 +62,7 @@ def start_level_assessment_attempt(*, user, assessment_level):
     pool = list(
         LevelQuestion.objects.filter(question_set__assessment_level=assessment_level).values_list('id', flat=True)
     )
-    questions_per_attempt = assessment_level.questions_per_attempt
+    questions_per_attempt = assessment_level.organization.settings.questions_per_attempt
     if len(pool) < questions_per_attempt:
         raise LevelAssessmentError(
             f'Not enough questions in the pool ({len(pool)}) to draw {questions_per_attempt} for an attempt.'

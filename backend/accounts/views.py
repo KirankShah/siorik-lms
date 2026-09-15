@@ -2,10 +2,13 @@ import csv
 import io
 
 from django.contrib.auth.models import update_last_login
+from django.db.models import Q, Value
+from django.db.models.functions import Concat
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import RetrieveUpdateAPIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -22,6 +25,7 @@ from .serializers import (
     DemoUserCreateSerializer,
     OrganizationSerializer,
     SetPasswordSerializer,
+    StaffCreateSerializer,
     UserPreferenceSerializer,
     UserSerializer,
 )
@@ -348,22 +352,135 @@ class OrgAdminViewSet(viewsets.GenericViewSet):
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
-class StaffEnrollmentViewSet(viewsets.GenericViewSet):
-    """
-    ORG_ADMIN/PLATFORM_ADMIN bulk enrollment of real staff (is_demo=False
-    LEARNER accounts) from the staff-enrollment spreadsheet — .xlsx or .csv,
-    tolerant of the "LBBL_Staff_Enrollment_Template" layout (see staff_import).
-    Each row carries an Assessment Level, which is all that's needed for the
-    learner to be shown the matching role-based assessment
-    (levelassessments.services.assigned_assessment_level_for_user derives it
-    from user.assessment_level + org — no per-user assignment row).
+class StaffListPagination(PageNumberPagination):
+    """Server-side pagination for the staff list — never hand the browser the
+    whole org roster at once."""
 
-    Org scoping: an ORG_ADMIN only enrolls into their own organization; a row
-    naming a different organization is rejected rather than silently retargeted.
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    ORG_ADMIN/PLATFORM_ADMIN management of real staff (is_demo=False LEARNER
+    accounts): individual add (create), bulk spreadsheet upload (bulk), a
+    searchable/paginated roster (list), and deactivate/reactivate. Individual
+    add and bulk upload both funnel through accounts.services.provision_staff_learner
+    — one person added individually behaves exactly like one row from a bulk
+    upload (same temp password, invite email, forced-reset flow, and implicit
+    Learning Path placement via assessment_level — see courses.learning_path).
+
+    Org scoping (list/create/deactivate/reactivate alike): an ORG_ADMIN only
+    ever sees/acts on their own organization's staff; a PLATFORM_ADMIN sees
+    every organization's, filterable via ?organization=<id> on list, and must
+    name the organization explicitly when creating one individually.
+
+    Deactivation never deletes the User row or touches any related
+    Enrollment/QuizAttempt/LevelAssessmentAttempt/Certificate — it only flips
+    the standard Django is_active flag (which already blocks login), so a
+    deactivated learner's training history stays fully intact and queryable
+    via the reports/analytics endpoints, which don't filter on is_active.
     """
 
     permission_classes = [IsAuthenticated, IsOrgAdminRole]
-    serializer_class = DemoUserCreateSerializer  # unused for the action; keeps DRF's schema gen happy
+    pagination_class = StaffListPagination
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return StaffCreateSerializer
+        return UserSerializer
+
+    def get_queryset(self):
+        queryset = (
+            User.objects.filter(role=User.Role.LEARNER, is_demo=False)
+            .select_related('organization')
+            .order_by('first_name', 'last_name', 'email')
+        )
+
+        user = self.request.user
+        if user.role == User.Role.PLATFORM_ADMIN:
+            if self.action == 'list':
+                organization_id = self.request.query_params.get('organization')
+                if organization_id:
+                    queryset = queryset.filter(organization_id=organization_id)
+        else:
+            if user.organization_id is None:
+                return queryset.none()
+            queryset = queryset.filter(organization_id=user.organization_id)
+
+        if self.action == 'list':
+            # Active staff by default — ?status=inactive switches to the
+            # deactivated roster; anything else (e.g. omitted) stays active-only
+            # so a deactivated learner disappears from the default view.
+            status_param = self.request.query_params.get('status', 'active')
+            if status_param in ('active', 'inactive'):
+                queryset = queryset.filter(is_active=(status_param == 'active'))
+
+            search = self.request.query_params.get('search', '').strip()
+            if search:
+                # full_name so a search for "Bikash Thapa" matches even though
+                # neither half alone is a substring of first_name or last_name.
+                queryset = queryset.annotate(full_name=Concat('first_name', Value(' '), 'last_name')).filter(
+                    Q(full_name__icontains=search) | Q(email__icontains=search)
+                )
+
+        return queryset
+
+    def create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        is_platform_admin = request.user.role == User.Role.PLATFORM_ADMIN
+        organization = data.get('organization')
+        if is_platform_admin:
+            if organization is None:
+                raise ValidationError({'organization': 'Organization is required.'})
+        else:
+            organization = request.user.organization
+            if organization is None:
+                raise ValidationError({'detail': 'Your account has no organization assigned.'})
+
+        try:
+            user = provision_staff_learner(
+                name=data['name'],
+                email=data['email'],
+                organization=organization,
+                phone_number=data.get('phone_number', ''),
+                corporate_title=data.get('corporate_title', ''),
+                functional_title=data.get('functional_title', ''),
+                branch_department=data.get('branch_department', ''),
+                assessment_level=data['assessment_level'],
+            )
+        except UserProvisioningError as exc:
+            raise ValidationError({'detail': str(exc)})
+
+        log_action(request.user, AuditLog.Action.STAFF_ENROLLED, user)
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        """Revokes login access without touching the account or any of its
+        related records — see the class docstring. Idempotent: deactivating
+        an already-inactive account just returns it unchanged."""
+        staff = self.get_object()
+        if staff.is_active:
+            staff.is_active = False
+            staff.save(update_fields=['is_active'])
+            log_action(request.user, AuditLog.Action.STAFF_DEACTIVATED, staff)
+        return Response(UserSerializer(staff).data)
+
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Restores login access, e.g. after an accidental deactivation or a
+        returning staff member. Idempotent, mirroring deactivate above."""
+        staff = self.get_object()
+        if not staff.is_active:
+            staff.is_active = True
+            staff.save(update_fields=['is_active'])
+            log_action(request.user, AuditLog.Action.STAFF_REACTIVATED, staff)
+        return Response(UserSerializer(staff).data)
 
     @action(detail=False, methods=['post'])
     def bulk(self, request):

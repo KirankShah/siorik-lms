@@ -1,6 +1,8 @@
 import csv
 import io
 import uuid
+from collections import Counter
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from django.core.files.storage import default_storage
@@ -28,6 +30,8 @@ from audit.services import log_action
 from certificates.services import certificate_ineligibility_reason, try_issue_learning_path_certificate
 from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
 from gamification.services import record_learning_activity, update_gamification_for_user
+from levelassessments.models import LevelAssessmentAttempt
+from levelassessments.services import assigned_assessment_level_for_user
 from scenarios.models import ScenarioAttempt
 
 from .models import (
@@ -45,6 +49,7 @@ from .models import (
 )
 from .permissions import (
     catalog_courses_for_user,
+    curriculum_courses_for_organization,
     editable_courses_for_user,
     exclude_demo_locked,
     is_lesson_locked_for_demo_user,
@@ -1184,3 +1189,285 @@ class AdminAnalyticsView(APIView):
         )
         response['Content-Disposition'] = 'attachment; filename="admin_analytics.xlsx"'
         return response
+
+
+def _course_final_average(user, course):
+    """
+    Average of each of `course`'s quizzes' best (highest) QuizAttempt
+    score_percent for `user` — None if the course has no quizzes, or any quiz
+    hasn't been attempted at all. Mirrors certificates.services.
+    certificate_ineligibility_reason's own course-wide-average math (kept as
+    a separate read-only helper here rather than imported, since that
+    function's per-quiz-name failure message isn't needed for a report cell —
+    just the number).
+    """
+    quizzes = Quiz.objects.filter(slide__lesson__module__course=course)
+    best_scores = []
+    for quiz in quizzes:
+        best = QuizAttempt.objects.filter(user=user, quiz=quiz).aggregate(best=Max('score_percent'))['best']
+        if best is None:
+            return None
+        best_scores.append(best)
+    if not best_scores:
+        return None
+    return float(sum(best_scores) / len(best_scores))
+
+
+def _parse_report_date(value, field_name):
+    if not value:
+        raise ValidationError({field_name: 'This date is required.'})
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date()
+    except ValueError:
+        raise ValidationError({field_name: 'Must be a valid date (YYYY-MM-DD).'})
+
+
+def _build_staff_training_report(organization, date_from, date_to):
+    """
+    Returns (headers, rows) for the Staff Training Report — a flat table
+    (every cell already formatted, blank string for "no relevant event in
+    range") so the JSON preview, CSV export, and XLSX export all render from
+    literally the same data and can never disagree with one another.
+
+    One row per real (is_demo=False) LEARNER account in `organization`,
+    regardless of activity — course completions and quiz/level-assessment
+    attempts are only counted when they fall within [date_from, date_to];
+    staff-level fields (name, titles, branch) are always current. See the
+    individual column comments below for exactly what "complete"/"pass"
+    means for each one.
+    """
+    pass_mark_percent = organization.settings.pass_mark_percent
+    curriculum_courses = list(curriculum_courses_for_organization(organization.id))
+
+    staff = list(
+        User.objects.filter(role=User.Role.LEARNER, is_demo=False, organization=organization)
+        .order_by('first_name', 'last_name', 'email')
+    )
+
+    report_rows = []
+    max_level_attempts = 0
+
+    for user in staff:
+        path = build_learning_path(user)
+        path_course_ids = [course['id'] for tier in path['tiers'] for course in tier['courses']]
+
+        enrollments = {
+            e.course_id: e
+            for e in Enrollment.objects.filter(user=user, course_id__in=[c.id for c in curriculum_courses])
+        }
+
+        # Column 6/7: every course in the learner's own (tier-cumulative) path
+        # must be COMPLETED with a completion date inside the range for the
+        # path to count as done *for this report period* — blank ("incomplete")
+        # if any of them isn't, Pass/Fail only once every one of them is.
+        completions_in_range = []
+        all_completed_in_range = bool(path_course_ids)
+        for course_id in path_course_ids:
+            enrollment = enrollments.get(course_id)
+            if (
+                enrollment is None
+                or enrollment.status != Enrollment.Status.COMPLETED
+                or enrollment.completed_at is None
+                or not (date_from <= enrollment.completed_at.date() <= date_to)
+            ):
+                all_completed_in_range = False
+            else:
+                completions_in_range.append(enrollment.completed_at)
+
+        course_path_status = ''
+        date_path_completed = ''
+        if all_completed_in_range:
+            path_courses = [c for c in curriculum_courses if c.id in path_course_ids]
+            all_passing = all(
+                (average := _course_final_average(user, course)) is not None and average >= pass_mark_percent
+                for course in path_courses
+            )
+            course_path_status = 'Pass' if all_passing else 'Fail'
+            date_path_completed = max(completions_in_range).date().isoformat()
+
+        # Column 8: every retake attempt (2nd+ submitted attempt on the same
+        # quiz) within the date range, across every quiz in the learner's path.
+        quiz_ids = list(Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids).values_list('id', flat=True))
+        attempt_counts = Counter(
+            QuizAttempt.objects.filter(
+                user=user, quiz_id__in=quiz_ids, submitted_at__isnull=False,
+                submitted_at__date__gte=date_from, submitted_at__date__lte=date_to,
+            ).values_list('quiz_id', flat=True)
+        )
+        total_retakes = sum(max(0, count - 1) for count in attempt_counts.values())
+
+        # Column 9 (one cell per curriculum course, not just this learner's
+        # own tier — see curriculum_courses_for_organization): blank unless
+        # that specific course was completed within the date range.
+        course_scores = {}
+        for course in curriculum_courses:
+            enrollment = enrollments.get(course.id)
+            if (
+                enrollment is not None
+                and enrollment.status == Enrollment.Status.COMPLETED
+                and enrollment.completed_at is not None
+                and date_from <= enrollment.completed_at.date() <= date_to
+            ):
+                average = _course_final_average(user, course)
+                course_scores[course.id] = round(average, 1) if average is not None else ''
+            else:
+                course_scores[course.id] = ''
+
+        # Columns 10-12: this learner's assigned tier's attempts submitted
+        # within the date range, chronologically — "Attempt N"/"Score N"
+        # columns are sized to the report's overall highest attempt count,
+        # not a fixed number (padded below once every staff row is built).
+        assigned_level = assigned_assessment_level_for_user(user)
+        level_attempts = []
+        if assigned_level is not None:
+            level_attempts = list(
+                LevelAssessmentAttempt.objects.filter(
+                    user=user, assessment_level=assigned_level, submitted_at__isnull=False,
+                    submitted_at__date__gte=date_from, submitted_at__date__lte=date_to,
+                ).order_by('submitted_at')
+            )
+        max_level_attempts = max(max_level_attempts, len(level_attempts))
+
+        level_status = ''
+        if level_attempts:
+            level_status = 'Pass' if any(attempt.passed for attempt in level_attempts) else 'Fail'
+
+        final_status = 'Pass' if course_path_status == 'Pass' and level_status == 'Pass' else 'Fail'
+
+        report_rows.append({
+            'user': user,
+            'course_path_status': course_path_status,
+            'date_path_completed': date_path_completed,
+            'total_retakes': total_retakes,
+            'course_scores': course_scores,
+            'level_status': level_status,
+            'level_attempts': level_attempts,
+            'final_status': final_status,
+        })
+
+    headers = [
+        'Full Name', 'Email Address', 'Corporate Title', 'Functional Title', 'Branch/Department',
+        'Course Path Completed (Pass/Fail)', 'Date Path Completed', 'Total Course Retakes',
+        *[course.title for course in curriculum_courses],
+        'Level Assessment (Pass/Fail)',
+    ]
+    for attempt_number in range(1, max_level_attempts + 1):
+        headers += [f'Attempt {attempt_number}', f'Score {attempt_number}']
+    headers.append('Final Status (Pass/Fail)')
+
+    rows = []
+    for report_row in report_rows:
+        user = report_row['user']
+        row = [
+            user.get_full_name() or user.email,
+            user.email,
+            user.corporate_title or '',
+            user.functional_title or '',
+            user.branch_department or '',
+            report_row['course_path_status'],
+            report_row['date_path_completed'],
+            report_row['total_retakes'],
+            *[report_row['course_scores'][course.id] for course in curriculum_courses],
+            report_row['level_status'],
+        ]
+        attempts = report_row['level_attempts']
+        for index in range(max_level_attempts):
+            if index < len(attempts):
+                attempt = attempts[index]
+                row += ['Pass' if attempt.passed else 'Fail', float(attempt.score_percent)]
+            else:
+                row += ['', '']
+        row.append(report_row['final_status'])
+        rows.append(row)
+
+    return headers, rows
+
+
+def _staff_training_csv_response(headers, rows):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="staff_training_report.csv"'
+    writer = csv.writer(response)
+    writer.writerow([_csv_safe(header) for header in headers])
+    for row in rows:
+        writer.writerow([_csv_safe(cell) if isinstance(cell, str) else cell for cell in row])
+    return response
+
+
+def _staff_training_xlsx_response(headers, rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'Staff Training Report'
+
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
+    for col_index, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=1, column=col_index, value=_csv_safe(header))
+        cell.font = header_font
+        cell.fill = header_fill
+
+    for row_index, row in enumerate(rows, start=2):
+        for col_index, value in enumerate(row, start=1):
+            if isinstance(value, str):
+                # A genuinely empty cell (None), not a stored empty string —
+                # keeps "blank" behaving like blank under Excel's own
+                # ISBLANK/filtering, not like a zero-length text value.
+                cell_value = None if value == '' else _csv_safe(value)
+            else:
+                cell_value = value
+            sheet.cell(row=row_index, column=col_index, value=cell_value)
+
+    for col_index, header in enumerate(headers, start=1):
+        sheet.column_dimensions[get_column_letter(col_index)].width = max(14, len(header) + 4)
+    sheet.freeze_panes = 'A2'
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    response = HttpResponse(
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = 'attachment; filename="staff_training_report.xlsx"'
+    return response
+
+
+class StaffTrainingReportView(APIView):
+    """
+    Per-staff training report for one organization — one row per real
+    (is_demo=False) LEARNER account, with a required start/end date range
+    that scopes which course completions and level-assessment attempts count
+    (see _build_staff_training_report for the full per-column rules).
+    ORG_ADMIN is always scoped to their own organization; PLATFORM_ADMIN must
+    name one via ?organization=. Default response is {headers, rows} for a
+    preview table; ?export=csv or ?export=xlsx download the same data as a
+    file — all three are built from the exact same headers/rows so they can
+    never disagree with each other.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+
+    def get(self, request):
+        user = request.user
+        if user.role == User.Role.PLATFORM_ADMIN:
+            organization_id = request.query_params.get('organization')
+            if not organization_id:
+                raise ValidationError({'organization': 'Select an organization for this report.'})
+            organization = get_object_or_404(Organization, pk=organization_id)
+        else:
+            organization = user.organization
+            if organization is None:
+                raise ValidationError({'detail': 'Your account has no organization assigned.'})
+
+        date_from = _parse_report_date(request.query_params.get('date_from'), 'date_from')
+        date_to = _parse_report_date(request.query_params.get('date_to'), 'date_to')
+        if date_from > date_to:
+            raise ValidationError({'detail': 'The start date must not be after the end date.'})
+
+        headers, rows = _build_staff_training_report(organization, date_from, date_to)
+
+        export = request.query_params.get('export')
+        if export == 'csv':
+            return _staff_training_csv_response(headers, rows)
+        if export == 'xlsx':
+            return _staff_training_xlsx_response(headers, rows)
+        return Response({'headers': headers, 'rows': rows})

@@ -39,12 +39,12 @@ function CertificateReveal({ onDownloaded }: { onDownloaded: () => void }) {
 
 interface CourseCompletionModalProps {
   courseName: string
-  // Whether the learner's course-wide average quiz score meets the course's
-  // certificate_pass_threshold (Phase 34) — computed by the caller from
+  // Whether the learner's course-wide average quiz score meets their
+  // organization's pass mark (Phase 34) — computed by the caller from
   // Enrollment.certificate_ineligible_reason (null = eligible), reusing the
-  // existing backend-verified decision rather than re-deriving the 70% math
-  // here. Governs only the retake-vs-congratulate branch below — no longer
-  // implies a certificate is available (see isPathFinale for that).
+  // existing backend-verified decision rather than re-deriving the threshold
+  // math here. Governs only the retake-vs-congratulate branch below — no
+  // longer implies a certificate is available (see isPathFinale for that).
   isEligible: boolean
   // True while the retake reset request is in flight — disables the button
   // and swaps its label so a slow request can't be double-submitted.

@@ -83,3 +83,58 @@ export function bulkEnrollStaff(file: File): Promise<StaffEnrollResult> {
   formData.append('file', file)
   return apiFetch<StaffEnrollResult>('/staff/bulk/', { method: 'POST', body: formData })
 }
+
+// Individual counterpart to bulkEnrollStaff — same fields as one row of the
+// spreadsheet, minus Organization (implicit: the caller's own org for
+// ORG_ADMIN, explicit here only for PLATFORM_ADMIN, who administers more
+// than one). Funnels through the exact same account-creation logic server-side.
+export interface StaffCreateInput {
+  name: string
+  email: string
+  assessment_level: string
+  organization?: number
+  corporate_title?: string
+  functional_title?: string
+  branch_department?: string
+  phone_number?: string
+}
+
+export function createStaffMember(input: StaffCreateInput): Promise<User> {
+  return apiFetch<User>('/staff/', { method: 'POST', body: input })
+}
+
+export interface StaffListFilters {
+  search?: string
+  status?: 'active' | 'inactive'
+  organization?: number
+  page?: number
+  page_size?: number
+}
+
+export interface PaginatedResult<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export function fetchStaffList(filters: StaffListFilters = {}): Promise<PaginatedResult<User>> {
+  const params = new URLSearchParams()
+  if (filters.search) params.set('search', filters.search)
+  if (filters.status) params.set('status', filters.status)
+  if (filters.organization) params.set('organization', String(filters.organization))
+  if (filters.page) params.set('page', String(filters.page))
+  if (filters.page_size) params.set('page_size', String(filters.page_size))
+  const query = params.toString()
+  return apiFetch<PaginatedResult<User>>(`/staff/${query ? `?${query}` : ''}`)
+}
+
+// Revokes login access (sets is_active=False) without deleting the account or
+// any of its related enrollments/certificates/attempts — see reactivateStaffMember.
+export function deactivateStaffMember(userId: number): Promise<User> {
+  return apiFetch<User>(`/staff/${userId}/deactivate/`, { method: 'POST' })
+}
+
+export function reactivateStaffMember(userId: number): Promise<User> {
+  return apiFetch<User>(`/staff/${userId}/reactivate/`, { method: 'POST' })
+}

@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # decorative gold border in the default template.
 TEXT_SAFE_MARGIN_PERCENT = 8
 MIN_AUTO_SHRINK_FONT_SIZE = 16
+# Fallback only for the (normally unreachable) case of a certificate check
+# for a user with no organization — every real organization always has an
+# OrganizationSettings row (see org_settings.signals).
+DEFAULT_PASS_MARK_PERCENT = 70
 TEXT_ALIGN_ANCHORS = {
     CertificateTemplate.TextAlign.LEFT: 'lm',
     CertificateTemplate.TextAlign.CENTER: 'mm',
@@ -46,13 +50,16 @@ def certificate_ineligibility_reason(user, course):
     Eligibility (Phase 34) is exactly two course-wide rules:
     - The Enrollment must be COMPLETED (every slide/lesson done).
     - The learner's AVERAGE score across all of the course's quizzes (each
-      quiz's own best attempt) must meet course.certificate_pass_threshold.
-      This is a course-wide average, not a requirement that every individual
-      quiz independently score at or above its own Quiz.pass_percentage —
-      that field remains a per-quiz pass/fail indicator shown to the learner
-      during the course, but doesn't itself gate the certificate. A quiz the
-      learner has never attempted still blocks issuance (there's no score to
-      average in), distinct from one they attempted and failed.
+      quiz's own best attempt) must meet `user`'s own organization's
+      org_settings.OrganizationSettings.pass_mark_percent — the same
+      org-wide value every course now shares (previously a per-course
+      Course.certificate_pass_threshold field). This is a course-wide
+      average, not a requirement that every individual quiz independently
+      score at or above its own Quiz.pass_percentage — that field remains a
+      per-quiz pass/fail indicator shown to the learner during the course,
+      but doesn't itself gate the certificate. A quiz the learner has never
+      attempted still blocks issuance (there's no score to average in),
+      distinct from one they attempted and failed.
     """
     enrollment = Enrollment.objects.filter(user=user, course=course).first()
     if enrollment is None or enrollment.status != Enrollment.Status.COMPLETED:
@@ -68,10 +75,13 @@ def certificate_ineligibility_reason(user, course):
 
     if best_scores:
         average_score = sum(best_scores) / len(best_scores)
-        if average_score < course.certificate_pass_threshold:
+        pass_mark_percent = (
+            user.organization.settings.pass_mark_percent if user.organization_id else DEFAULT_PASS_MARK_PERCENT
+        )
+        if average_score < pass_mark_percent:
             return (
                 f'Average score {average_score:.1f}% is below the course pass threshold of '
-                f'{course.certificate_pass_threshold}%.'
+                f'{pass_mark_percent}%.'
             )
     return None
 
@@ -196,9 +206,10 @@ def try_issue_learning_path_certificate(user):
     Best-effort issuance of the single Learning Path Completion
     Certificate, called right after any event that could newly satisfy
     eligibility: a course completing (courses.views.EnrollmentViewSet.
-    slide_progress/complete_lesson), a quiz submission crossing a course's
-    own certificate_pass_threshold (assessments.views.QuizViewSet.submit),
-    or a level assessment attempt being passed (levelassessments.views).
+    slide_progress/complete_lesson), a quiz submission crossing the
+    learner's own organization's pass_mark_percent (assessments.views.
+    QuizViewSet.submit), or a level assessment attempt being passed
+    (levelassessments.views).
     Any of these may fire well before the learner is actually eligible
     (most of their path isn't done yet) — that's expected, this is a
     silent no-op in that case. generate_learning_path_certificate() is

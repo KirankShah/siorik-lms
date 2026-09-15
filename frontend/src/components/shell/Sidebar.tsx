@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   ClipboardList,
+  FileSpreadsheet,
   FileText,
   GraduationCap,
   LayoutDashboard,
@@ -114,6 +115,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
             <NavLink to="/admin/staff-enrollment" className={linkClass} onClick={onNavigate}>
               <UserPlus className="h-[18px] w-[18px]" />
               Staff Enrollment
+            </NavLink>
+            <NavLink to="/admin/staff-training-report" className={linkClass} onClick={onNavigate}>
+              <FileSpreadsheet className="h-[18px] w-[18px]" />
+              Staff Training Report
             </NavLink>
             <NavLink to="/admin/organization" className={linkClass} onClick={onNavigate}>
               <Settings className="h-[18px] w-[18px]" />

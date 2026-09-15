@@ -10,13 +10,29 @@ from .models import AssessmentLevel, LevelAssessmentAnswer, LevelAssessmentAttem
 class AssessmentLevelSerializer(serializers.ModelSerializer):
     organization = OrganizationSerializer(read_only=True)
     name_display = serializers.CharField(source='get_name_display', read_only=True)
+    # Sourced from org_settings.OrganizationSettings (one row per
+    # organization, shared by all four of its levels) rather than a column on
+    # this model — see AssessmentLevel's own docstring. Read-only here: edited
+    # only from the Organization Settings screen, never per level.
+    pass_threshold = serializers.IntegerField(source='organization.settings.pass_mark_percent', read_only=True)
+    questions_per_attempt = serializers.IntegerField(
+        source='organization.settings.questions_per_attempt', read_only=True
+    )
+    seconds_per_question = serializers.IntegerField(
+        source='organization.settings.seconds_per_question', read_only=True
+    )
 
     class Meta:
         model = AssessmentLevel
-        fields = ['id', 'organization', 'name', 'name_display', 'pass_threshold', 'questions_per_attempt']
-        # The four tiers are fixed per org (seeded on org creation) — only their
-        # scoring config is editable, and only via PATCH (see the viewset).
-        read_only_fields = ['id', 'organization', 'name', 'name_display']
+        fields = [
+            'id', 'organization', 'name', 'name_display',
+            'pass_threshold', 'questions_per_attempt', 'seconds_per_question',
+        ]
+        # The four tiers are fixed per org (seeded on org creation); their
+        # scoring config now lives entirely on OrganizationSettings, so every
+        # field here is read-only (see org_settings.views.OrganizationSettingsViewSet
+        # for the actual write path).
+        read_only_fields = fields
 
 
 class LevelChoiceSerializer(serializers.ModelSerializer):
@@ -82,7 +98,9 @@ class LevelAssessmentAttemptSerializer(serializers.ModelSerializer):
     questions = serializers.SerializerMethodField()
     answers = LevelAssessmentAnswerSerializer(many=True, read_only=True)
     assessment_level_name = serializers.CharField(source='assessment_level.get_name_display', read_only=True)
-    pass_threshold = serializers.IntegerField(source='assessment_level.pass_threshold', read_only=True)
+    pass_threshold = serializers.IntegerField(
+        source='assessment_level.organization.settings.pass_mark_percent', read_only=True
+    )
 
     class Meta:
         model = LevelAssessmentAttempt

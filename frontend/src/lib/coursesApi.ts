@@ -1,5 +1,5 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
-import type { AnalyticsOrganizationGroup, BulkEnrollResult, ReportRow } from '../types/admin'
+import type { AnalyticsOrganizationGroup, BulkEnrollResult, ReportRow, StaffTrainingReport } from '../types/admin'
 import type {
   AssessmentLevelCode,
   CourseAccessGrant,
@@ -82,7 +82,6 @@ export interface CourseInput {
   is_published: boolean
   cover_image?: File | null
   template?: number | null
-  certificate_pass_threshold?: number
   certificate_expiry_months?: number | null
   completion_deadline_days?: number | null
   path_order?: number | null
@@ -332,4 +331,48 @@ export async function downloadAdminAnalyticsXlsx(filters: AnalyticsFilters): Pro
   link.click()
   link.remove()
   URL.revokeObjectURL(objectUrl)
+}
+
+// --- Admin: staff training report ---
+
+export interface StaffTrainingReportFilters {
+  date_from: string
+  date_to: string
+  organization?: number
+}
+
+function staffTrainingReportQueryString(filters: StaffTrainingReportFilters): string {
+  const params = new URLSearchParams()
+  params.set('date_from', filters.date_from)
+  params.set('date_to', filters.date_to)
+  if (filters.organization) params.set('organization', String(filters.organization))
+  return params.toString()
+}
+
+export function fetchStaffTrainingReport(filters: StaffTrainingReportFilters): Promise<StaffTrainingReport> {
+  return apiFetch<StaffTrainingReport>(`/reports/staff-training/?${staffTrainingReportQueryString(filters)}`)
+}
+
+async function downloadStaffTrainingReport(
+  filters: StaffTrainingReportFilters,
+  format: 'csv' | 'xlsx'
+): Promise<void> {
+  const query = staffTrainingReportQueryString(filters)
+  const blob = await apiFetchBlob(`/reports/staff-training/?${query}&export=${format}`)
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = `staff_training_report.${format}`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+export function downloadStaffTrainingReportCsv(filters: StaffTrainingReportFilters): Promise<void> {
+  return downloadStaffTrainingReport(filters, 'csv')
+}
+
+export function downloadStaffTrainingReportXlsx(filters: StaffTrainingReportFilters): Promise<void> {
+  return downloadStaffTrainingReport(filters, 'xlsx')
 }

@@ -21,6 +21,10 @@ export interface LevelQuestion {
   choices: LevelChoice[]
 }
 
+// pass_threshold/questions_per_attempt/seconds_per_question are computed
+// server-side from org_settings.OrganizationSettings (one row per
+// organization, shared by all four levels) — read-only here; edited from the
+// Organization Settings screen (pages/admin/OrganizationSettingsPage.tsx).
 export interface AssessmentLevelSummary {
   id: number
   organization: Organization
@@ -28,6 +32,7 @@ export interface AssessmentLevelSummary {
   name_display: string
   pass_threshold: number
   questions_per_attempt: number
+  seconds_per_question: number
 }
 
 export interface LevelAssessmentAnswer {

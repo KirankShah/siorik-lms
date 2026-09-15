@@ -21,20 +21,21 @@ from .services import LevelAssessmentError, assigned_assessment_level_for_user, 
 class AssessmentLevelViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
-    mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
     """
-    List/retrieve so an admin can pick which level to import questions into,
-    plus PATCH to tune a level's `pass_threshold` / `questions_per_attempt`
-    (the four tiers themselves are fixed — seeded per organization). Admin-only,
-    org-scoped same as course content: an ORG_ADMIN/INSTRUCTOR only sees/edits
-    their own organization's levels; PLATFORM_ADMIN sees every organization's.
+    Read-only: list/retrieve so an admin can pick which level to import
+    questions into (the four tiers themselves are fixed — seeded per
+    organization). Pass mark / questions-per-attempt / seconds-per-question
+    are edited from the Organization Settings screen (org_settings app), not
+    per level here — see AssessmentLevelSerializer. Admin-only, org-scoped
+    same as course content: an ORG_ADMIN/INSTRUCTOR only sees their own
+    organization's levels; PLATFORM_ADMIN sees every organization's.
     """
 
     serializer_class = AssessmentLevelSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
-    http_method_names = ['get', 'patch', 'head', 'options', 'post']  # no PUT (partial config edits only)
+    http_method_names = ['get', 'head', 'options', 'post']  # post is the import-questions @action below
 
     def get_queryset(self):
         return editable_assessment_levels_for_user(self.request.user).select_related('organization')

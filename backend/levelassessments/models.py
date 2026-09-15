@@ -9,8 +9,6 @@ from django.utils import timezone
 from accounts.models import Organization, User
 from assessments.models import AbstractGradedQuestion, AbstractOption
 
-PERCENT_VALIDATORS = [MinValueValidator(0), MaxValueValidator(100)]
-
 
 class AssessmentLevel(models.Model):
     """
@@ -20,14 +18,18 @@ class AssessmentLevel(models.Model):
     content. `name` reuses accounts.User.AssessmentLevel's four values as
     the single source of truth, since a learner's own assessment_level says
     which of their organization's levels applies to them.
+
+    Pass mark and questions-per-attempt used to live here, per level —
+    they're now org_settings.OrganizationSettings.pass_mark_percent/
+    questions_per_attempt instead (one org-wide value, edited from the
+    Organization Settings screen, not per level) — see
+    levelassessments.services.start_level_assessment_attempt and
+    LevelAssessmentAttempt.calculate_score_percent below for where those
+    are read from now.
     """
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='assessment_levels')
     name = models.CharField(max_length=30, choices=User.AssessmentLevel.choices)
-    pass_threshold = models.PositiveIntegerField(default=70, validators=PERCENT_VALIDATORS)
-    # Configurable per level rather than a single global constant — Senior
-    # Management may warrant more questions than Assistant/Supervisor.
-    questions_per_attempt = models.PositiveIntegerField(default=15, validators=[MinValueValidator(1)])
 
     class Meta:
         ordering = ['organization', 'name']
@@ -157,7 +159,7 @@ class LevelAssessmentAttempt(models.Model):
             earned_marks = self.answers.filter(is_correct=True).aggregate(total=Sum('question__marks'))['total'] or 0
             self.score_percent = round((earned_marks / total_marks) * 100, 2)
 
-        self.passed = self.score_percent >= self.assessment_level.pass_threshold
+        self.passed = self.score_percent >= self.assessment_level.organization.settings.pass_mark_percent
         self.submitted_at = self.submitted_at or timezone.now()
         self.save(update_fields=['score_percent', 'passed', 'submitted_at'])
         return self.score_percent

@@ -181,7 +181,6 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'cover_image',
             'is_published',
             'template',
-            'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
             'path_order',
@@ -209,7 +208,6 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'cover_image',
             'is_published',
             'template',
-            'certificate_pass_threshold',
             'certificate_expiry_months',
             'completion_deadline_days',
             'path_order',
@@ -404,8 +402,9 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     # Null once the enrollment isn't COMPLETED yet, or once the learner is
     # actually eligible for a certificate. Otherwise the human-readable
     # reason they aren't (yet) — currently always the course-wide average
-    # falling short of Course.certificate_pass_threshold, once every slide is
-    # done. Read-only and side-effect-free; see
+    # falling short of the learner's own organization's
+    # OrganizationSettings.pass_mark_percent, once every slide is done.
+    # Read-only and side-effect-free; see
     # certificates.services.certificate_ineligibility_reason. Drives the
     # frontend's "Retake Course" action.
     certificate_ineligible_reason = serializers.SerializerMethodField()

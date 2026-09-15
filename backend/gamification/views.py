@@ -20,7 +20,7 @@ class LeaderboardEntryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         if user.organization_id is None:
             return LeaderboardEntry.objects.none()
         return (
-            LeaderboardEntry.objects.filter(organization_id=user.organization_id)
+            LeaderboardEntry.objects.filter(organization_id=user.organization_id, user__is_active=True)
             .select_related('user')
             .order_by('-total_points', '-average_quiz_score')
         )

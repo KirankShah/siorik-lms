@@ -3,6 +3,8 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from .models import Organization, User
+from .staff_import import ACCEPTED_LEVEL_LABELS
+from .staff_import import resolve_assessment_level as _resolve_staff_level
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -75,6 +77,35 @@ class DemoUserCreateSerializer(serializers.Serializer):
     organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.filter(is_active=True))
     designation = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True, default='')
+
+
+class StaffCreateSerializer(serializers.Serializer):
+    """
+    Individual counterpart to the staff-enrollment bulk upload
+    (accounts.views.StaffEnrollmentViewSet.create) — same fields as the CSV
+    template row minus Organization, which the view supplies itself (the
+    caller's own organization for ORG_ADMIN, or the `organization` field
+    below for PLATFORM_ADMIN, who administers more than one).
+    """
+
+    name = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    organization = serializers.PrimaryKeyRelatedField(
+        queryset=Organization.objects.filter(is_active=True), required=False
+    )
+    corporate_title = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    functional_title = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    branch_department = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True, default='')
+    assessment_level = serializers.CharField(max_length=50)
+
+    def validate_assessment_level(self, value):
+        resolved = _resolve_staff_level(value)
+        if resolved is None:
+            raise serializers.ValidationError(
+                f'Assessment Level "{value}" must be one of: ' + ', '.join(ACCEPTED_LEVEL_LABELS) + '.'
+            )
+        return str(resolved)
 
 
 class SetPasswordSerializer(serializers.Serializer):

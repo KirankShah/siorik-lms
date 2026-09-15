@@ -10,19 +10,13 @@ export function fetchMyAssessmentLevel(): Promise<MyAssessmentLevelStatus> {
   return apiFetch<MyAssessmentLevelStatus>('/my-assessment-level/')
 }
 
-// Admin-only. Org-scoped server-side: an ORG_ADMIN/INSTRUCTOR only gets their
-// own organization's levels, a PLATFORM_ADMIN gets every organization's.
+// Admin-only, read-only. Org-scoped server-side: an ORG_ADMIN/INSTRUCTOR only
+// gets their own organization's levels, a PLATFORM_ADMIN gets every
+// organization's. pass_threshold/questions_per_attempt/seconds_per_question
+// are edited from the Organization Settings screen, not here — see
+// lib/orgSettingsApi.ts.
 export function fetchAssessmentLevels(): Promise<AssessmentLevelSummary[]> {
   return apiFetch<AssessmentLevelSummary[]>('/assessment-levels/')
-}
-
-// Admin-only. Only pass_threshold / questions_per_attempt are writable — the
-// four tiers themselves are fixed per organization.
-export function updateAssessmentLevel(
-  id: number,
-  patch: Partial<Pick<AssessmentLevelSummary, 'pass_threshold' | 'questions_per_attempt'>>,
-): Promise<AssessmentLevelSummary> {
-  return apiFetch<AssessmentLevelSummary>(`/assessment-levels/${id}/`, { method: 'PATCH', body: patch })
 }
 
 // Admin-only bulk import of questions from a "Level Assessment Question

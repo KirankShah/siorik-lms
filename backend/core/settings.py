@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     'dialogue',
     'narration',
     'resources',
+    'org_settings',
 ]
 
 MIDDLEWARE = [

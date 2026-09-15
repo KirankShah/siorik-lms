@@ -10,7 +10,7 @@ class LevelChoiceInline(admin.TabularInline):
 
 @admin.register(AssessmentLevel)
 class AssessmentLevelAdmin(admin.ModelAdmin):
-    list_display = ('organization', 'name', 'pass_threshold', 'questions_per_attempt')
+    list_display = ('organization', 'name')
     list_filter = ('organization', 'name')
 
 

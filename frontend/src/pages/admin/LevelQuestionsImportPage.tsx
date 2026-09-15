@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ApiError } from '../../lib/apiClient'
-import { fetchAssessmentLevels, importLevelQuestions, updateAssessmentLevel } from '../../lib/levelAssessmentsApi'
+import { fetchAssessmentLevels, importLevelQuestions } from '../../lib/levelAssessmentsApi'
 import type { AssessmentLevelSummary, LevelQuestionImportResult } from '../../types/levelAssessments'
 
 const TEMPLATE_COLUMNS = [
@@ -21,85 +21,21 @@ const TEMPLATE_COLUMNS = [
   'Feedback if Incorrect',
 ]
 
-function LevelSettingsCard({
-  level,
-  onSaved,
-}: {
-  level: AssessmentLevelSummary
-  onSaved: (updated: AssessmentLevelSummary) => void
-}) {
-  const [passThreshold, setPassThreshold] = useState(String(level.pass_threshold))
-  const [questionsPerAttempt, setQuestionsPerAttempt] = useState(String(level.questions_per_attempt))
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-
-  // Re-sync when the selected level changes.
-  useEffect(() => {
-    setPassThreshold(String(level.pass_threshold))
-    setQuestionsPerAttempt(String(level.questions_per_attempt))
-    setStatus('idle')
-  }, [level.id, level.pass_threshold, level.questions_per_attempt])
-
-  const pass = Number(passThreshold)
-  const perAttempt = Number(questionsPerAttempt)
-  const valid =
-    Number.isInteger(pass) && pass >= 0 && pass <= 100 && Number.isInteger(perAttempt) && perAttempt >= 1
-  const dirty = pass !== level.pass_threshold || perAttempt !== level.questions_per_attempt
-
-  async function save() {
-    if (!valid || !dirty) return
-    setStatus('saving')
-    try {
-      const updated = await updateAssessmentLevel(level.id, {
-        pass_threshold: pass,
-        questions_per_attempt: perAttempt,
-      })
-      onSaved(updated)
-      setStatus('saved')
-    } catch {
-      setStatus('error')
-    }
-  }
-
+// Read-only summary card — pass mark / questions-per-attempt /
+// seconds-per-question are edited from the Organization Settings screen now
+// (org-wide, not per level), not here.
+function LevelSettingsSummaryCard({ level }: { level: AssessmentLevelSummary }) {
   return (
-    <Card className="space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold text-neutral-900">Level settings — {level.name_display}</h2>
-        <p className="mt-1 text-sm text-neutral-500">
-          Each organization sets its own pass mark. An attempt draws the number of questions below at random from this
-          level's pool, so the pool must hold at least that many questions before a learner can start.
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-4">
-        <label className="text-sm">
-          <span className="block font-medium text-neutral-700">Pass mark (%)</span>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={passThreshold}
-            onChange={(e) => setPassThreshold(e.target.value)}
-            className="mt-1 w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          />
-        </label>
-        <label className="text-sm">
-          <span className="block font-medium text-neutral-700">Questions per attempt</span>
-          <input
-            type="number"
-            min={1}
-            value={questionsPerAttempt}
-            onChange={(e) => setQuestionsPerAttempt(e.target.value)}
-            className="mt-1 w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          />
-        </label>
-      </div>
-      {!valid && (
-        <p className="text-sm text-red-600">Pass mark must be 0–100 and questions per attempt at least 1.</p>
-      )}
-      {status === 'error' && <p className="text-sm text-red-600">Could not save the level settings.</p>}
-      {status === 'saved' && !dirty && <p className="text-sm text-emerald-700">Level settings saved.</p>}
-      <Button disabled={!valid || !dirty || status === 'saving'} onClick={save}>
-        {status === 'saving' ? 'Saving…' : 'Save settings'}
-      </Button>
+    <Card>
+      <h2 className="text-sm font-semibold text-neutral-900">{level.name_display}</h2>
+      <p className="mt-1 text-sm text-neutral-500">
+        {level.questions_per_attempt} question{level.questions_per_attempt === 1 ? '' : 's'} per attempt · pass mark{' '}
+        {level.pass_threshold}% · {level.seconds_per_question}s per question — shared by every level in{' '}
+        {level.organization.name}. Edit these from{' '}
+        <span className="font-medium text-neutral-700">Organization Settings</span>. An attempt draws its questions at
+        random from this level's pool, so the pool must hold at least {level.questions_per_attempt} question
+        {level.questions_per_attempt === 1 ? '' : 's'} before a learner can start.
+      </p>
     </Card>
   )
 }
@@ -124,10 +60,6 @@ export function LevelQuestionsImportPage() {
   const showOrg = useMemo(() => new Set(levels.map((level) => level.organization.id)).size > 1, [levels])
   const selectedLevel = levels.find((level) => String(level.id) === levelId) ?? null
 
-  function applyLevelUpdate(updated: AssessmentLevelSummary) {
-    setLevels((prev) => prev.map((level) => (level.id === updated.id ? updated : level)))
-  }
-
   async function handleSubmit() {
     if (!levelId || !file) return
     setIsSubmitting(true)
@@ -151,8 +83,9 @@ export function LevelQuestionsImportPage() {
     <div>
       <h1 className="text-lg font-semibold text-neutral-900">Level Assessments</h1>
       <p className="mt-1 text-sm text-neutral-500">
-        Configure each role-based assessment level's pass mark and import its questions. Staff are shown the assessment
-        for the level they were enrolled at — no per-person assignment step.
+        Import each role-based assessment level's questions. Staff are shown the assessment for the level they were
+        enrolled at — no per-person assignment step. Pass mark, questions per attempt, and the per-question timer are
+        set once for the whole organization in Organization Settings.
       </p>
 
       <Card className="mt-4 space-y-4">
@@ -186,7 +119,7 @@ export function LevelQuestionsImportPage() {
 
       {selectedLevel && (
         <div className="mt-4">
-          <LevelSettingsCard level={selectedLevel} onSaved={applyLevelUpdate} />
+          <LevelSettingsSummaryCard level={selectedLevel} />
         </div>
       )}
 

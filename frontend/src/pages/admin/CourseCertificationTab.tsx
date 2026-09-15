@@ -10,7 +10,6 @@ import type { CourseDashboardContext } from './CourseDashboardLayout'
 
 export function CourseCertificationTab() {
   const { course, reload } = useOutletContext<CourseDashboardContext>()
-  const [passThreshold, setPassThreshold] = useState(course.certificate_pass_threshold)
   const [expiryMonths, setExpiryMonths] = useState(
     course.certificate_expiry_months === null ? '' : String(course.certificate_expiry_months),
   )
@@ -25,7 +24,6 @@ export function CourseCertificationTab() {
     setSuccess(false)
     try {
       await updateCourse(course.slug, {
-        certificate_pass_threshold: passThreshold,
         certificate_expiry_months: expiryMonths === '' ? null : Number(expiryMonths),
       })
       reload()
@@ -42,21 +40,11 @@ export function CourseCertificationTab() {
       <h2 className="text-sm font-semibold text-neutral-900">Certification</h2>
       <p className="mt-1 text-sm text-neutral-500">
         A learner earns a certificate once their enrollment is complete, every quiz in this course has been passed at
-        least once, and the average of their best score per quiz meets the threshold below.
+        least once, and the average of their best score per quiz meets this organization's pass mark — set once for
+        every course from Organization Settings, not per course here.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-6 max-w-sm space-y-4">
-        <Input
-          id="pass-threshold"
-          label="Overall pass threshold (%)"
-          type="number"
-          min={0}
-          max={100}
-          required
-          value={passThreshold}
-          onChange={(e) => setPassThreshold(Number(e.target.value))}
-        />
-
         <Input
           id="expiry-months"
           label="Expiry / refresher period (months)"

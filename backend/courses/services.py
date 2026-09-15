@@ -182,7 +182,6 @@ def clone_course(source_course, created_by, *, organization=None, title=None, sl
         cover_image=source_course.cover_image,
         is_published=False,
         template=source_course.template,
-        certificate_pass_threshold=source_course.certificate_pass_threshold,
         certificate_expiry_months=source_course.certificate_expiry_months,
         certificate_template=None,
         completion_deadline_days=source_course.completion_deadline_days,

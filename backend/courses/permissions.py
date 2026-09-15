@@ -22,6 +22,30 @@ def _org_scoped_courses(user):
     return Course.objects.filter(own_org_courses | granted_platform_courses).distinct()
 
 
+def curriculum_courses_for_organization(organization_id):
+    """
+    Every path_order'd course belonging to an organization's curriculum: its
+    own ORGANIZATION-owned courses plus any PLATFORM-owned course explicitly
+    granted to it via CourseAccess — same ownership rule as _org_scoped_courses
+    above, but keyed directly by organization id rather than a specific
+    viewing user, since the admin reporting this org's staff training
+    (courses.views.StaffTrainingReportView) may be a PLATFORM_ADMIN with no
+    organization of their own. Ordered by path_order so per-course report
+    columns land in the same order learners see them in their Learning Path.
+    """
+    own_org_courses = Q(content_owner=Course.ContentOwner.ORGANIZATION, organization_id=organization_id)
+    granted_platform_courses = Q(
+        content_owner=Course.ContentOwner.PLATFORM,
+        access_grants__organization_id=organization_id,
+    )
+    return (
+        Course.objects.filter(own_org_courses | granted_platform_courses)
+        .filter(path_order__isnull=False)
+        .distinct()
+        .order_by('path_order', 'id')
+    )
+
+
 def visible_courses_for_user(user):
     """
     Courses a given user is allowed to see:

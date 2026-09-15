@@ -56,3 +56,15 @@ export interface AnalyticsOrganizationGroup {
   organization_name: string
   rows: AnalyticsRow[]
 }
+
+// Backs the Staff Training Report (courses.views.StaffTrainingReportView) —
+// a flat, already-formatted table: `headers` names each column (including
+// the dynamically generated per-course-score and per-attempt columns), and
+// each entry of `rows` has one cell per header, in the same order. '' means
+// no relevant event happened in the selected date range for that cell.
+export type StaffTrainingReportCell = string | number
+
+export interface StaffTrainingReport {
+  headers: string[]
+  rows: StaffTrainingReportCell[][]
+}

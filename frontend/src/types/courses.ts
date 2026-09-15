@@ -83,7 +83,6 @@ export interface CourseAccessGrant {
 
 export interface CourseDetail extends CourseListItem {
   created_by: number | null
-  certificate_pass_threshold: number
   certificate_expiry_months: number | null
   is_demo_available: boolean
   modules: Module[]

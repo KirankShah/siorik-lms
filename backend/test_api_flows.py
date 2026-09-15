@@ -4,14 +4,16 @@ End-to-end API flow tests for the LMS backend.
 Run with:
     python manage.py test test_api_flows
 """
+import csv
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
@@ -67,6 +69,8 @@ from levelassessments.models import (
 )
 from levelassessments.services import LevelAssessmentError, start_level_assessment_attempt
 from narration.models import SlideNarration
+from org_settings.models import OrganizationSettings
+from org_settings.services import send_due_inactivity_reminders
 from resources.models import Resource
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
@@ -74,8 +78,25 @@ from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 def configure_assessment_level(organization, name, **config):
     """Every Organization now gets its four AssessmentLevel rows from a
     post_save signal (levelassessments.signals), so tests fetch-and-configure
-    the one they want rather than creating it."""
+    the one they want rather than creating it.
+
+    pass_threshold/questions_per_attempt used to be per-level fields; they're
+    now org_settings.OrganizationSettings.pass_mark_percent/
+    questions_per_attempt (one row per organization, shared by all four of
+    its levels) — passed as kwargs here for the same reason (most existing
+    call sites just want "this org's pass mark/question count", written back
+    when these were per-level), transparently redirected to the org's
+    settings row instead of split into a separate call everywhere."""
     level, _ = AssessmentLevel.objects.get_or_create(organization=organization, name=name)
+
+    org_settings_updates = {}
+    if 'pass_threshold' in config:
+        org_settings_updates['pass_mark_percent'] = config.pop('pass_threshold')
+    if 'questions_per_attempt' in config:
+        org_settings_updates['questions_per_attempt'] = config.pop('questions_per_attempt')
+    if org_settings_updates:
+        OrganizationSettings.objects.filter(organization=organization).update(**org_settings_updates)
+
     for field, value in config.items():
         setattr(level, field, value)
     if config:
@@ -1574,8 +1595,10 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
     its own Quiz.pass_percentage. self.quiz (pass_percentage=50) already
     exists on lesson1 from BaseAPITestCase; a second quiz (pass_percentage=
     70) is added on lesson2 here so the average can diverge from any single
-    quiz's individual pass/fail outcome. published_org_course.
-    certificate_pass_threshold is the default (70).
+    quiz's individual pass/fail outcome. self.learner's organization
+    (self.org)'s OrganizationSettings.pass_mark_percent is the default (70)
+    — see OrganizationSettingsCertificateThresholdTests below for coverage
+    of a *changed* pass_mark_percent actually moving this outcome.
     """
 
     def setUp(self):
@@ -2617,6 +2640,289 @@ class AdminAnalyticsTests(BaseAPITestCase):
         self.assertIn("'=HYPERLINK(\"http://evil.test\") X", names)
 
 
+def make_quiz_course(*, title, slug, organization, path_order, minimum_assessment_level=None, pass_percentage=70):
+    """A published, path_order'd course with a single one-question quiz —
+    enough to drive both completion and a quiz-average score for the Staff
+    Training Report tests below. Returns (course, quiz)."""
+    course = Course.objects.create(
+        title=title, slug=slug, organization=organization,
+        content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        path_order=path_order, minimum_assessment_level=minimum_assessment_level,
+    )
+    module = Module.objects.create(course=course, title='Module 1', order=1)
+    lesson = Lesson.objects.create(module=module, title='Lesson 1', order=1, estimated_minutes=5)
+    slide = Slide.objects.create(lesson=lesson, order=1, title='Quiz', slide_type=Slide.SlideType.QUIZ)
+    quiz = Quiz.objects.create(slide=slide, title=f'{title} Quiz', pass_percentage=pass_percentage, max_attempts=5)
+    question = Question.objects.create(quiz=quiz, question_text='Q?', order=1, points=1)
+    Choice.objects.create(question=question, choice_text='Correct', is_correct=True)
+    Choice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+    return course, quiz
+
+
+def complete_course(user, course, *, completed_at):
+    Enrollment.objects.update_or_create(
+        user=user, course=course,
+        defaults={'status': Enrollment.Status.COMPLETED, 'completed_at': completed_at, 'progress_percent': 100},
+    )
+
+
+def submit_quiz_attempt(user, quiz, *, attempt_number, score_percent, submitted_at):
+    QuizAttempt.objects.create(
+        user=user, quiz=quiz, attempt_number=attempt_number,
+        submitted_at=submitted_at, score_percent=score_percent, passed=score_percent >= quiz.pass_percentage,
+    )
+
+
+def submit_level_attempt(user, assessment_level, *, score_percent, passed, submitted_at):
+    LevelAssessmentAttempt.objects.create(
+        user=user, assessment_level=assessment_level, submitted_at=submitted_at,
+        score_percent=score_percent, passed=passed,
+    )
+
+
+class StaffTrainingReportApiTests(BaseAPITestCase):
+    """
+    Covers accounts/courses/assessments/levelassessments data assembled into
+    one report row per staff member — see courses.views._build_staff_training_report.
+    """
+
+    URL = '/api/reports/staff-training/'
+    RANGE = {'date_from': '2026-01-01', 'date_to': '2026-01-31'}
+    IN_RANGE = timezone.make_aware(datetime(2026, 1, 15, 9, 0))
+    IN_RANGE_LATER = timezone.make_aware(datetime(2026, 1, 20, 9, 0))
+    OUT_OF_RANGE = timezone.make_aware(datetime(2025, 6, 1, 9, 0))
+
+    def setUp(self):
+        super().setUp()
+        OrganizationSettings.objects.filter(organization=self.org).update(pass_mark_percent=70)
+        self.org.refresh_from_db()
+
+        self.foundation_course, self.foundation_quiz = make_quiz_course(
+            title='AML/CFT General Awareness Training', slug='aml-foundation', organization=self.org, path_order=1,
+        )
+        self.officer_course, self.officer_quiz = make_quiz_course(
+            title='KYC/CDD', slug='kyc-cdd', organization=self.org, path_order=2,
+            minimum_assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        self.officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        self.front_line_level = configure_assessment_level(self.org, User.AssessmentLevel.ASSISTANT_SUPERVISOR)
+
+        # A different organization's own curriculum course — must never leak
+        # into self.org's report columns.
+        Course.objects.create(
+            title='Other Org Only Course', slug='other-org-only', organization=self.other_org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True, path_order=1,
+        )
+
+        def make_staff(email, **extra):
+            return User.objects.create_user(
+                email=email, password='pass12345', role=User.Role.LEARNER, organization=self.org, is_demo=False,
+                **extra,
+            )
+
+        # Alice: passes everything, but needed a retake on the officer course
+        # and on her level assessment — drives both "Total Course Retakes"
+        # and the dynamic Attempt/Score column count (2, the report's max).
+        self.alice = make_staff(
+            'alice@acme.test', first_name='Alice', last_name='Amaya',
+            assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        complete_course(self.alice, self.foundation_course, completed_at=self.IN_RANGE)
+        submit_quiz_attempt(self.alice, self.foundation_quiz, attempt_number=1, score_percent=90, submitted_at=self.IN_RANGE)
+        submit_quiz_attempt(self.alice, self.officer_quiz, attempt_number=1, score_percent=50, submitted_at=self.IN_RANGE)
+        submit_quiz_attempt(self.alice, self.officer_quiz, attempt_number=2, score_percent=85, submitted_at=self.IN_RANGE_LATER)
+        complete_course(self.alice, self.officer_course, completed_at=self.IN_RANGE_LATER)
+        submit_level_attempt(self.alice, self.officer_level, score_percent=40, passed=False, submitted_at=self.IN_RANGE)
+        submit_level_attempt(self.alice, self.officer_level, score_percent=80, passed=True, submitted_at=self.IN_RANGE_LATER)
+
+        # Bob: zero activity in the report window at all.
+        self.bob = make_staff('bob@acme.test', first_name='Bob', last_name='Basnet', assessment_level=User.AssessmentLevel.OFFICER)
+
+        # Carol: passes both path courses cleanly, but fails her one level
+        # assessment attempt — Final Status must be Fail despite the course pass.
+        self.carol = make_staff('carol@acme.test', first_name='Carol', last_name='Carki', assessment_level=User.AssessmentLevel.OFFICER)
+        complete_course(self.carol, self.foundation_course, completed_at=self.IN_RANGE)
+        submit_quiz_attempt(self.carol, self.foundation_quiz, attempt_number=1, score_percent=90, submitted_at=self.IN_RANGE)
+        complete_course(self.carol, self.officer_course, completed_at=self.IN_RANGE)
+        submit_quiz_attempt(self.carol, self.officer_quiz, attempt_number=1, score_percent=85, submitted_at=self.IN_RANGE)
+        submit_level_attempt(self.carol, self.officer_level, score_percent=30, passed=False, submitted_at=self.IN_RANGE)
+
+        # Dave: a different assessment level (Front-Line) — completes his one
+        # path course (Foundation only; Officer is above his tier) but with a
+        # failing average, while passing his level assessment — Final Status
+        # must be Fail despite the level-assessment pass (the vice versa case).
+        self.dave = make_staff(
+            'dave@acme.test', first_name='Dave', last_name='Dahal',
+            assessment_level=User.AssessmentLevel.ASSISTANT_SUPERVISOR,
+        )
+        complete_course(self.dave, self.foundation_course, completed_at=self.IN_RANGE)
+        submit_quiz_attempt(self.dave, self.foundation_quiz, attempt_number=1, score_percent=40, submitted_at=self.IN_RANGE)
+        submit_level_attempt(self.dave, self.front_line_level, score_percent=90, passed=True, submitted_at=self.IN_RANGE)
+
+    def get_report(self, as_user, **params):
+        self.auth_as(as_user)
+        query = {**self.RANGE, **params}
+        return self.client.get(self.URL, query)
+
+    def row_for(self, headers, rows, email):
+        email_index = headers.index('Email Address')
+        for row in rows:
+            if row[email_index] == email:
+                return dict(zip(headers, row))
+        return None
+
+    def test_learner_and_instructor_forbidden(self):
+        for user in (self.learner, self.instructor):
+            self.assertEqual(self.get_report(user).status_code, 403)
+
+    def test_platform_admin_must_select_an_organization(self):
+        response = self.get_report(self.platform_admin)
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_a_date_range(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 400)
+
+    def test_every_staff_member_appears_regardless_of_activity(self):
+        response = self.get_report(self.org_admin)
+        self.assertEqual(response.status_code, 200)
+        headers, rows = response.data['headers'], response.data['rows']
+        emails = [row[headers.index('Email Address')] for row in rows]
+        # self.learner (BaseAPITestCase's own fixture) is itself a real staff
+        # member of self.org, so it's expected alongside the four built here.
+        self.assertEqual(
+            set(emails), {self.alice.email, self.bob.email, self.carol.email, self.dave.email, self.learner.email}
+        )
+
+    def test_columns_only_include_this_organizations_curriculum(self):
+        response = self.get_report(self.org_admin)
+        headers = response.data['headers']
+        self.assertIn('AML/CFT General Awareness Training', headers)
+        self.assertIn('KYC/CDD', headers)
+        self.assertNotIn('Other Org Only Course', headers)
+
+    def test_attempt_score_columns_scale_to_the_actual_highest_attempt_count(self):
+        response = self.get_report(self.org_admin)
+        headers = response.data['headers']
+        # Alice needed 2 level-assessment attempts — the report's max — so
+        # every row gets exactly Attempt 1/Score 1/Attempt 2/Score 2, no more.
+        self.assertIn('Attempt 1', headers)
+        self.assertIn('Score 1', headers)
+        self.assertIn('Attempt 2', headers)
+        self.assertIn('Score 2', headers)
+        self.assertNotIn('Attempt 3', headers)
+        self.assertEqual(headers.index('Score 1'), headers.index('Attempt 1') + 1)
+        self.assertEqual(headers.index('Attempt 2'), headers.index('Score 1') + 1)
+
+    def test_zero_activity_staff_member_has_blank_cells_but_fails_overall(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        bob_row = self.row_for(headers, rows, self.bob.email)
+        self.assertEqual(bob_row['Course Path Completed (Pass/Fail)'], '')
+        self.assertEqual(bob_row['Date Path Completed'], '')
+        self.assertEqual(bob_row['Total Course Retakes'], 0)
+        self.assertEqual(bob_row['AML/CFT General Awareness Training'], '')
+        self.assertEqual(bob_row['Level Assessment (Pass/Fail)'], '')
+        self.assertEqual(bob_row['Final Status (Pass/Fail)'], 'Fail')
+
+    def test_staff_with_retakes_reports_correct_totals_and_scores(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        alice_row = self.row_for(headers, rows, self.alice.email)
+        self.assertEqual(alice_row['Total Course Retakes'], 1)
+        self.assertEqual(alice_row['Course Path Completed (Pass/Fail)'], 'Pass')
+        self.assertEqual(alice_row['Date Path Completed'], self.IN_RANGE_LATER.date().isoformat())
+        self.assertEqual(alice_row['AML/CFT General Awareness Training'], 90.0)
+        self.assertEqual(alice_row['KYC/CDD'], 85.0)
+        self.assertEqual(alice_row['Attempt 1'], 'Fail')
+        self.assertEqual(alice_row['Score 1'], 40.0)
+        self.assertEqual(alice_row['Attempt 2'], 'Pass')
+        self.assertEqual(alice_row['Score 2'], 80.0)
+        self.assertEqual(alice_row['Level Assessment (Pass/Fail)'], 'Pass')
+        self.assertEqual(alice_row['Final Status (Pass/Fail)'], 'Pass')
+
+    def test_final_status_fails_when_courses_pass_but_level_assessment_fails(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        carol_row = self.row_for(headers, rows, self.carol.email)
+        self.assertEqual(carol_row['Course Path Completed (Pass/Fail)'], 'Pass')
+        self.assertEqual(carol_row['Level Assessment (Pass/Fail)'], 'Fail')
+        self.assertEqual(carol_row['Final Status (Pass/Fail)'], 'Fail')
+
+    def test_final_status_fails_when_level_assessment_passes_but_courses_fail(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        dave_row = self.row_for(headers, rows, self.dave.email)
+        self.assertEqual(dave_row['Course Path Completed (Pass/Fail)'], 'Fail')
+        self.assertEqual(dave_row['Level Assessment (Pass/Fail)'], 'Pass')
+        self.assertEqual(dave_row['Final Status (Pass/Fail)'], 'Fail')
+        # Dave's path is Foundation-only (Officer is above his tier) — the
+        # Officer course column still exists (org-wide curriculum) but is blank.
+        self.assertEqual(dave_row['KYC/CDD'], '')
+
+    def test_activity_outside_the_date_range_is_excluded(self):
+        complete_course(self.bob, self.foundation_course, completed_at=self.OUT_OF_RANGE)
+        submit_quiz_attempt(self.bob, self.foundation_quiz, attempt_number=1, score_percent=95, submitted_at=self.OUT_OF_RANGE)
+
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        bob_row = self.row_for(headers, rows, self.bob.email)
+        self.assertEqual(bob_row['Course Path Completed (Pass/Fail)'], '')
+        self.assertEqual(bob_row['AML/CFT General Awareness Training'], '')
+
+    def test_org_admin_cannot_see_another_organizations_staff(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+        emails = [row[headers.index('Email Address')] for row in rows]
+        self.assertNotIn(self.other_org_learner.email, emails)
+
+    def test_platform_admin_can_select_the_organization(self):
+        response = self.get_report(self.platform_admin, organization=self.org.id)
+        self.assertEqual(response.status_code, 200)
+        headers, rows = response.data['headers'], response.data['rows']
+        emails = [row[headers.index('Email Address')] for row in rows]
+        self.assertIn(self.alice.email, emails)
+
+    def test_csv_and_xlsx_exports_match_the_json_preview_exactly(self):
+        json_response = self.get_report(self.org_admin)
+        headers, rows = json_response.data['headers'], json_response.data['rows']
+
+        csv_response = self.get_report(self.org_admin, export='csv')
+        self.assertEqual(csv_response['Content-Type'], 'text/csv')
+        csv_rows = list(csv.reader(io.StringIO(csv_response.content.decode())))
+        self.assertEqual(csv_rows[0], headers)
+        for expected, actual in zip(rows, csv_rows[1:]):
+            expected_as_strings = ['' if cell == '' else str(cell) for cell in expected]
+            self.assertEqual(actual, expected_as_strings)
+
+        xlsx_response = self.get_report(self.org_admin, export='xlsx')
+        self.assertEqual(
+            xlsx_response['Content-Type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        workbook = load_workbook(io.BytesIO(xlsx_response.content))
+        sheet = workbook.active
+        xlsx_header_row = [cell.value for cell in sheet[1]]
+        self.assertEqual(xlsx_header_row, headers)
+        xlsx_data_rows = [list(row) for row in sheet.iter_rows(min_row=2, values_only=True)]
+        for expected, actual in zip(rows, xlsx_data_rows):
+            expected_as_xlsx = [None if cell == '' else cell for cell in expected]
+            self.assertEqual(actual, expected_as_xlsx)
+
+        self.assertTrue(sheet.cell(row=1, column=1).font.bold)
+        self.assertEqual(sheet.freeze_panes, 'A2')
+
+    def test_csv_export_neutralizes_formula_injection(self):
+        evil = User.objects.create_user(
+            email='formula-report@acme.test', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, first_name='=HYPERLINK("http://evil.test")', last_name='X',
+        )
+        response = self.get_report(self.org_admin, export='csv')
+        content = response.content.decode()
+        self.assertNotIn('\n=HYPERLINK', content)
+        self.assertIn("'=HYPERLINK", content)
+
+
 class RateLimitingTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
@@ -3627,8 +3933,7 @@ class LevelAssessmentAttemptServiceTests(TestCase):
         self.assertEqual(LevelAssessmentAttempt.objects.filter(user=self.user, assessment_level=self.level).count(), 2)
 
     def test_rejects_when_pool_smaller_than_questions_per_attempt(self):
-        self.level.questions_per_attempt = 999
-        self.level.save()
+        OrganizationSettings.objects.filter(organization=self.org).update(questions_per_attempt=999)
 
         with self.assertRaises(LevelAssessmentError):
             start_level_assessment_attempt(user=self.user, assessment_level=self.level)
@@ -3828,8 +4133,10 @@ class LevelQuestionImportApiTests(BaseAPITestCase):
 
 
 class AssessmentLevelConfigApiTests(BaseAPITestCase):
-    """Every org is auto-seeded four AssessmentLevel rows; an admin tunes their
-    pass_threshold / questions_per_attempt per org via PATCH."""
+    """Every org is auto-seeded four AssessmentLevel rows, read-only from this
+    endpoint — pass mark / questions-per-attempt / seconds-per-question are
+    now org_settings.OrganizationSettings, edited via OrganizationSettingsApiTests
+    below, not per level here."""
 
     def test_org_has_four_seeded_levels(self):
         self.auth_as(self.org_admin)
@@ -3838,39 +4145,399 @@ class AssessmentLevelConfigApiTests(BaseAPITestCase):
         self.assertEqual(names, ['assistant_supervisor', 'management', 'officer', 'senior_management'])
         self.assertTrue(all(level['organization']['id'] == self.org.id for level in response.data))
 
-    def test_org_admin_can_patch_pass_threshold_for_own_org_level(self):
+    def test_level_reflects_org_settings_values(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            pass_mark_percent=85, questions_per_attempt=20, seconds_per_question=45,
+        )
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/assessment-levels/')
+        level = next(row for row in response.data if row['name'] == User.AssessmentLevel.OFFICER)
+        self.assertEqual(level['pass_threshold'], 85)
+        self.assertEqual(level['questions_per_attempt'], 20)
+        self.assertEqual(level['seconds_per_question'], 45)
+
+    def test_patching_a_level_is_no_longer_allowed(self):
         level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
         self.auth_as(self.org_admin)
+        response = self.client.patch(f'/api/assessment-levels/{level.id}/', {'name': 'x'}, format='json')
+        self.assertEqual(response.status_code, 405)
+
+
+class OrganizationSettingsApiTests(BaseAPITestCase):
+    """OrganizationSettings: ORG_ADMIN/PLATFORM_ADMIN-only, ORG_ADMIN scoped to
+    their own organization's single row, PLATFORM_ADMIN able to list/edit any
+    organization's — plus the questions_per_attempt-vs-question-pool
+    validation that warns at save time instead of at attempt-start time."""
+
+    def test_org_admin_sees_only_their_own_organizations_settings(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/organization-settings/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['organization']['id'], self.org.id)
+        self.assertEqual(response.data[0]['questions_per_attempt'], 15)
+        self.assertEqual(response.data[0]['seconds_per_question'], 60)
+        self.assertEqual(response.data[0]['pass_mark_percent'], 70)
+
+    def test_org_admin_can_update_their_own_settings(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
         response = self.client.patch(
-            f'/api/assessment-levels/{level.id}/', {'pass_threshold': 85, 'questions_per_attempt': 20}, format='json'
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'questions_per_attempt': 10, 'seconds_per_question': 30, 'pass_mark_percent': 80},
+            format='json',
         )
         self.assertEqual(response.status_code, 200, response.data)
-        level.refresh_from_db()
-        self.assertEqual((level.pass_threshold, level.questions_per_attempt), (85, 20))
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.questions_per_attempt, 10)
+        self.assertEqual(settings_obj.seconds_per_question, 30)
+        self.assertEqual(settings_obj.pass_mark_percent, 80)
 
-    def test_name_and_organization_are_read_only_on_patch(self):
-        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+    def test_org_admin_cannot_update_another_organizations_settings(self):
+        other_settings = OrganizationSettings.objects.get(organization=self.other_org)
         self.auth_as(self.org_admin)
         response = self.client.patch(
-            f'/api/assessment-levels/{level.id}/',
-            {'name': User.AssessmentLevel.MANAGEMENT, 'pass_threshold': 60}, format='json',
+            f'/api/organization-settings/{other_settings.id}/', {'pass_mark_percent': 10}, format='json'
+        )
+        self.assertEqual(response.status_code, 404)
+        other_settings.refresh_from_db()
+        self.assertEqual(other_settings.pass_mark_percent, 70)
+
+    def test_organization_field_is_read_only(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'organization': self.other_org.id, 'pass_mark_percent': 55}, format='json',
         )
         self.assertEqual(response.status_code, 200)
-        level.refresh_from_db()
-        self.assertEqual(level.name, User.AssessmentLevel.OFFICER)
-        self.assertEqual(level.pass_threshold, 60)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.organization_id, self.org.id)
+        self.assertEqual(settings_obj.pass_mark_percent, 55)
 
-    def test_org_admin_cannot_patch_another_orgs_level(self):
-        other = AssessmentLevel.objects.get(organization=self.other_org, name=User.AssessmentLevel.OFFICER)
-        self.auth_as(self.org_admin)
-        response = self.client.patch(f'/api/assessment-levels/{other.id}/', {'pass_threshold': 10}, format='json')
-        self.assertEqual(response.status_code, 404)
-
-    def test_learner_cannot_patch_a_level(self):
-        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+    def test_learner_denied_both_list_and_update(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
         self.auth_as(self.learner)
-        response = self.client.patch(f'/api/assessment-levels/{level.id}/', {'pass_threshold': 10}, format='json')
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.client.get('/api/organization-settings/').status_code, 403)
+        self.assertEqual(
+            self.client.patch(
+                f'/api/organization-settings/{settings_obj.id}/', {'pass_mark_percent': 1}, format='json'
+            ).status_code,
+            403,
+        )
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.pass_mark_percent, 70)
+
+    def test_instructor_denied_both_list_and_update(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.instructor)
+        self.assertEqual(self.client.get('/api/organization-settings/').status_code, 403)
+        self.assertEqual(
+            self.client.patch(
+                f'/api/organization-settings/{settings_obj.id}/', {'pass_mark_percent': 1}, format='json'
+            ).status_code,
+            403,
+        )
+
+    def test_platform_admin_can_switch_between_two_organizations_independently(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get('/api/organization-settings/')
+        self.assertEqual(response.status_code, 200)
+        org_ids = {row['organization']['id'] for row in response.data}
+        self.assertEqual(org_ids, {self.org.id, self.other_org.id})
+
+        mine = OrganizationSettings.objects.get(organization=self.org)
+        theirs = OrganizationSettings.objects.get(organization=self.other_org)
+
+        self.client.patch(f'/api/organization-settings/{mine.id}/', {'pass_mark_percent': 90}, format='json')
+        self.client.patch(f'/api/organization-settings/{theirs.id}/', {'pass_mark_percent': 40}, format='json')
+
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual(mine.pass_mark_percent, 90)
+        self.assertEqual(theirs.pass_mark_percent, 40)
+
+    def test_questions_per_attempt_rejected_when_it_exceeds_a_levels_question_pool(self):
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        question_set = QuestionSet.objects.create(assessment_level=level, label='Set 1')
+        for i in range(3):
+            LevelQuestion.objects.create(
+                question_set=question_set, question_text=f'Q{i}?',
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            )
+
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/', {'questions_per_attempt': 10}, format='json'
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('questions_per_attempt', response.data)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.questions_per_attempt, 15)  # unchanged
+
+    def test_questions_per_attempt_accepted_when_every_levels_pool_is_large_enough(self):
+        for level in AssessmentLevel.objects.filter(organization=self.org):
+            question_set = QuestionSet.objects.create(assessment_level=level, label='Set 1')
+            for i in range(5):
+                LevelQuestion.objects.create(
+                    question_set=question_set, question_text=f'Q{i}?',
+                    question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+                )
+
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/', {'questions_per_attempt': 5}, format='json'
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_org_admin_can_configure_both_inactivity_reminders_independently(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {
+                'logged_in_inactive_reminder_enabled': True,
+                'logged_in_inactive_reminder_frequency': 'monthly',
+                'never_logged_in_reminder_enabled': True,
+                'never_logged_in_reminder_frequency': 'fortnightly',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        settings_obj.refresh_from_db()
+        self.assertTrue(settings_obj.logged_in_inactive_reminder_enabled)
+        self.assertEqual(settings_obj.logged_in_inactive_reminder_frequency, 'monthly')
+        self.assertTrue(settings_obj.never_logged_in_reminder_enabled)
+        self.assertEqual(settings_obj.never_logged_in_reminder_frequency, 'fortnightly')
+
+    def test_reminder_last_sent_at_fields_are_read_only(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        stamp = timezone.now()
+        settings_obj.logged_in_inactive_last_sent_at = stamp
+        settings_obj.save(update_fields=['logged_in_inactive_last_sent_at'])
+
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'logged_in_inactive_last_sent_at': None, 'never_logged_in_last_sent_at': '2020-01-01T00:00:00Z'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.logged_in_inactive_last_sent_at, stamp)
+        self.assertIsNone(settings_obj.never_logged_in_last_sent_at)
+
+
+class OrganizationSettingsCertificateThresholdTests(BaseAPITestCase):
+    """Confirms certificate eligibility actually moves when an organization's
+    OrganizationSettings.pass_mark_percent changes — not just a code
+    read-through — replacing the old per-course certificate_pass_threshold
+    field this same scenario used to exercise directly on the Course."""
+
+    def setUp(self):
+        super().setUp()
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
+        )
+        QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=75)
+
+    def test_default_org_pass_mark_of_70_allows_a_75_percent_score(self):
+        self.assertIsNone(certificate_ineligibility_reason(self.learner, self.published_org_course))
+
+    def test_raising_the_orgs_pass_mark_above_the_score_blocks_the_same_certificate(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(pass_mark_percent=80)
+        # self.org (and self.learner.organization, the same Python object)
+        # cached its .settings reverse relation back when BaseAPITestCase.setUp
+        # created it — the signal that seeds a new org's OrganizationSettings
+        # row constructs it as OrganizationSettings(organization=self.org),
+        # which Django caches onto self.org.settings too. A bulk .update()
+        # like the one above never touches that in-memory cache, so without
+        # this refresh the read below would silently see the stale value.
+        self.org.refresh_from_db()
+        reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
+        self.assertIsNotNone(reason)
+        self.assertIn('80%', reason)
+
+    def test_lowering_the_orgs_pass_mark_below_the_score_stays_eligible(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(pass_mark_percent=60)
+        self.org.refresh_from_db()  # see comment above
+        self.assertIsNone(certificate_ineligibility_reason(self.learner, self.published_org_course))
+
+
+class InactivityReminderTests(BaseAPITestCase):
+    """org_settings.services.send_due_inactivity_reminders and the
+    send_inactivity_reminders management command that runs it — see
+    org_settings/services.py for the full eligibility/due-check rules."""
+
+    def setUp(self):
+        super().setUp()
+        self.settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.settings_obj.logged_in_inactive_reminder_enabled = True
+        self.settings_obj.logged_in_inactive_reminder_frequency = OrganizationSettings.ReminderFrequency.WEEKLY
+        self.settings_obj.never_logged_in_reminder_enabled = True
+        self.settings_obj.never_logged_in_reminder_frequency = OrganizationSettings.ReminderFrequency.WEEKLY
+        self.settings_obj.save()
+
+        # self.learner (a BaseAPITestCase fixture) has never logged in and has
+        # no activity — a clean "never logged in" candidate. Build the rest
+        # of the cast explicitly.
+        self.never_logged_in = User.objects.create_user(
+            email='never-logged-in@acme.test', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, must_reset_password=True,
+            first_name='Nina', last_name='NeverIn',
+        )
+        self.logged_in_inactive = User.objects.create_user(
+            email='logged-in-inactive@acme.test', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, must_reset_password=False,
+            first_name='Ian', last_name='Inactive', last_login=timezone.now(),
+        )
+        self.engaged_learner = User.objects.create_user(
+            email='engaged@acme.test', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, must_reset_password=False,
+            first_name='Emma', last_name='Engaged', last_login=timezone.now(),
+        )
+        Enrollment.objects.create(
+            user=self.engaged_learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
+        )
+        self.deactivated_never_logged_in = User.objects.create_user(
+            email='deactivated@acme.test', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, is_active=False,
+        )
+
+    def test_never_logged_in_and_logged_in_inactive_each_get_distinct_correct_emails(self):
+        summaries = send_due_inactivity_reminders()
+
+        never_logged_in_email = next(m for m in mail.outbox if m.to == [self.never_logged_in.email])
+        logged_in_inactive_email = next(m for m in mail.outbox if m.to == [self.logged_in_inactive.email])
+
+        # Never-logged-in: must_reset_password was True, so a fresh temp
+        # password is generated, set on the account, and included.
+        self.assertIn('Temporary Password:', never_logged_in_email.body)
+        self.never_logged_in.refresh_from_db()
+        self.assertTrue(self.never_logged_in.check_password(
+            never_logged_in_email.body.split('Temporary Password: ')[1].split('\n')[0]
+        ))
+
+        # Logged-in-but-inactive: a plain nudge, no password/credentials at all.
+        self.assertNotIn('Temporary Password', logged_in_inactive_email.body)
+        self.assertIn('assigned', logged_in_inactive_email.body.lower())
+
+        reminder_types = {s['reminder_type'] for s in summaries}
+        self.assertEqual(reminder_types, {'logged_in_inactive', 'never_logged_in'})
+
+    def test_never_logged_in_with_a_real_password_gets_an_unmodified_access_reminder(self):
+        already_has_password = User.objects.create_user(
+            email='has-password@acme.test', password='RealPassword123!', role=User.Role.LEARNER,
+            organization=self.org, is_demo=False, must_reset_password=False,
+        )
+        send_due_inactivity_reminders()
+
+        email = next(m for m in mail.outbox if m.to == [already_has_password.email])
+        self.assertNotIn('Temporary Password', email.body)
+        already_has_password.refresh_from_db()
+        self.assertTrue(already_has_password.check_password('RealPassword123!'))
+
+    def test_engaged_learner_and_deactivated_staff_receive_nothing(self):
+        send_due_inactivity_reminders()
+        recipients = {addr for m in mail.outbox for addr in m.to}
+        self.assertNotIn(self.engaged_learner.email, recipients)
+        self.assertNotIn(self.deactivated_never_logged_in.email, recipients)
+
+    def test_org_admin_and_instructor_are_never_sent_reminders(self):
+        send_due_inactivity_reminders()
+        recipients = {addr for m in mail.outbox for addr in m.to}
+        self.assertNotIn(self.org_admin.email, recipients)
+        self.assertNotIn(self.instructor.email, recipients)
+
+    def test_a_learner_who_only_has_a_level_assessment_attempt_is_also_excluded(self):
+        # Zero completed courses but a level-assessment attempt still counts
+        # as "engaged" — excluded from the logged-in-inactive batch too.
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        self.logged_in_inactive.assessment_level = User.AssessmentLevel.OFFICER
+        self.logged_in_inactive.save()
+        LevelAssessmentAttempt.objects.create(
+            user=self.logged_in_inactive, assessment_level=level, submitted_at=timezone.now(),
+            score_percent=40, passed=False,
+        )
+
+        send_due_inactivity_reminders()
+        recipients = {addr for m in mail.outbox for addr in m.to}
+        self.assertNotIn(self.logged_in_inactive.email, recipients)
+
+    def test_last_sent_at_updates_and_a_same_day_rerun_does_not_resend(self):
+        send_due_inactivity_reminders()
+        self.settings_obj.refresh_from_db()
+        first_logged_in_sent_at = self.settings_obj.logged_in_inactive_last_sent_at
+        first_never_sent_at = self.settings_obj.never_logged_in_last_sent_at
+        self.assertIsNotNone(first_logged_in_sent_at)
+        self.assertIsNotNone(first_never_sent_at)
+
+        mail.outbox.clear()
+        second_summaries = send_due_inactivity_reminders()
+        self.assertEqual(second_summaries, [])
+        self.assertEqual(len(mail.outbox), 0)
+        self.settings_obj.refresh_from_db()
+        self.assertEqual(self.settings_obj.logged_in_inactive_last_sent_at, first_logged_in_sent_at)
+        self.assertEqual(self.settings_obj.never_logged_in_last_sent_at, first_never_sent_at)
+
+    def test_reminder_resends_once_its_frequency_period_has_elapsed(self):
+        send_due_inactivity_reminders()
+        self.settings_obj.refresh_from_db()
+        self.settings_obj.logged_in_inactive_last_sent_at = timezone.now() - timedelta(days=8)
+        self.settings_obj.never_logged_in_last_sent_at = timezone.now() - timedelta(days=1)
+        self.settings_obj.save()
+        mail.outbox.clear()
+
+        summaries = send_due_inactivity_reminders()
+        reminder_types = {s['reminder_type'] for s in summaries}
+        # Weekly logged-in-inactive is now overdue (8 days); weekly
+        # never-logged-in is not (only 1 day) — only the former resends.
+        self.assertEqual(reminder_types, {'logged_in_inactive'})
+
+    def test_a_user_who_logs_in_and_starts_a_course_is_excluded_from_the_next_batch(self):
+        # A never-logged-in user who then logs in and enrolls (but hasn't
+        # completed anything yet) must drop out of BOTH batches — not
+        # never-logged-in (they've logged in now) and not logged-in-inactive
+        # either, since "inactive" here specifically means zero completions
+        # and zero level-assessment attempts, and this user still has neither
+        # — wait, they *have* logged in with zero completions, so they
+        # correctly land in the logged-in-inactive batch instead.
+        self.never_logged_in.last_login = timezone.now()
+        self.never_logged_in.save()
+        Enrollment.objects.create(
+            user=self.never_logged_in, course=self.published_org_course, status=Enrollment.Status.IN_PROGRESS,
+        )
+
+        send_due_inactivity_reminders()
+        never_logged_in_recipients = {addr for m in mail.outbox for addr in m.to if 'Temporary Password' in m.body}
+        self.assertNotIn(self.never_logged_in.email, never_logged_in_recipients)
+        logged_in_inactive_recipients = {addr for m in mail.outbox for addr in m.to if 'Temporary Password' not in m.body}
+        self.assertIn(self.never_logged_in.email, logged_in_inactive_recipients)
+
+    def test_disabled_reminder_sends_nothing_for_that_organization(self):
+        self.settings_obj.logged_in_inactive_reminder_enabled = False
+        self.settings_obj.never_logged_in_reminder_enabled = False
+        self.settings_obj.save()
+
+        summaries = send_due_inactivity_reminders()
+        self.assertEqual(summaries, [])
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_other_organizations_are_unaffected_by_this_organizations_settings(self):
+        # other_org's own settings have both reminders off by default.
+        send_due_inactivity_reminders()
+        recipients = {addr for m in mail.outbox for addr in m.to}
+        self.assertNotIn(self.other_org_learner.email, recipients)
+
+    def test_management_command_runs_end_to_end(self):
+        out = io.StringIO()
+        call_command('send_inactivity_reminders', stdout=out)
+        output = out.getvalue()
+        self.assertIn('logged-in-but-inactive', output)
+        self.assertIn('never-logged-in', output)
+        self.assertTrue(any(m.to == [self.never_logged_in.email] for m in mail.outbox))
 
 
 def make_staff_upload(rows, *, filename='staff.xlsx', title_row=True, org_name='Acme Bank'):
@@ -3984,6 +4651,211 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertEqual(
             User.objects.get(email='ram@acme.test').assessment_level, User.AssessmentLevel.SENIOR_MANAGEMENT
         )
+
+
+class StaffManagementApiTests(BaseAPITestCase):
+    """Individual staff enrollment, the searchable/paginated staff list, and
+    deactivate/reactivate (accounts.views.StaffEnrollmentViewSet)."""
+
+    URL = '/api/staff/'
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()  # isolate the login-throttle counter used below
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
+
+    def make_staff(self, email, **extra):
+        payload = {
+            'name': 'Default Name',
+            'email': email,
+            'corporate_title': 'Officer',
+            'functional_title': 'Compliance Officer',
+            'branch_department': 'Head Office',
+            'assessment_level': 'Officer Level',
+            'phone_number': '9800000000',
+            **extra,
+        }
+        return self.client.post(self.URL, payload, format='json')
+
+    def test_individual_create_behaves_identically_to_a_bulk_row(self):
+        self.auth_as(self.org_admin)
+        response = self.make_staff('sunita@acme.test', name='Sunita Karki')
+        self.assertEqual(response.status_code, 201, response.data)
+
+        user = User.objects.get(email='sunita@acme.test')
+        self.assertEqual(user.role, User.Role.LEARNER)
+        self.assertFalse(user.is_demo)
+        self.assertTrue(user.must_reset_password)
+        self.assertEqual(user.organization, self.org)
+        self.assertEqual(user.assessment_level, User.AssessmentLevel.OFFICER)
+        self.assertEqual(user.corporate_title, 'Officer')
+        self.assertEqual(user.branch_department, 'Head Office')
+
+        # Same invite email as a bulk-uploaded row.
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(user.email, mail.outbox[0].body)
+        self.assertTrue(AuditLog.objects.filter(action=AuditLog.Action.STAFF_ENROLLED, object_id=str(user.id)).exists())
+
+    def test_individual_create_rejects_duplicate_email(self):
+        self.auth_as(self.org_admin)
+        self.assertEqual(self.make_staff('dupe@acme.test').status_code, 201)
+        response = self.make_staff('dupe@acme.test')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', str(response.data))
+
+    def test_individual_create_rejects_invalid_assessment_level(self):
+        self.auth_as(self.org_admin)
+        response = self.make_staff('bad-level@acme.test', assessment_level='Wizard')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Assessment Level', str(response.data))
+        self.assertFalse(User.objects.filter(email='bad-level@acme.test').exists())
+
+    def test_org_admin_cannot_target_another_organization(self):
+        # No organization field is exposed to an ORG_ADMIN's request at all —
+        # it's always their own, server-side.
+        self.auth_as(self.org_admin)
+        response = self.make_staff('own-org@acme.test', organization=self.other_org.id)
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(User.objects.get(email='own-org@acme.test').organization, self.org)
+
+    def test_platform_admin_must_name_an_organization(self):
+        self.auth_as(self.platform_admin)
+        response = self.make_staff('no-org@other.test')
+        self.assertEqual(response.status_code, 400)
+
+        response = self.make_staff('with-org@other.test', organization=self.other_org.id)
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(User.objects.get(email='with-org@other.test').organization, self.other_org)
+
+    def test_list_search_by_partial_name_and_partial_email(self):
+        self.auth_as(self.org_admin)
+        self.make_staff('bikash.thapa@acme.test', name='Bikash Thapa')
+        self.make_staff('anita.shrestha@acme.test', name='Anita Shrestha')
+
+        by_name = self.client.get(self.URL, {'search': 'bikash'})
+        self.assertEqual([r['email'] for r in by_name.data['results']], ['bikash.thapa@acme.test'])
+
+        by_email = self.client.get(self.URL, {'search': 'shrestha@acme'})
+        self.assertEqual([r['email'] for r in by_email.data['results']], ['anita.shrestha@acme.test'])
+
+    def test_list_is_paginated_and_does_not_dump_the_whole_roster(self):
+        # self.org already has one non-demo LEARNER from BaseAPITestCase's own
+        # fixture (self.learner) — created staff are on top of that.
+        self.auth_as(self.org_admin)
+        for i in range(3):
+            self.make_staff(f'staff{i}@acme.test', name=f'Staff {i}')
+
+        response = self.client.get(self.URL, {'page_size': 2})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['results']), 2)
+        self.assertEqual(response.data['count'], 4)
+        self.assertIsNotNone(response.data['next'])
+
+    def test_list_defaults_to_active_and_status_filter_shows_deactivated(self):
+        self.auth_as(self.org_admin)
+        self.make_staff('active@acme.test', name='Active Person')
+        self.make_staff('inactive@acme.test', name='Inactive Person')
+        inactive_user = User.objects.get(email='inactive@acme.test')
+        self.client.post(f'{self.URL}{inactive_user.id}/deactivate/')
+
+        active_list = self.client.get(self.URL)
+        active_emails = [r['email'] for r in active_list.data['results']]
+        self.assertIn('active@acme.test', active_emails)
+        self.assertNotIn('inactive@acme.test', active_emails)
+
+        inactive_list = self.client.get(self.URL, {'status': 'inactive'})
+        self.assertEqual([r['email'] for r in inactive_list.data['results']], ['inactive@acme.test'])
+
+    def test_org_admin_staff_list_never_shows_another_organizations_staff(self):
+        self.auth_as(self.platform_admin)
+        self.make_staff('other-org-staff@other.test', organization=self.other_org.id, name='Other Org Staff')
+
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.URL)
+        self.assertNotIn('other-org-staff@other.test', [r['email'] for r in response.data['results']])
+
+    def test_deactivate_blocks_login_hides_from_active_list_and_leaderboard_but_preserves_history(self):
+        self.auth_as(self.org_admin)
+        create_response = self.make_staff('veteran@acme.test', name='Veteran Learner')
+        staff_id = create_response.data['id']
+        staff = User.objects.get(id=staff_id)
+        staff.set_password('pass12345')
+        staff.save()
+
+        # Give them a completed course, a certificate, and a leaderboard entry.
+        Enrollment.objects.create(user=staff, course=self.published_org_course, status=Enrollment.Status.COMPLETED)
+        QuizAttempt.objects.create(user=staff, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
+        certificate = generate_certificate(staff, self.published_org_course)
+        recalculate_leaderboard_entry(staff)
+        self.assertTrue(LeaderboardEntry.objects.filter(user=staff).exists())
+
+        # Deactivate.
+        self.auth_as(self.org_admin)
+        deactivate_response = self.client.post(f'{self.URL}{staff_id}/deactivate/')
+        self.assertEqual(deactivate_response.status_code, 200)
+        staff.refresh_from_db()
+        self.assertFalse(staff.is_active)
+        self.assertTrue(
+            AuditLog.objects.filter(action=AuditLog.Action.STAFF_DEACTIVATED, object_id=str(staff.id)).exists()
+        )
+
+        # Login is blocked.
+        login_response = self.client.post('/api/auth/login/', {'email': staff.email, 'password': 'pass12345'})
+        self.assertEqual(login_response.status_code, 401)
+
+        # Gone from the active staff list...
+        self.auth_as(self.org_admin)
+        active_list = self.client.get(self.URL)
+        self.assertNotIn(staff.email, [r['email'] for r in active_list.data['results']])
+
+        # ...and from the leaderboard.
+        self.auth_as(self.learner)
+        leaderboard = self.client.get('/api/leaderboard/')
+        self.assertNotIn(staff.id, [row['user_id'] for row in leaderboard.data])
+
+        # But their history is untouched and still queryable by an admin.
+        self.assertTrue(Enrollment.objects.filter(user=staff, status=Enrollment.Status.COMPLETED).exists())
+        self.assertTrue(Certificate.objects.filter(id=certificate.id, user=staff).exists())
+        self.assertTrue(LeaderboardEntry.objects.filter(user=staff).exists())
+
+        self.auth_as(self.org_admin)
+        certificates_response = self.client.get('/api/certificates/')
+        self.assertIn(certificate.id, [c['id'] for c in certificates_response.data])
+
+    def test_reactivate_restores_login_without_touching_history(self):
+        self.auth_as(self.org_admin)
+        create_response = self.make_staff('comeback@acme.test', name='Comeback Kid')
+        staff_id = create_response.data['id']
+        staff = User.objects.get(id=staff_id)
+        staff.set_password('pass12345')
+        staff.save()
+        Enrollment.objects.create(user=staff, course=self.published_org_course, status=Enrollment.Status.COMPLETED)
+
+        self.client.post(f'{self.URL}{staff_id}/deactivate/')
+        reactivate_response = self.client.post(f'{self.URL}{staff_id}/reactivate/')
+        self.assertEqual(reactivate_response.status_code, 200)
+        staff.refresh_from_db()
+        self.assertTrue(staff.is_active)
+        self.assertTrue(
+            AuditLog.objects.filter(action=AuditLog.Action.STAFF_REACTIVATED, object_id=str(staff.id)).exists()
+        )
+
+        login_response = self.client.post('/api/auth/login/', {'email': staff.email, 'password': 'pass12345'})
+        self.assertEqual(login_response.status_code, 200)
+
+        self.auth_as(self.org_admin)
+        active_list = self.client.get(self.URL)
+        self.assertIn(staff.email, [r['email'] for r in active_list.data['results']])
+        self.assertTrue(Enrollment.objects.filter(user=staff, status=Enrollment.Status.COMPLETED).exists())
+
+    def test_learner_and_instructor_are_forbidden_from_staff_management(self):
+        for user in (self.learner, self.instructor):
+            self.auth_as(user)
+            self.assertEqual(self.client.get(self.URL).status_code, 403)
+            self.assertEqual(self.make_staff(f'blocked-{user.id}@acme.test').status_code, 403)
 
 
 class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
