@@ -351,18 +351,20 @@ export function LevelAssessmentPage() {
   }
 
   if (stage === 'loading') {
-    return <p className="text-sm text-neutral-500">Loading…</p>
+    return <p className="mx-auto max-w-2xl text-sm text-neutral-500">Loading…</p>
   }
 
   if (stage === 'error') {
-    return <p className="text-sm text-red-600">Could not load your assessment. Please try again.</p>
+    return <p className="mx-auto max-w-2xl text-sm text-red-600">Could not load your assessment. Please try again.</p>
   }
 
   if (stage === 'not_assigned') {
     return (
-      <Card className="text-center">
-        <p className="text-sm text-neutral-500">You don't have a role-based assessment assigned yet.</p>
-      </Card>
+      <div className="mx-auto max-w-2xl">
+        <Card className="text-center">
+          <p className="text-sm text-neutral-500">You don't have a role-based assessment assigned yet.</p>
+        </Card>
+      </div>
     )
   }
 
@@ -380,57 +382,62 @@ export function LevelAssessmentPage() {
     const attemptsExhausted = !isResuming && attemptsRemaining === 0
 
     return (
-      <Card className="text-center">
-        <h1 className="text-base font-semibold text-neutral-900">{assessmentLevel.name_display} Assessment</h1>
-        <p className="mt-2 text-sm text-neutral-500">
-          {assessmentLevel.questions_per_attempt} question{assessmentLevel.questions_per_attempt === 1 ? '' : 's'} · Pass
-          mark: {assessmentLevel.pass_threshold}%
-        </p>
-        <p className="mt-2 text-sm text-neutral-600">{timeAllocationText}</p>
+      <div className="mx-auto max-w-2xl">
+        <Card className="p-8 text-center sm:p-10">
+          <h1 className="text-2xl font-bold text-neutral-900">{assessmentLevel.name_display} Assessment</h1>
+          <p className="mt-2 text-base text-neutral-500">
+            {assessmentLevel.questions_per_attempt} question{assessmentLevel.questions_per_attempt === 1 ? '' : 's'}{' '}
+            · Pass mark: {assessmentLevel.pass_threshold}%
+          </p>
+          <p className="mx-auto mt-4 max-w-lg text-base leading-relaxed text-neutral-700">{timeAllocationText}</p>
 
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-left">
-          <p className="text-sm font-semibold text-amber-900">Before You Begin</p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">
-            <li>Complete this assessment independently, without help from colleagues.</li>
-            <li>No reference materials or notes.</li>
-            <li>No search engines or AI tools during the exam.</li>
-            <li>Ensure a stable internet connection before starting.</li>
-          </ul>
-          <p className="mt-2 text-xs text-amber-800">
-            Your results may be relied upon as evidence of your training and competency.
-          </p>
-        </div>
+          <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-6 py-6 sm:px-8">
+            <p className="text-center text-base font-semibold text-amber-900">Before You Begin</p>
+            <ul className="mx-auto mt-3 w-fit list-disc space-y-2 pl-5 text-left text-sm text-amber-800">
+              <li>Complete this assessment independently, without help from colleagues.</li>
+              <li>No reference materials or notes.</li>
+              <li>No search engines or AI tools during the exam.</li>
+              <li>Ensure a stable internet connection before starting.</li>
+            </ul>
+            <p className="mx-auto mt-4 max-w-md text-center text-sm font-medium text-amber-900">
+              Your results may be relied upon as evidence of your training and competency.
+            </p>
+          </div>
 
-        {isResuming && (
-          <p className="mt-2 text-sm text-neutral-600">
-            You have an exam already in progress — continuing will pick up where you left off.
-          </p>
-        )}
-        {!isResuming && lastStatus === 'FAILED' && (
-          <p className="mt-2 text-sm text-red-600">You did not pass your last attempt — you may retake it now.</p>
-        )}
-        {!isResuming && lastStatus === 'PASSED' && (
-          <p className="mt-2 text-sm text-emerald-700">You've already passed this assessment.</p>
-        )}
-        {!isResuming && attemptsRemaining !== null && attemptsRemaining > 0 && (
-          <p className="mt-2 text-xs text-neutral-400">
-            {attemptsRemaining} attempt{attemptsRemaining === 1 ? '' : 's'} remaining.
-          </p>
-        )}
-        {attemptsExhausted && (
-          <p className="mt-2 text-sm text-red-600">
-            You have reached the maximum number of attempts for this assessment. Please contact your training
-            administrator.
-          </p>
-        )}
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-        <Button className="mt-4" onClick={handleContinue} disabled={attemptsExhausted}>
-          {confirmLabel}
-        </Button>
-        {isRetake && !attemptsExhausted && (
-          <p className="mt-2 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>
-        )}
-      </Card>
+          <div className="mt-5 space-y-1.5">
+            {isResuming && (
+              <p className="text-sm text-neutral-600">
+                You have an exam already in progress — continuing will pick up where you left off.
+              </p>
+            )}
+            {!isResuming && lastStatus === 'FAILED' && (
+              <p className="text-sm text-red-600">You did not pass your last attempt — you may retake it now.</p>
+            )}
+            {!isResuming && lastStatus === 'PASSED' && (
+              <p className="text-sm text-emerald-700">You've already passed this assessment.</p>
+            )}
+            {!isResuming && attemptsRemaining !== null && attemptsRemaining > 0 && (
+              <p className="text-xs text-neutral-400">
+                {attemptsRemaining} attempt{attemptsRemaining === 1 ? '' : 's'} remaining.
+              </p>
+            )}
+            {attemptsExhausted && (
+              <p className="text-sm font-medium text-red-600">
+                You have reached the maximum number of attempts for this assessment. Please contact your training
+                administrator.
+              </p>
+            )}
+            {error && <p className="text-sm text-red-600">{error}</p>}
+          </div>
+
+          <Button size="lg" className="mt-6 px-10" onClick={handleContinue} disabled={attemptsExhausted}>
+            {confirmLabel}
+          </Button>
+          {isRetake && !attemptsExhausted && (
+            <p className="mt-3 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>
+          )}
+        </Card>
+      </div>
     )
   }
 
@@ -444,146 +451,150 @@ export function LevelAssessmentPage() {
     const timeReadout = isFixedTotal ? `${formatMinutesSeconds(overallTimeLeft)} remaining` : `${questionLocked ? 0 : timeLeft}s`
 
     return (
-      <Card>
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-base font-semibold text-neutral-900">{attempt.assessment_level_name} Assessment</h1>
-          <span className="shrink-0 text-xs font-medium text-neutral-400">
-            Question {currentIndex + 1} of {attempt.questions.length}
-          </span>
-        </div>
-
-        {/* Depleting countdown bar — for PER_QUESTION, frozen once answered
-            and reset every question; for FIXED_TOTAL, one continuous bar for
-            the whole attempt that never resets or freezes. */}
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-          <div
-            className={`h-full rounded-full transition-all duration-1000 ease-linear ${barColor}`}
-            style={{ width: `${timePercent}%` }}
-          />
-        </div>
-        <p className="mt-1 text-right text-xs text-neutral-400">{timeReadout}</p>
-
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-
-        <div className="mt-4 rounded-lg border border-neutral-200 p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div
-              className="min-w-0 flex-1 text-sm font-medium text-neutral-900 [overflow-wrap:anywhere]"
-              dangerouslySetInnerHTML={{ __html: currentQuestion.question_text }}
-            />
-            <span className="shrink-0 text-sm font-normal text-neutral-400">
-              ({currentQuestion.marks} {currentQuestion.marks === 1 ? 'mark' : 'marks'})
+      <div className="mx-auto max-w-2xl">
+        <Card>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-base font-semibold text-neutral-900">{attempt.assessment_level_name} Assessment</h1>
+            <span className="shrink-0 text-xs font-medium text-neutral-400">
+              Question {currentIndex + 1} of {attempt.questions.length}
             </span>
           </div>
 
-          {questionLocked ? (
-            <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-              Time's up — 0 marks for this question.
-            </p>
-          ) : (
-            <div className="mt-3">
-              <ChoiceQuestionAnswer
-                questionId={currentQuestion.id}
-                isMultiple={currentQuestion.question_type === 'MULTIPLE_ANSWER'}
-                choices={currentQuestion.choices}
-                selected={answers[currentQuestion.id] ?? new Set()}
-                onToggle={(choiceId) =>
-                  toggleChoice(currentQuestion.id, choiceId, currentQuestion.question_type === 'MULTIPLE_ANSWER')
-                }
-              />
-            </div>
-          )}
-        </div>
+          {/* Depleting countdown bar — for PER_QUESTION, frozen once answered
+              and reset every question; for FIXED_TOTAL, one continuous bar for
+              the whole attempt that never resets or freezes. */}
+          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ease-linear ${barColor}`}
+              style={{ width: `${timePercent}%` }}
+            />
+          </div>
+          <p className="mt-1 text-right text-xs text-neutral-400">{timeReadout}</p>
 
-        {!questionLocked && (
-          <Button
-            className="mt-6"
-            disabled={!hasAnswer || stage === 'submitting'}
-            onClick={() => void goToNextOrFinish()}
-          >
-            {stage === 'submitting' ? 'Submitting…' : isLast ? 'Finish' : 'Next'}
-          </Button>
-        )}
-      </Card>
+          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+          <div className="mt-4 rounded-lg border border-neutral-200 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div
+                className="min-w-0 flex-1 text-sm font-medium text-neutral-900 [overflow-wrap:anywhere]"
+                dangerouslySetInnerHTML={{ __html: currentQuestion.question_text }}
+              />
+              <span className="shrink-0 text-sm font-normal text-neutral-400">
+                ({currentQuestion.marks} {currentQuestion.marks === 1 ? 'mark' : 'marks'})
+              </span>
+            </div>
+
+            {questionLocked ? (
+              <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                Time's up — 0 marks for this question.
+              </p>
+            ) : (
+              <div className="mt-3">
+                <ChoiceQuestionAnswer
+                  questionId={currentQuestion.id}
+                  isMultiple={currentQuestion.question_type === 'MULTIPLE_ANSWER'}
+                  choices={currentQuestion.choices}
+                  selected={answers[currentQuestion.id] ?? new Set()}
+                  onToggle={(choiceId) =>
+                    toggleChoice(currentQuestion.id, choiceId, currentQuestion.question_type === 'MULTIPLE_ANSWER')
+                  }
+                />
+              </div>
+            )}
+          </div>
+
+          {!questionLocked && (
+            <Button
+              className="mt-6"
+              disabled={!hasAnswer || stage === 'submitting'}
+              onClick={() => void goToNextOrFinish()}
+            >
+              {stage === 'submitting' ? 'Submitting…' : isLast ? 'Finish' : 'Next'}
+            </Button>
+          )}
+        </Card>
+      </div>
     )
   }
 
   if (stage === 'results' && attempt) {
     return (
-      <Card>
-        {autoSubmitReason === 'time_expired' && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-            Your exam time ran out, so it was submitted automatically. Any question you hadn't answered yet was
-            marked at zero.
-          </div>
-        )}
-
-        <div className={`rounded-lg p-4 ${attempt.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'}`}>
-          <p className="text-lg font-semibold">{attempt.passed ? 'You passed!' : 'You did not pass'}</p>
-          <p className="text-sm">
-            Score: {attempt.score_percent}% (pass mark: {attempt.pass_threshold}%)
-          </p>
-        </div>
-
-        <div className="mt-6 space-y-4">
-          {attempt.questions.map((question) => {
-            const answer = attempt.answers.find((a) => a.question === question.id)
-            return (
-              <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div
-                    className="min-w-0 flex-1 text-sm font-medium text-neutral-900 [overflow-wrap:anywhere]"
-                    dangerouslySetInnerHTML={{ __html: question.question_text }}
-                  />
-                  <span className={`shrink-0 text-xs font-medium ${answer?.is_correct ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {answer?.is_correct ? 'Correct' : 'Incorrect'}
-                  </span>
-                </div>
-
-                <ChoiceQuestionResult
-                  choices={question.choices}
-                  selectedIds={answer?.selected_choices ?? []}
-                  correctIds={answer?.correct_choice_ids ?? []}
-                />
-
-                <QuestionFeedback
-                  explanation={answer?.explanation}
-                  isCorrect={answer?.is_correct}
-                  feedbackCorrect={answer?.feedback_correct}
-                  feedbackIncorrect={answer?.feedback_incorrect}
-                />
-              </div>
-            )
-          })}
-        </div>
-
-        {attemptsRemaining === 0 && !attempt.passed && (
-          <p className="mt-4 text-sm text-red-600">
-            You have reached the maximum number of attempts for this assessment. Please contact your training
-            administrator.
-          </p>
-        )}
-
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link to="/dashboard" className="inline-flex">
-            <Button variant="secondary">Back to Dashboard</Button>
-          </Link>
-          {/* Routes back to the landing/declaration screen rather than
-              starting a fresh attempt directly — every exam start (including
-              a retake) must go through the explicit "I'm Ready" confirmation,
-              which is also where the max-attempts cap is actually enforced. */}
-          {!attempt.passed && attemptsRemaining !== 0 && (
-            <Button
-              onClick={() => {
-                setPendingOpenAttemptId(null)
-                setStage('landing')
-              }}
-            >
-              Retake Assessment
-            </Button>
+      <div className="mx-auto max-w-2xl">
+        <Card>
+          {autoSubmitReason === 'time_expired' && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Your exam time ran out, so it was submitted automatically. Any question you hadn't answered yet was
+              marked at zero.
+            </div>
           )}
-        </div>
-      </Card>
+
+          <div className={`rounded-lg p-4 ${attempt.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'}`}>
+            <p className="text-lg font-semibold">{attempt.passed ? 'You passed!' : 'You did not pass'}</p>
+            <p className="text-sm">
+              Score: {attempt.score_percent}% (pass mark: {attempt.pass_threshold}%)
+            </p>
+          </div>
+
+          <div className="mt-6 space-y-4">
+            {attempt.questions.map((question) => {
+              const answer = attempt.answers.find((a) => a.question === question.id)
+              return (
+                <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div
+                      className="min-w-0 flex-1 text-sm font-medium text-neutral-900 [overflow-wrap:anywhere]"
+                      dangerouslySetInnerHTML={{ __html: question.question_text }}
+                    />
+                    <span className={`shrink-0 text-xs font-medium ${answer?.is_correct ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {answer?.is_correct ? 'Correct' : 'Incorrect'}
+                    </span>
+                  </div>
+
+                  <ChoiceQuestionResult
+                    choices={question.choices}
+                    selectedIds={answer?.selected_choices ?? []}
+                    correctIds={answer?.correct_choice_ids ?? []}
+                  />
+
+                  <QuestionFeedback
+                    explanation={answer?.explanation}
+                    isCorrect={answer?.is_correct}
+                    feedbackCorrect={answer?.feedback_correct}
+                    feedbackIncorrect={answer?.feedback_incorrect}
+                  />
+                </div>
+              )
+            })}
+          </div>
+
+          {attemptsRemaining === 0 && !attempt.passed && (
+            <p className="mt-4 text-sm text-red-600">
+              You have reached the maximum number of attempts for this assessment. Please contact your training
+              administrator.
+            </p>
+          )}
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Link to="/dashboard" className="inline-flex">
+              <Button variant="secondary">Back to Dashboard</Button>
+            </Link>
+            {/* Routes back to the landing/declaration screen rather than
+                starting a fresh attempt directly — every exam start (including
+                a retake) must go through the explicit "I'm Ready" confirmation,
+                which is also where the max-attempts cap is actually enforced. */}
+            {!attempt.passed && attemptsRemaining !== 0 && (
+              <Button
+                onClick={() => {
+                  setPendingOpenAttemptId(null)
+                  setStage('landing')
+                }}
+              >
+                Retake Assessment
+              </Button>
+            )}
+          </div>
+        </Card>
+      </div>
     )
   }
 
