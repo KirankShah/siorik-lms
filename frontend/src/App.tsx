@@ -32,6 +32,7 @@ import { OrganizationsPage } from './pages/admin/OrganizationsPage'
 import { ReportsPage } from './pages/admin/ReportsPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
+import { AssessmentsRoute } from './routes/AssessmentsRoute'
 import { OrgAdminRoute } from './routes/OrgAdminRoute'
 import { PlatformAdminRoute } from './routes/PlatformAdminRoute'
 import { ProtectedRoute } from './routes/ProtectedRoute'
@@ -51,7 +52,9 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/courses" element={<CoursesPage />} />
           <Route path="/courses/:id" element={<CourseDetailPage />} />
-          <Route path="/assessments" element={<AssessmentsPage />} />
+          <Route element={<AssessmentsRoute />}>
+            <Route path="/assessments" element={<AssessmentsPage />} />
+          </Route>
           <Route path="/level-assessment" element={<LevelAssessmentPage />} />
           <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />

@@ -18,7 +18,7 @@ import { fetchCourseDetail, fetchCourses, fetchEnrollments } from '../lib/course
 import { fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
 import { fetchMyAssessmentLevel } from '../lib/levelAssessmentsApi'
 import { fetchQuizzes } from '../lib/quizApi'
-import { isAdminRole } from '../lib/roles'
+import { isAdminRole, isPlatformAdminRole } from '../lib/roles'
 import type { Certificate } from '../types/certificates'
 import type { User } from '../types/auth'
 import type { Assignment } from '../types/assignment'
@@ -68,6 +68,11 @@ export function DashboardPage() {
 }
 
 function AdminDashboard() {
+  const { user } = useAuth()
+  // /assessments (the read-only quiz inventory) is hidden from ORG_ADMIN/
+  // INSTRUCTOR — see AssessmentsRoute — so this card's own "View all" link
+  // would otherwise just bounce them straight back to this same dashboard.
+  const canViewAssessmentsPage = isPlatformAdminRole(user?.role)
   const [courses, setCourses] = useState<CourseListItem[] | null>(null)
   const [enrollments, setEnrollments] = useState<Enrollment[] | null>(null)
   const [quizzes, setQuizzes] = useState<QuizListItem[] | null>(null)
@@ -156,9 +161,11 @@ function AdminDashboard() {
         <Card>
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-900">Assessments</h2>
-            <Link to="/assessments" className="text-xs font-medium text-brand-navy hover:underline">
-              View all Assessments
-            </Link>
+            {canViewAssessmentsPage && (
+              <Link to="/assessments" className="text-xs font-medium text-brand-navy hover:underline">
+                View all Assessments
+              </Link>
+            )}
           </div>
 
           {!quizzes ? (

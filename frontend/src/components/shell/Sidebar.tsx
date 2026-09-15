@@ -8,6 +8,7 @@ import {
   FileText,
   GraduationCap,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   PanelLeftClose,
   Settings,
@@ -51,12 +52,21 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // server-side (assessments.views.QuizViewSet.get_queryset), so a
     // learner can never see anything here regardless of org content.
     // Admin-only in the nav so it's never confused with Level Assessment.
-    ...(admin ? [{ to: '/assessments', label: 'Assessments', icon: ClipboardList }] : []),
+    // Read-only quiz inventory that duplicates nothing else — hidden from
+    // ORG_ADMIN/INSTRUCTOR (see AssessmentsRoute), kept for PLATFORM_ADMIN.
+    ...(isPlatformAdminRole(user?.role) ? [{ to: '/assessments', label: 'Assessments', icon: ClipboardList }] : []),
     // Distinct from "Assessments" above — this is the standalone role-based
     // knowledge check (levelassessments app). A separate top-level entry
     // so the two never get confused for one another — see
     // LevelAssessmentPage.tsx.
     { to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap },
+    // Second entry point into LevelQuestionsImportPage (the Level Assessment
+    // question bank Excel import) alongside the existing "Level Assessments"
+    // tab inside AdminSectionLayout — this one is directly reachable without
+    // first landing on /admin/courses.
+    ...(admin
+      ? [{ to: '/admin/assessment-questions', label: 'Manage Assessment Questions', icon: ListChecks }]
+      : []),
     { to: '/certificates', label: 'Certificates', icon: Award },
     { to: '/achievements', label: 'Achievements', icon: Trophy },
     // Deliberately LEARNER/ORG_ADMIN only — not INSTRUCTOR, not
