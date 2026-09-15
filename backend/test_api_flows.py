@@ -1204,6 +1204,49 @@ class EnrollmentRetakeTests(BaseAPITestCase):
         self.enrollment.refresh_from_db()
         self.assertEqual(self.enrollment.status, 'COMPLETED')
 
+    def test_retake_count_increments_and_is_unlimited_by_default(self):
+        self.auth_as(self.learner)
+        for expected_count in (1, 2, 3):
+            response = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data['retake_count'], expected_count)
+            self.assertFalse(response.data['retake_limit_reached'])
+
+    def test_max_course_retake_attempts_blocks_further_retakes_once_reached(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_course_retake_attempts=2)
+        self.auth_as(self.learner)
+
+        first = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(first.status_code, 200)
+        self.assertFalse(first.data['retake_limit_reached'])
+
+        second = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data['retake_count'], 2)
+        self.assertTrue(second.data['retake_limit_reached'])
+
+        third = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(third.status_code, 400)
+        self.assertIn('maximum', third.data['detail'].lower())
+
+        # Refused, not silently reset — progress from before the blocked
+        # attempt is untouched.
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.retake_count, 2)
+
+    def test_a_different_enrollment_for_the_same_org_shares_the_same_cap_independently(self):
+        # Each enrollment counts its own retakes — the cap is a per-org rule
+        # applied per enrollment, not a shared budget across courses.
+        OrganizationSettings.objects.filter(organization=self.org).update(max_course_retake_attempts=1)
+        self.auth_as(self.learner)
+
+        self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        blocked = self.client.post(f'/api/enrollments/{self.enrollment.id}/retake/')
+        self.assertEqual(blocked.status_code, 400)
+
+        other_response = self.client.post(f'/api/enrollments/{self.other_enrollment.id}/retake/')
+        self.assertEqual(other_response.status_code, 200)
+
 
 class QuizFlowTests(BaseAPITestCase):
     def test_learner_cannot_see_correct_answers(self):
@@ -4207,6 +4250,30 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         # silently reset the setting for the other one.
         self.assertEqual(settings_obj.seconds_per_question, 60)
 
+    def test_max_attempts_default_to_unlimited_and_are_independently_settable(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.assertIsNone(settings_obj.max_level_assessment_attempts)
+        self.assertIsNone(settings_obj.max_course_retake_attempts)
+
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'max_level_assessment_attempts': 3, 'max_course_retake_attempts': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.max_level_assessment_attempts, 3)
+        self.assertIsNone(settings_obj.max_course_retake_attempts)
+
+        # And back to unlimited.
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/', {'max_level_assessment_attempts': None}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        settings_obj.refresh_from_db()
+        self.assertIsNone(settings_obj.max_level_assessment_attempts)
+
     def test_org_admin_can_update_their_own_settings(self):
         settings_obj = OrganizationSettings.objects.get(organization=self.org)
         self.auth_as(self.org_admin)
@@ -5097,6 +5164,324 @@ class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
         self.learner.save()
         response = self.start_attempt()
         self.assertEqual(response.status_code, 400)
+
+
+class LevelAssessmentMaxAttemptsTests(BaseAPITestCase):
+    """OrganizationSettings.max_level_assessment_attempts (null = unlimited,
+    the original behavior) — see levelassessments.services.
+    start_level_assessment_attempt/level_assessment_attempts_remaining."""
+
+    def setUp(self):
+        super().setUp()
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=1,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.question = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        LevelChoice.objects.create(question=self.question, choice_text='Correct', is_correct=True)
+        self.wrong_choice = LevelChoice.objects.create(question=self.question, choice_text='Wrong', is_correct=False)
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+        self.auth_as(self.learner)
+
+    def fail_one_attempt(self):
+        start = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(start.status_code, 201, start.data)
+        attempt_id = start.data['id']
+        question_id = start.data['questions'][0]['id']
+        return self.client.post(
+            f'/api/level-attempts/{attempt_id}/submit/',
+            {'answers': [{'question': question_id, 'selected_choices': [self.wrong_choice.id]}]},
+            format='json',
+        )
+
+    def test_unlimited_by_default_allows_many_attempts(self):
+        for _ in range(5):
+            response = self.fail_one_attempt()
+            self.assertEqual(response.status_code, 200)
+
+        status_response = self.client.get('/api/my-assessment-level/')
+        self.assertIsNone(status_response.data['attempts_remaining'])
+
+    def test_cap_reached_blocks_further_attempts_and_is_reflected_in_status(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_level_assessment_attempts=2)
+
+        first = self.fail_one_attempt()
+        self.assertEqual(first.status_code, 200)
+        status_after_first = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_after_first.data['attempts_remaining'], 1)
+
+        second = self.fail_one_attempt()
+        self.assertEqual(second.status_code, 200)
+        status_after_second = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_after_second.data['attempts_remaining'], 0)
+
+        third_start = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(third_start.status_code, 400)
+        self.assertIn('maximum', third_start.data['detail'].lower())
+
+    def test_other_organization_is_unaffected_by_this_orgs_cap(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_level_assessment_attempts=1)
+        self.fail_one_attempt()
+
+        self.other_org_learner.organization = self.org  # move into the capped org to reuse fail_one_attempt
+        self.other_org_learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.other_org_learner.save()
+        self.auth_as(self.other_org_learner)
+        # A different USER in the same capped org still gets their own count.
+        response = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(response.status_code, 201)
+
+
+class LevelAssessmentResumeTests(BaseAPITestCase):
+    """
+    Resuming an in-progress attempt after a browser crash/closure/lost
+    connection — levelassessments.services.resume_level_assessment_attempt,
+    plus the save-answer/advance progress-tracking actions it depends on.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=3,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.questions = []
+        self.correct_choices = []
+        for i in range(3):
+            question = LevelQuestion.objects.create(
+                question_set=question_set, question_text=f'Q{i}?',
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+            )
+            correct = LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+            LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+            self.questions.append(question)
+            self.correct_choices.append(correct)
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+        self.auth_as(self.learner)
+
+    def start_attempt(self):
+        response = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(response.status_code, 201, response.data)
+        attempt = LevelAssessmentAttempt.objects.get(id=response.data['id'])
+        return attempt
+
+    def test_fresh_attempt_starts_at_question_zero_with_full_remaining_time(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=90,
+        )
+        attempt = self.start_attempt()
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(response.data['current_question_index'], 0)
+        self.assertGreaterEqual(response.data['remaining_seconds'], 89)
+        self.assertLessEqual(response.data['remaining_seconds'], 90)
+
+    def test_save_answer_persists_selection_without_creating_a_graded_answer_row(self):
+        attempt = self.start_attempt()
+        question_id = attempt.questions_drawn[0]
+        choice_id = self.correct_choices[self.questions.index(LevelQuestion.objects.get(id=question_id))].id
+
+        response = self.client.post(
+            f'/api/level-attempts/{attempt.id}/save-answer/',
+            {'question': question_id, 'selected_choices': [choice_id]}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.answers_so_far, {str(question_id): [choice_id]})
+        # No LevelAssessmentAnswer exists yet — that would leak correct_choice_ids
+        # to the frontend mid-exam (see LevelAssessmentAnswerSerializer).
+        self.assertEqual(attempt.answers.count(), 0)
+        # And the attempt's own serialized `answers` list stays empty too.
+        self.assertEqual(response.data['answers'], [])
+
+    def test_advance_must_be_sequential(self):
+        attempt = self.start_attempt()
+        response = self.client.post(
+            f'/api/level-attempts/{attempt.id}/advance/', {'current_question_index': 2}, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_advance_resets_the_timer_segment_under_per_question_timing(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=60,
+        )
+        attempt = self.start_attempt()
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=45),
+        )
+
+        response = self.client.post(
+            f'/api/level-attempts/{attempt.id}/advance/', {'current_question_index': 1}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['current_question_index'], 1)
+        # Freshly reset — nowhere near the 15s that would remain without a reset.
+        self.assertGreaterEqual(response.data['remaining_seconds'], 59)
+
+    def test_advance_does_not_reset_the_timer_under_fixed_total_timing(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.FIXED_TOTAL, total_exam_minutes=10,
+        )
+        attempt = self.start_attempt()
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=120),
+        )
+
+        response = self.client.post(
+            f'/api/level-attempts/{attempt.id}/advance/', {'current_question_index': 1}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        # 600s total - 120s already elapsed = ~480s left, NOT reset to ~600.
+        self.assertLessEqual(response.data['remaining_seconds'], 481)
+        self.assertGreaterEqual(response.data['remaining_seconds'], 470)
+
+    def test_resuming_after_one_questions_time_fully_elapsed_advances_exactly_one_question(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=60,
+        )
+        attempt = self.start_attempt()
+        # Simulate: away long enough for question 0's 60s to fully elapse,
+        # plus 10s into question 1's own countdown.
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=70),
+        )
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['submitted_at'])
+        self.assertEqual(response.data['current_question_index'], 1)
+        self.assertGreaterEqual(response.data['remaining_seconds'], 48)
+        self.assertLessEqual(response.data['remaining_seconds'], 50)
+
+    def test_resuming_after_multiple_questions_time_elapsed_cascades_through_all_of_them(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=30,
+        )
+        attempt = self.start_attempt()
+        # Away long enough for questions 0 and 1's 30s each (60s) to fully
+        # elapse, landing 5s into question 2 — the last one.
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=65),
+        )
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertIsNone(response.data['submitted_at'])
+        self.assertEqual(response.data['current_question_index'], 2)
+        self.assertGreaterEqual(response.data['remaining_seconds'], 24)
+        self.assertLessEqual(response.data['remaining_seconds'], 26)
+
+    def test_resuming_after_the_last_questions_time_elapsed_auto_submits_with_zero_marks_for_the_rest(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=30,
+        )
+        attempt = self.start_attempt()
+        first_question_id = attempt.questions_drawn[0]
+        first_correct_choice = self.correct_choices[self.questions.index(LevelQuestion.objects.get(id=first_question_id))]
+
+        # Answer question 0 correctly before "leaving" ...
+        self.client.post(
+            f'/api/level-attempts/{attempt.id}/save-answer/',
+            {'question': first_question_id, 'selected_choices': [first_correct_choice.id]}, format='json',
+        )
+        # ... then simulate being away long enough for all three 30s
+        # questions (90s) to fully elapse.
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=95),
+        )
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.data['submitted_at'])
+        self.assertEqual(response.data['remaining_seconds'], 0)
+
+        answers_by_question = {a['question']: a for a in response.data['answers']}
+        self.assertTrue(answers_by_question[first_question_id]['is_correct'])
+        for question_id in attempt.questions_drawn[1:]:
+            self.assertEqual(answers_by_question[question_id]['selected_choices'], [])
+            self.assertFalse(answers_by_question[question_id]['is_correct'])
+
+        # A second fetch of an already-submitted attempt is a pure read —
+        # no re-grading, no error.
+        second_response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(second_response.data['score_percent'], response.data['score_percent'])
+
+    def test_resuming_under_fixed_total_with_time_still_left_does_not_submit(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.FIXED_TOTAL, total_exam_minutes=10,
+        )
+        attempt = self.start_attempt()
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=200),
+        )
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertIsNone(response.data['submitted_at'])
+        self.assertEqual(response.data['current_question_index'], 0)  # FIXED_TOTAL never auto-advances position
+        self.assertGreaterEqual(response.data['remaining_seconds'], 395)
+        self.assertLessEqual(response.data['remaining_seconds'], 401)
+
+    def test_resuming_under_fixed_total_after_time_fully_elapsed_auto_submits(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.FIXED_TOTAL, total_exam_minutes=5,
+        )
+        attempt = self.start_attempt()
+        second_question_id = attempt.questions_drawn[1]
+        second_correct_choice = self.correct_choices[self.questions.index(LevelQuestion.objects.get(id=second_question_id))]
+        self.client.post(
+            f'/api/level-attempts/{attempt.id}/save-answer/',
+            {'question': second_question_id, 'selected_choices': [second_correct_choice.id]}, format='json',
+        )
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=301),
+        )
+
+        response = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertIsNotNone(response.data['submitted_at'])
+        answers_by_question = {a['question']: a for a in response.data['answers']}
+        self.assertTrue(answers_by_question[second_question_id]['is_correct'])
+        for question_id in attempt.questions_drawn:
+            if question_id != second_question_id:
+                self.assertEqual(answers_by_question[question_id]['selected_choices'], [])
+
+    def test_resume_survives_a_simulated_browser_crash_end_to_end(self):
+        """The scenario from the task's own test plan: start, answer one
+        question, "close the browser" (simulated by jumping the stored
+        timestamp back), then fetch again as if reopening the app — same
+        attempt, same question, correctly reduced time, not a fresh attempt."""
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=120,
+        )
+        attempt = self.start_attempt()
+        first_question_id = attempt.questions_drawn[0]
+        first_correct_choice = self.correct_choices[self.questions.index(LevelQuestion.objects.get(id=first_question_id))]
+        self.client.post(
+            f'/api/level-attempts/{attempt.id}/save-answer/',
+            {'question': first_question_id, 'selected_choices': [first_correct_choice.id]}, format='json',
+        )
+
+        # "Close the browser" for a known interval well short of a timeout.
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=30),
+        )
+
+        # "Reopen the app" — my-assessment-level says IN_PROGRESS with this
+        # same attempt id, and fetching it resumes at the same question.
+        status_response = self.client.get('/api/my-assessment-level/')
+        self.assertEqual(status_response.data['status'], 'IN_PROGRESS')
+        self.assertEqual(status_response.data['open_attempt_id'], attempt.id)
+
+        resumed = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(resumed.data['current_question_index'], 0)
+        self.assertEqual(resumed.data['answers_so_far'], {str(first_question_id): [first_correct_choice.id]})
+        self.assertGreaterEqual(resumed.data['remaining_seconds'], 89)
+        self.assertLessEqual(resumed.data['remaining_seconds'], 91)
 
 
 class LevelAssessmentBadgeTests(TestCase):

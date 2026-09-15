@@ -118,6 +118,32 @@ describe('CourseCompletionModal', () => {
     expect(screen.queryByRole('button', { name: /Download Certificate/ })).not.toBeInTheDocument()
   })
 
+  it('disables Retake Course and explains the limit once retakeLimitReached is true', () => {
+    const onRetake = vi.fn()
+    render(
+      <CourseCompletionModal
+        courseName="AML Fundamentals"
+        isEligible={false}
+        retakeLimitReached={true}
+        onRetake={onRetake}
+        onBackToCourse={vi.fn()}
+        onMaybeLater={vi.fn()}
+        onCertificateDownloaded={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/reached the maximum number of retake attempts/i)).toBeInTheDocument()
+    const retakeButton = screen.getByRole('button', { name: 'Retake Course' })
+    expect(retakeButton).toBeDisabled()
+
+    fireEvent.click(retakeButton)
+    expect(onRetake).not.toHaveBeenCalled()
+
+    // Back to Course / Maybe Later stay available — only retaking is blocked.
+    expect(screen.getByRole('button', { name: 'Back to Course' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Maybe Later' })).toBeEnabled()
+  })
+
   it('calls onRetake when Retake Course is clicked', () => {
     const onRetake = vi.fn()
     render(

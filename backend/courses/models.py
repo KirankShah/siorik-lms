@@ -433,6 +433,12 @@ class Enrollment(models.Model):
         default=0,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
+    # How many times the learner has used the "Retake Course" action on this
+    # enrollment (EnrollmentViewSet.retake) — NOT counting the original
+    # attempt. Capped by the learner's own organization's
+    # org_settings.OrganizationSettings.max_course_retake_attempts (null =
+    # unlimited, the original behavior).
+    retake_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ['-enrolled_at']

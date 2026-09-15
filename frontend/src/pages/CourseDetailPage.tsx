@@ -210,6 +210,7 @@ export function CourseDetailPage() {
       courseName={course.title}
       isEligible={!enrollment.certificate_ineligible_reason}
       isRetaking={isRetaking}
+      retakeLimitReached={enrollment.retake_limit_reached}
       newlyCompletedTiers={completionMilestones?.newly_completed_tiers}
       isPathFinale={completionMilestones?.path_fully_completed}
       onRetake={() => void handleRetake()}

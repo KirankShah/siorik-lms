@@ -1,4 +1,3 @@
-from django.db import transaction
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -7,15 +6,28 @@ from rest_framework.views import APIView
 
 from audit.models import AuditLog
 from audit.services import log_action
-from certificates.services import try_issue_learning_path_certificate
 from core.permissions import IsAdminRole
-from gamification.services import award_badges_for_level_assessment_attempt, update_gamification_for_user
 
 from .imports import LevelQuestionImportError, import_level_questions
 from .models import LevelAssessmentAttempt
 from .permissions import editable_assessment_levels_for_user
-from .serializers import AssessmentLevelSerializer, LevelAssessmentAttemptSerializer, LevelAssessmentSubmitSerializer
-from .services import LevelAssessmentError, assigned_assessment_level_for_user, start_level_assessment_attempt
+from .serializers import (
+    AssessmentLevelSerializer,
+    LevelAssessmentAdvanceSerializer,
+    LevelAssessmentAnswerInputSerializer,
+    LevelAssessmentAttemptSerializer,
+    LevelAssessmentSubmitSerializer,
+)
+from .services import (
+    LevelAssessmentError,
+    advance_level_assessment_attempt,
+    assigned_assessment_level_for_user,
+    finalize_level_assessment_attempt,
+    level_assessment_attempts_remaining,
+    resume_level_assessment_attempt,
+    save_level_assessment_answer_progress,
+    start_level_assessment_attempt,
+)
 
 
 class AssessmentLevelViewSet(
@@ -105,13 +117,19 @@ class MyAssessmentLevelView(APIView):
             'assessment_level': AssessmentLevelSerializer(assessment_level, context={'request': request}).data,
             'status': status_value,
             'open_attempt_id': open_attempt.id if open_attempt else None,
+            # None = unlimited (org's max_level_assessment_attempts unset) —
+            # lets the frontend disable/explain the retake action itself
+            # before the learner even tries, not just after a 400 from start.
+            'attempts_remaining': level_assessment_attempts_remaining(request.user, assessment_level),
         })
 
 
 class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     """
     Learner-facing attempt lifecycle: start a fresh attempt, retrieve one to
-    resume/review it, submit answers for grading. Scoped to the caller's own
+    resume it (which also runs the away-time catch-up — see
+    resume_level_assessment_attempt), record progress as the learner answers
+    and advances, and submit for grading. Scoped to the caller's own
     attempts only — there's no admin/instructor browsing surface here.
     """
 
@@ -120,6 +138,17 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
 
     def get_queryset(self):
         return LevelAssessmentAttempt.objects.filter(user=self.request.user)
+
+    def retrieve(self, request, *args, **kwargs):
+        attempt = self.get_object()
+        if attempt.submitted_at is None:
+            # Applies whatever auto-advance/auto-submit would have happened
+            # live, based on real elapsed time since the current timer
+            # segment began — see the function's own docstring. A no-op
+            # (besides this read) if nothing has actually expired.
+            attempt = resume_level_assessment_attempt(attempt)
+        serializer = self.get_serializer(attempt)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['post'])
     def start(self, request):
@@ -134,6 +163,53 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
 
         return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data, status=201)
 
+    @action(detail=True, methods=['post'], url_path='save-answer')
+    def save_answer(self, request, pk=None):
+        """
+        Persists the learner's current selection for one question into the
+        attempt's answers_so_far scratch-pad — called on every answer change
+        during a live attempt (not just when moving on), so a crash
+        mid-selection still resumes with that selection intact. Never
+        touches current_question_index or the timer — see `advance` for that.
+        """
+        attempt = self.get_object()
+        if attempt.submitted_at is not None:
+            return Response({'detail': 'This attempt has already been submitted.'}, status=400)
+
+        serializer = LevelAssessmentAnswerInputSerializer(data=request.data, context={'attempt': attempt})
+        serializer.is_valid(raise_exception=True)
+
+        save_level_assessment_answer_progress(
+            attempt,
+            question=serializer.validated_data['question'],
+            selected_choice_ids=[choice.id for choice in serializer.validated_data['selected_choices']],
+        )
+        return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def advance(self, request, pk=None):
+        """
+        Moves the attempt on to the next question — called right before the
+        frontend locally advances, whether by the learner clicking Next or a
+        PER_QUESTION timeout auto-advancing, so the server always knows
+        exactly where the learner is (needed for resume — see
+        resume_level_assessment_attempt) and, under PER_QUESTION timing,
+        resets the new question's own countdown.
+        """
+        attempt = self.get_object()
+        if attempt.submitted_at is not None:
+            return Response({'detail': 'This attempt has already been submitted.'}, status=400)
+
+        serializer = LevelAssessmentAdvanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            advance_level_assessment_attempt(attempt, new_index=serializer.validated_data['current_question_index'])
+        except LevelAssessmentError as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+        return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
+
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
         attempt = self.get_object()
@@ -143,27 +219,10 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
         serializer = LevelAssessmentSubmitSerializer(data=request.data, context={'attempt': attempt})
         serializer.is_valid(raise_exception=True)
 
-        with transaction.atomic():
-            for answer_data in serializer.validated_data['answers']:
-                question = answer_data['question']
-                selected_choices = answer_data['selected_choices']
-                correct_choice_ids = set(question.choices.filter(is_correct=True).values_list('id', flat=True))
-                selected_ids = {choice.id for choice in selected_choices}
-                is_correct = selected_ids == correct_choice_ids
-
-                answer = attempt.answers.create(question=question, is_correct=is_correct)
-                answer.selected_choices.set(selected_choices)
-
-            attempt.calculate_score_percent()
-            # Same trigger point as course completion/quiz attempt — keeps
-            # LeaderboardEntry.total_points (and level_assessments_passed_count)
-            # in sync with this attempt's outcome immediately.
-            update_gamification_for_user(request.user)
-            award_badges_for_level_assessment_attempt(attempt)
-            # Passing this may be the last piece needed for the learner's
-            # single Learning Path Completion Certificate, if every course
-            # in their path is already done — see
-            # certificates.services.try_issue_learning_path_certificate.
-            try_issue_learning_path_certificate(request.user)
+        answers_by_question_id = {
+            answer_data['question'].id: [choice.id for choice in answer_data['selected_choices']]
+            for answer_data in serializer.validated_data['answers']
+        }
+        finalize_level_assessment_attempt(attempt, answers_by_question_id=answers_by_question_id)
 
         return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)

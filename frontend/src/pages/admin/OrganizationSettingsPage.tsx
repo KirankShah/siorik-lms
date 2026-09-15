@@ -159,6 +159,159 @@ function SettingsForm({
   )
 }
 
+interface MaxAttemptsDraft {
+  levelLimited: boolean
+  levelValue: string
+  courseLimited: boolean
+  courseValue: string
+}
+
+const DEFAULT_ATTEMPTS_CAP = '3'
+
+function maxAttemptsDraftFromSettings(settings: OrganizationSettings): MaxAttemptsDraft {
+  return {
+    levelLimited: settings.max_level_assessment_attempts !== null,
+    levelValue: settings.max_level_assessment_attempts !== null ? String(settings.max_level_assessment_attempts) : DEFAULT_ATTEMPTS_CAP,
+    courseLimited: settings.max_course_retake_attempts !== null,
+    courseValue: settings.max_course_retake_attempts !== null ? String(settings.max_course_retake_attempts) : DEFAULT_ATTEMPTS_CAP,
+  }
+}
+
+// Unlimited/Limited toggle for each of the two independent attempt caps —
+// null (Unlimited) on the wire matches today's behavior exactly, so an org
+// that never touches this card keeps working exactly as it always has.
+function MaxAttemptsSettingsForm({
+  settings,
+  onSaved,
+}: {
+  settings: OrganizationSettings
+  onSaved: (updated: OrganizationSettings) => void
+}) {
+  const [draft, setDraft] = useState<MaxAttemptsDraft>(maxAttemptsDraftFromSettings(settings))
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    setDraft(maxAttemptsDraftFromSettings(settings))
+    setError(null)
+    setSuccess(false)
+  }, [settings])
+
+  async function handleSave() {
+    setIsSaving(true)
+    setError(null)
+    setSuccess(false)
+    try {
+      const updated = await updateOrganizationSettings(settings.id, {
+        max_level_assessment_attempts: draft.levelLimited ? Number(draft.levelValue) : null,
+        max_course_retake_attempts: draft.courseLimited ? Number(draft.courseValue) : null,
+      })
+      onSaved(updated)
+      setSuccess(true)
+    } catch (err) {
+      setError(extractFieldError(err) ?? 'Could not save these limits.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <Card className="mt-6 max-w-xl">
+      <h2 className="text-sm font-semibold text-neutral-900">Maximum Attempts</h2>
+      <p className="mt-1 text-sm text-neutral-500">
+        Optional hard caps. Once a learner reaches the limit without passing, the corresponding retake action is
+        disabled with an explanation — their Final Status stays Fail either way.
+      </p>
+
+      {error && (
+        <Banner variant="warning" className="mt-4">
+          {error}
+        </Banner>
+      )}
+      {success && !error && (
+        <Banner variant="success" className="mt-4">
+          Saved.
+        </Banner>
+      )}
+
+      <div className="mt-4 space-y-5">
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <p className="text-sm font-medium text-neutral-900">Level Assessment attempts</p>
+          <p className="mt-1 text-xs text-neutral-500">
+            Counts every attempt at a learner's assigned Level Assessment — the first plus every retake.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="flex overflow-hidden rounded-md border border-neutral-300">
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, levelLimited: false })}
+                className={`px-3 py-1.5 text-sm transition ${!draft.levelLimited ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Unlimited
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, levelLimited: true })}
+                className={`px-3 py-1.5 text-sm transition ${draft.levelLimited ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Limited to X attempts
+              </button>
+            </div>
+            {draft.levelLimited && (
+              <input
+                type="number"
+                min={1}
+                value={draft.levelValue}
+                onChange={(e) => setDraft({ ...draft, levelValue: e.target.value })}
+                className="w-20 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <p className="text-sm font-medium text-neutral-900">Course retake attempts</p>
+          <p className="mt-1 text-xs text-neutral-500">
+            Counts only the "Retake Course" action itself, not the original attempt.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="flex overflow-hidden rounded-md border border-neutral-300">
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, courseLimited: false })}
+                className={`px-3 py-1.5 text-sm transition ${!draft.courseLimited ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Unlimited
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, courseLimited: true })}
+                className={`px-3 py-1.5 text-sm transition ${draft.courseLimited ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Limited to X attempts
+              </button>
+            </div>
+            {draft.courseLimited && (
+              <input
+                type="number"
+                min={1}
+                value={draft.courseValue}
+                onChange={(e) => setDraft({ ...draft, courseValue: e.target.value })}
+                className="w-20 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+            )}
+          </div>
+        </div>
+
+        <Button onClick={() => void handleSave()} disabled={isSaving}>
+          {isSaving ? 'Saving…' : 'Save limits'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 const FREQUENCY_OPTIONS: { value: ReminderFrequency; label: string }[] = [
   { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
@@ -415,6 +568,7 @@ export function OrganizationSettingsPage() {
       )}
 
       {selected && <SettingsForm settings={selected} onSaved={applyUpdate} />}
+      {selected && <MaxAttemptsSettingsForm settings={selected} onSaved={applyUpdate} />}
       {selected && <ReminderSettingsForm settings={selected} onSaved={applyUpdate} />}
     </div>
   )

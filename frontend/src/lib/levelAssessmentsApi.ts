@@ -53,3 +53,31 @@ export function submitLevelAssessmentAttempt(
     body: { answers },
   })
 }
+
+// Persists the learner's current selection for one question into the
+// attempt's resume scratch-pad — called on every answer change during a
+// live attempt (not just when moving on), so a crash mid-selection still
+// resumes with that selection intact. Never touches position or the timer.
+export function saveLevelAssessmentAnswerProgress(
+  attemptId: number,
+  answer: LevelAssessmentAnswerInput,
+): Promise<LevelAssessmentAttempt> {
+  return apiFetch<LevelAssessmentAttempt>(`/level-attempts/${attemptId}/save-answer/`, {
+    method: 'POST',
+    body: answer,
+  })
+}
+
+// Moves the attempt on to the next question — called right before the
+// frontend locally advances (a Next/Finish click, or a PER_QUESTION timeout
+// auto-advancing), so the server always knows exactly where the learner is
+// and, under PER_QUESTION timing, resets the new question's own countdown.
+export function advanceLevelAssessmentAttempt(
+  attemptId: number,
+  currentQuestionIndex: number,
+): Promise<LevelAssessmentAttempt> {
+  return apiFetch<LevelAssessmentAttempt>(`/level-attempts/${attemptId}/advance/`, {
+    method: 'POST',
+    body: { current_question_index: currentQuestionIndex },
+  })
+}

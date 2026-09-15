@@ -893,10 +893,27 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         Quiz.max_attempts back to zero used, since that's counted live off
         these rows rather than a separate counter. Used by the "Retake
         Course" action on CourseCompletionModal.tsx.
+
+        Capped by the learner's own organization's
+        org_settings.OrganizationSettings.max_course_retake_attempts (null =
+        unlimited) — Enrollment.retake_count counts only this action, not the
+        original attempt, so a cap of 2 allows 2 retakes (3 tries total)
+        before this is refused with a clear reason instead of silently
+        resetting progress again.
         """
         enrollment = self.get_object()
         course = enrollment.course
         user = enrollment.user
+
+        max_retakes = user.organization.settings.max_course_retake_attempts if user.organization_id else None
+        if max_retakes is not None and enrollment.retake_count >= max_retakes:
+            return Response(
+                {
+                    'detail': f'You have reached the maximum of {max_retakes} retake'
+                    f'{"s" if max_retakes != 1 else ""} for this course.'
+                },
+                status=400,
+            )
 
         with transaction.atomic():
             SlideProgress.objects.filter(enrollment=enrollment).delete()
@@ -910,6 +927,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
             enrollment.status = Enrollment.Status.NOT_STARTED
             enrollment.progress_percent = 0
             enrollment.completed_at = None
+            enrollment.retake_count += 1
             enrollment.save()
 
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)

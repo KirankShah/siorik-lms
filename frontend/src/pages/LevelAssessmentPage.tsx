@@ -5,9 +5,12 @@ import { ChoiceQuestionResult } from '../components/ChoiceQuestionResult'
 import { QuestionFeedback } from '../components/QuestionFeedback'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { ApiError } from '../lib/apiClient'
 import {
+  advanceLevelAssessmentAttempt,
   fetchLevelAssessmentAttempt,
   fetchMyAssessmentLevel,
+  saveLevelAssessmentAnswerProgress,
   startLevelAssessmentAttempt,
   submitLevelAssessmentAttempt,
 } from '../lib/levelAssessmentsApi'
@@ -22,10 +25,12 @@ const DEFAULT_TOTAL_EXAM_MINUTES = 60
 // stall the assessment.
 const TIMEOUT_MESSAGE_DELAY_MS = 1800
 
-function buildInitialAnswers(attempt: LevelAssessmentAttempt): Record<number, Set<number>> {
+function buildAnswersFromAttempt(attempt: LevelAssessmentAttempt): Record<number, Set<number>> {
   const initial: Record<number, Set<number>> = {}
   for (const question of attempt.questions) {
-    initial[question.id] = new Set()
+    // Resume support: prefills whatever was already saved via save-answer
+    // before a crash/closure — see answers_so_far on the backend model.
+    initial[question.id] = new Set(attempt.answers_so_far[String(question.id)] ?? [])
   }
   return initial
 }
@@ -34,6 +39,14 @@ function formatMinutesSeconds(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function extractErrorDetail(err: unknown, fallback: string): string {
+  if (err instanceof ApiError && err.body && typeof err.body === 'object') {
+    const detail = (err.body as { detail?: string }).detail
+    if (typeof detail === 'string') return detail
+  }
+  return fallback
 }
 
 export function LevelAssessmentPage() {
@@ -48,17 +61,23 @@ export function LevelAssessmentPage() {
   // effect below and its own comment); this just tells that screen's button
   // whether to resume this attempt instead of starting a brand new one.
   const [pendingOpenAttemptId, setPendingOpenAttemptId] = useState<number | null>(null)
+  // None = unlimited (org's max_level_assessment_attempts unset); otherwise
+  // how many more attempts remain — 0 disables starting/retaking, with an
+  // explanation, before the learner even tries (the backend enforces the
+  // same cap regardless, as a defense-in-depth backstop).
+  const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null)
 
-  // Sequential flow state — a single question shown at a time, no skipping
-  // ahead and no returning to a previous one once currentIndex advances past
-  // it (there is simply no control anywhere in this UI that can move it
-  // backwards or set it to an arbitrary value).
-  const [currentIndex, setCurrentIndex] = useState(0)
-  // PER_QUESTION mode only — resets every question (see the timer effect below).
+  // PER_QUESTION mode only — resets every question, seeded from the
+  // server-computed attempt.remaining_seconds (see the timer effect below),
+  // not always the full per-question allocation, so a fresh start, a resumed
+  // attempt, and an ordinary question-to-question advance all behave
+  // correctly through the exact same code path.
   const [timeLeft, setTimeLeft] = useState(0)
   const [questionLocked, setQuestionLocked] = useState(false)
   // FIXED_TOTAL mode only — one countdown for the whole attempt, persisting
-  // across every question (see the overall-timer effect below).
+  // across every question (see the overall-timer effect below). Also seeded
+  // from attempt.remaining_seconds, once per attempt (start or resume), and
+  // left running uninterrupted across every subsequent question change.
   const [overallTimeLeft, setOverallTimeLeft] = useState(0)
   // Set right before an auto-submit triggered by the FIXED_TOTAL overall
   // timer reaching zero, so the results screen can explain why.
@@ -69,6 +88,11 @@ export function LevelAssessmentPage() {
   // Rounded defensively — total_exam_minutes is always a whole number from
   // the backend, but this keeps the countdown exact even so.
   const totalExamSeconds = Math.round((assessmentLevel?.total_exam_minutes ?? DEFAULT_TOTAL_EXAM_MINUTES) * 60)
+  // The single source of truth for "which question" — the server's own
+  // current_question_index (updated via `advance`, and by the resume
+  // catch-up on the backend) rather than a separate, potentially-divergent
+  // piece of local state.
+  const currentIndex = attempt?.current_question_index ?? 0
 
   useEffect(() => {
     let cancelled = false
@@ -84,6 +108,7 @@ export function LevelAssessmentPage() {
         }
         setAssessmentLevel(myStatus.assessment_level)
         setLastStatus(myStatus.status ?? null)
+        setAttemptsRemaining(myStatus.attempts_remaining ?? null)
         // The landing/declaration screen always shows first — including when
         // resuming an already-open attempt (e.g. after a page reload), since
         // "before any question is shown" applies there too. Only the button's
@@ -126,21 +151,24 @@ export function LevelAssessmentPage() {
   })
 
   // PER_QUESTION mode: the countdown, one interval per question — resets on
-  // entry and owns its own decrement-and-lock decision entirely through
-  // functional setState updates (`setTimeLeft(t => ...)`), rather than a
-  // second effect reading `timeLeft` back out of render state. Reading it
-  // back was the original bug here: on the very first render where `stage`
-  // becomes 'in_progress', a separate "tick" effect and this "reset" effect
-  // both ran in the same commit, and the tick effect saw `timeLeft`'s stale
-  // pre-reset value (0, its initial state) before the reset's
-  // setTimeLeft(secondsPerQuestion) had actually applied — locking the
-  // question instantly, every time, rather than ever visibly counting down.
-  // A single effect avoids that entirely: there's no other code path that
-  // can observe `timeLeft` before this effect's own reset has taken effect.
+  // entry (seeded from attempt.remaining_seconds, computed server-side) and
+  // owns its own decrement-and-lock decision entirely through functional
+  // setState updates (`setTimeLeft(t => ...)`), rather than a second effect
+  // reading `timeLeft` back out of render state. Reading it back was the
+  // original bug here: on the very first render where `stage` becomes
+  // 'in_progress', a separate "tick" effect and this "reset" effect both ran
+  // in the same commit, and the tick effect saw `timeLeft`'s stale pre-reset
+  // value (0, its initial state) before the reset had actually applied —
+  // locking the question instantly, every time, rather than ever visibly
+  // counting down. A single effect avoids that entirely: there's no other
+  // code path that can observe `timeLeft` before this effect's own reset has
+  // taken effect. Keyed on attempt?.id too, not just current_question_index,
+  // so a brand new attempt that happens to start at the same index a prior
+  // one ended on (e.g. both single-question) still reseeds correctly.
   useEffect(() => {
-    if (timingMode !== 'PER_QUESTION' || stage !== 'in_progress') return
+    if (timingMode !== 'PER_QUESTION' || stage !== 'in_progress' || !attempt) return
     setQuestionLocked(false)
-    setTimeLeft(secondsPerQuestion)
+    setTimeLeft(attempt.remaining_seconds)
 
     const interval = setInterval(() => {
       if (hasAnswerRef.current) return // frozen once answered — see hasAnswerRef above
@@ -156,23 +184,25 @@ export function LevelAssessmentPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, stage, timingMode, secondsPerQuestion])
+  }, [attempt?.id, attempt?.current_question_index, stage, timingMode])
 
   // FIXED_TOTAL mode: one countdown for the entire attempt — deliberately
-  // keyed on attempt?.id (not currentIndex, and not stage) so it starts once
-  // when a new attempt begins and keeps running unattended across every
+  // keyed on attempt?.id only (not current_question_index, and not stage) so
+  // it starts once when a new attempt begins (seeded from
+  // attempt.remaining_seconds — the full allocation for a fresh start, or
+  // correctly less for a resume) and keeps running unattended across every
   // question, never resetting or freezing just because the current question
-  // was answered (unlike the PER_QUESTION timer above, this one only cares
-  // about total elapsed exam time). Hitting zero triggers the auto-submit
-  // directly from inside this same interval's own decrement logic — NOT from
-  // a separate effect watching `overallTimeLeft === 0`, which would be
-  // indistinguishable from that state variable's own pre-reset initial value
-  // (also 0) and would fire the submit immediately on every mount, before
-  // the reset above has even applied. Same hazard, same fix, as the
-  // PER_QUESTION timer's own comment above describes.
+  // changed or was answered (unlike the PER_QUESTION timer above, this one
+  // only cares about total elapsed exam time). Hitting zero triggers the
+  // auto-submit directly from inside this same interval's own decrement
+  // logic — NOT from a separate effect watching `overallTimeLeft === 0`,
+  // which would be indistinguishable from that state variable's own
+  // pre-reset initial value (also 0) and would fire the submit immediately
+  // on every mount, before the reset above has even applied. Same hazard,
+  // same fix, as the PER_QUESTION timer's own comment above describes.
   useEffect(() => {
     if (timingMode !== 'FIXED_TOTAL' || !attempt) return
-    setOverallTimeLeft(totalExamSeconds)
+    setOverallTimeLeft(attempt.remaining_seconds)
 
     const interval = setInterval(() => {
       setOverallTimeLeft((t) => {
@@ -188,24 +218,33 @@ export function LevelAssessmentPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attempt?.id, timingMode, totalExamSeconds])
+  }, [attempt?.id, timingMode])
 
   // Auto-advance (or auto-submit, on the last question) after the "Time's
   // up" message has had a moment to be read — PER_QUESTION mode only.
   useEffect(() => {
     if (!questionLocked) return
-    const timeout = setTimeout(goToNextOrFinish, TIMEOUT_MESSAGE_DELAY_MS)
+    const timeout = setTimeout(() => void goToNextOrFinish(), TIMEOUT_MESSAGE_DELAY_MS)
     return () => clearTimeout(timeout)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questionLocked])
 
-  function goToNextOrFinish() {
+  async function goToNextOrFinish() {
     if (!attempt) return
     const isLast = currentIndex === attempt.questions.length - 1
     if (isLast) {
-      void handleSubmit()
-    } else {
-      setCurrentIndex((i) => i + 1)
+      await handleSubmit()
+      return
+    }
+    // Tells the server to move on (and, under PER_QUESTION timing, reset the
+    // new question's own countdown) BEFORE advancing locally — the server
+    // always needs to know exactly where the learner is for resume to work
+    // correctly after a crash right around this moment.
+    try {
+      const updated = await advanceLevelAssessmentAttempt(attempt.id, currentIndex + 1)
+      setAttempt(updated)
+    } catch {
+      setError('Could not move to the next question. Please try again.')
     }
   }
 
@@ -216,12 +255,11 @@ export function LevelAssessmentPage() {
     try {
       const newAttempt = await startLevelAssessmentAttempt()
       setAttempt(newAttempt)
-      setAnswers(buildInitialAnswers(newAttempt))
-      setCurrentIndex(0)
+      setAnswers(buildAnswersFromAttempt(newAttempt))
       setQuestionLocked(false)
       setStage('in_progress')
-    } catch {
-      setError('Could not start the assessment. Please try again.')
+    } catch (err) {
+      setError(extractErrorDetail(err, 'Could not start the assessment. Please try again.'))
       setStage('landing')
     }
   }
@@ -231,12 +269,25 @@ export function LevelAssessmentPage() {
     setError(null)
     setAutoSubmitReason(null)
     try {
+      // Applies the away-time catch-up server-side (see backend
+      // resume_level_assessment_attempt) — the response already reflects
+      // any auto-advance/auto-submit that should have happened live.
       const openAttempt = await fetchLevelAssessmentAttempt(openAttemptId)
       setAttempt(openAttempt)
-      setAnswers(buildInitialAnswers(openAttempt))
-      setCurrentIndex(0)
+      setAnswers(buildAnswersFromAttempt(openAttempt))
       setQuestionLocked(false)
-      setStage('in_progress')
+      if (openAttempt.submitted_at) {
+        // The backend's own away-time catch-up (resume_level_assessment_attempt)
+        // decided the whole exam's time had already run out before we even
+        // got here, and auto-submitted on the learner's behalf.
+        setAutoSubmitReason('time_expired')
+        setLastStatus(openAttempt.passed ? 'PASSED' : 'FAILED')
+        setPendingOpenAttemptId(null)
+        setAttemptsRemaining((prev) => (prev === null ? null : Math.max(0, prev - 1)))
+        setStage('results')
+      } else {
+        setStage('in_progress')
+      }
     } catch {
       setError('Could not resume your assessment. Please try again.')
       setStage('landing')
@@ -256,7 +307,7 @@ export function LevelAssessmentPage() {
   }
 
   function toggleChoice(questionId: number, choiceId: number, isMultiple: boolean) {
-    if (questionLocked) return
+    if (questionLocked || !attempt) return
     setAnswers((prev) => {
       const selected = new Set(prev[questionId] ?? [])
       if (isMultiple) {
@@ -266,6 +317,14 @@ export function LevelAssessmentPage() {
         selected.clear()
         selected.add(choiceId)
       }
+      // Fire-and-forget: persisted for resume purposes only — the frontend's
+      // own `answers` state here is already the source of truth for display
+      // and for what actually gets submitted, so a slow/failed save doesn't
+      // block the learner from continuing.
+      void saveLevelAssessmentAnswerProgress(attempt.id, {
+        question: questionId,
+        selected_choices: Array.from(selected),
+      }).catch(() => {})
       return { ...prev, [questionId]: selected }
     })
   }
@@ -283,6 +342,7 @@ export function LevelAssessmentPage() {
       setAttempt(result)
       setLastStatus(result.passed ? 'PASSED' : 'FAILED')
       setPendingOpenAttemptId(null)
+      setAttemptsRemaining((prev) => (prev === null ? null : Math.max(0, prev - 1)))
       setStage('results')
     } catch {
       setError('Could not submit the assessment. Please try again.')
@@ -311,30 +371,33 @@ export function LevelAssessmentPage() {
     const isRetake = !isResuming && (lastStatus === 'PASSED' || lastStatus === 'FAILED')
     const isFixedTotal = assessmentLevel.timing_mode === 'FIXED_TOTAL'
     const timeAllocationText = isFixedTotal
-      ? `${assessmentLevel.total_exam_minutes} minutes total for the entire exam`
-      : `${assessmentLevel.seconds_per_question}s per question`
-    const confirmLabel = isResuming ? "I'm Ready — Continue Exam" : "I'm Ready — Start Exam"
+      ? `You will have ${assessmentLevel.total_exam_minutes} minutes for the entire exam; if time runs out before ` +
+        'you finish, the exam will submit automatically with your answers so far, and any unanswered questions ' +
+        'will be marked as zero.'
+      : `You will have ${assessmentLevel.seconds_per_question} seconds to answer each question; once time runs ` +
+        'out on a question, it will lock and be marked as unanswered.'
+    const confirmLabel = isResuming ? "I'm Ready, Continue Exam" : "I'm Ready, Start Exam"
+    const attemptsExhausted = !isResuming && attemptsRemaining === 0
 
     return (
       <Card className="text-center">
         <h1 className="text-base font-semibold text-neutral-900">{assessmentLevel.name_display} Assessment</h1>
         <p className="mt-2 text-sm text-neutral-500">
           {assessmentLevel.questions_per_attempt} question{assessmentLevel.questions_per_attempt === 1 ? '' : 's'} · Pass
-          mark: {assessmentLevel.pass_threshold}% · {timeAllocationText}
+          mark: {assessmentLevel.pass_threshold}%
         </p>
-        <p className="mt-1 text-xs text-neutral-400">
-          Questions are shown one at a time. Once you move on you can't go back.{' '}
-          {isFixedTotal
-            ? "If the overall exam timer runs out, your exam is submitted automatically and any question you haven't answered yet is marked at zero."
-            : 'An unanswered question locks at zero marks when its timer runs out.'}
-        </p>
+        <p className="mt-2 text-sm text-neutral-600">{timeAllocationText}</p>
 
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-left">
-          <p className="text-sm font-semibold text-amber-900">Exam Integrity Declaration</p>
-          <p className="mt-1 text-xs text-amber-800">
-            This assessment must be completed independently — without reference materials, search engines, or AI
-            tools of any kind — matching professional exam-proctoring standards. By clicking "{confirmLabel}" below,
-            you confirm you will comply with this requirement.
+          <p className="text-sm font-semibold text-amber-900">Before You Begin</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">
+            <li>Complete this assessment independently, without help from colleagues.</li>
+            <li>No reference materials or notes.</li>
+            <li>No search engines or AI tools during the exam.</li>
+            <li>Ensure a stable internet connection before starting.</li>
+          </ul>
+          <p className="mt-2 text-xs text-amber-800">
+            Your results may be relied upon as evidence of your training and competency.
           </p>
         </div>
 
@@ -349,11 +412,24 @@ export function LevelAssessmentPage() {
         {!isResuming && lastStatus === 'PASSED' && (
           <p className="mt-2 text-sm text-emerald-700">You've already passed this assessment.</p>
         )}
+        {!isResuming && attemptsRemaining !== null && attemptsRemaining > 0 && (
+          <p className="mt-2 text-xs text-neutral-400">
+            {attemptsRemaining} attempt{attemptsRemaining === 1 ? '' : 's'} remaining.
+          </p>
+        )}
+        {attemptsExhausted && (
+          <p className="mt-2 text-sm text-red-600">
+            You have reached the maximum number of attempts for this assessment. Please contact your training
+            administrator.
+          </p>
+        )}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-        <Button className="mt-4" onClick={handleContinue}>
+        <Button className="mt-4" onClick={handleContinue} disabled={attemptsExhausted}>
           {confirmLabel}
         </Button>
-        {isRetake && <p className="mt-2 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>}
+        {isRetake && !attemptsExhausted && (
+          <p className="mt-2 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>
+        )}
       </Card>
     )
   }
@@ -423,7 +499,7 @@ export function LevelAssessmentPage() {
           <Button
             className="mt-6"
             disabled={!hasAnswer || stage === 'submitting'}
-            onClick={goToNextOrFinish}
+            onClick={() => void goToNextOrFinish()}
           >
             {stage === 'submitting' ? 'Submitting…' : isLast ? 'Finish' : 'Next'}
           </Button>
@@ -481,14 +557,22 @@ export function LevelAssessmentPage() {
           })}
         </div>
 
+        {attemptsRemaining === 0 && !attempt.passed && (
+          <p className="mt-4 text-sm text-red-600">
+            You have reached the maximum number of attempts for this assessment. Please contact your training
+            administrator.
+          </p>
+        )}
+
         <div className="mt-6 flex flex-wrap gap-3">
           <Link to="/dashboard" className="inline-flex">
             <Button variant="secondary">Back to Dashboard</Button>
           </Link>
           {/* Routes back to the landing/declaration screen rather than
               starting a fresh attempt directly — every exam start (including
-              a retake) must go through the explicit "I'm Ready" confirmation. */}
-          {!attempt.passed && (
+              a retake) must go through the explicit "I'm Ready" confirmation,
+              which is also where the max-attempts cap is actually enforced. */}
+          {!attempt.passed && attemptsRemaining !== 0 && (
             <Button
               onClick={() => {
                 setPendingOpenAttemptId(null)

@@ -408,6 +408,12 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     # certificates.services.certificate_ineligibility_reason. Drives the
     # frontend's "Retake Course" action.
     certificate_ineligible_reason = serializers.SerializerMethodField()
+    # True once retake_count has reached the learner's own organization's
+    # org_settings.OrganizationSettings.max_course_retake_attempts (always
+    # False when that's unset — unlimited, the original behavior). Computed
+    # server-side so the frontend can disable/explain "Retake Course" without
+    # needing to know the org's raw settings value itself.
+    retake_limit_reached = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
@@ -425,11 +431,13 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'completed_lesson_ids',
             'slide_progress',
             'certificate_ineligible_reason',
+            'retake_count',
+            'retake_limit_reached',
         ]
         read_only_fields = [
             'id', 'user', 'course_title', 'course_slug', 'course_completion_deadline_days',
             'enrolled_at', 'completed_at', 'completed_lesson_ids', 'slide_progress',
-            'certificate_ineligible_reason',
+            'certificate_ineligible_reason', 'retake_count', 'retake_limit_reached',
         ]
 
     def get_completed_lesson_ids(self, enrollment):
@@ -439,6 +447,12 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if enrollment.status != Enrollment.Status.COMPLETED:
             return None
         return certificate_ineligibility_reason(enrollment.user, enrollment.course)
+
+    def get_retake_limit_reached(self, enrollment):
+        if enrollment.user.organization_id is None:
+            return False
+        max_retakes = enrollment.user.organization.settings.max_course_retake_attempts
+        return max_retakes is not None and enrollment.retake_count >= max_retakes
 
     def validate_course(self, course):
         request = self.context['request']

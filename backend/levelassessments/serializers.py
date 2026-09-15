@@ -5,6 +5,7 @@ from rest_framework import serializers
 from accounts.serializers import OrganizationSerializer
 
 from .models import AssessmentLevel, LevelAssessmentAnswer, LevelAssessmentAttempt, LevelChoice, LevelQuestion
+from .services import remaining_seconds_for_attempt
 
 
 class AssessmentLevelSerializer(serializers.ModelSerializer):
@@ -105,6 +106,15 @@ class LevelAssessmentAttemptSerializer(serializers.ModelSerializer):
     pass_threshold = serializers.IntegerField(
         source='assessment_level.organization.settings.pass_mark_percent', read_only=True
     )
+    # Resume support (see the model's own field docstrings and
+    # levelassessments.services.resume_level_assessment_attempt):
+    # current_question_index/answers_so_far let the frontend restore exactly
+    # where the learner left off; remaining_seconds is computed fresh on
+    # every serialization (never stored) from timer_segment_started_at, so
+    # it's correct for a freshly-started attempt, a live one, or one just
+    # resumed after time away — the frontend seeds its own client-side
+    # countdown from this single value in every case, fresh start included.
+    remaining_seconds = serializers.SerializerMethodField()
 
     class Meta:
         model = LevelAssessmentAttempt
@@ -118,10 +128,18 @@ class LevelAssessmentAttemptSerializer(serializers.ModelSerializer):
             'submitted_at',
             'score_percent',
             'passed',
+            'current_question_index',
+            'answers_so_far',
+            'remaining_seconds',
             'questions',
             'answers',
         ]
         read_only_fields = fields
+
+    def get_remaining_seconds(self, obj):
+        if obj.submitted_at is not None:
+            return 0
+        return remaining_seconds_for_attempt(obj)
 
     def get_questions(self, obj):
         # Preserves the attempt's own stored draw order (already randomized
@@ -147,6 +165,14 @@ class LevelAssessmentAnswerInputSerializer(serializers.Serializer):
             if choice.question_id != question.id:
                 raise serializers.ValidationError('Selected choice does not belong to the given question.')
         return attrs
+
+
+class LevelAssessmentAdvanceSerializer(serializers.Serializer):
+    """Input for LevelAssessmentAttemptViewSet.advance — see
+    levelassessments.services.advance_level_assessment_attempt for the
+    sequential-only validation this hands off to."""
+
+    current_question_index = serializers.IntegerField(min_value=0)
 
 
 class LevelAssessmentSubmitSerializer(serializers.Serializer):

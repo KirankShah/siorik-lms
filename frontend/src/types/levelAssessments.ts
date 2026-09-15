@@ -63,6 +63,17 @@ export interface LevelAssessmentAttempt {
   submitted_at: string | null
   score_percent: string
   passed: boolean
+  // Resume support (see backend LevelAssessmentAttempt's own field
+  // docstrings) — which question the learner is on, their own selections so
+  // far (never answer-key data, safe pre-submission), and how many seconds
+  // remain in the CURRENT timer segment, computed fresh server-side on every
+  // fetch from the stored segment-start timestamp. The frontend seeds its
+  // own client-side countdown from remaining_seconds in every case — a
+  // fresh start, a live re-fetch, or a resume after time away — rather than
+  // assuming the full per-question/total-exam allocation.
+  current_question_index: number
+  answers_so_far: Record<string, number[]>
+  remaining_seconds: number
   questions: LevelQuestion[]
   answers: LevelAssessmentAnswer[]
 }
@@ -72,6 +83,9 @@ export interface MyAssessmentLevelStatus {
   assessment_level?: AssessmentLevelSummary
   status?: LevelAssessmentStatus
   open_attempt_id?: number | null
+  // None = unlimited (org's max_level_assessment_attempts unset); otherwise
+  // how many more attempts this learner may still start, floored at 0.
+  attempts_remaining?: number | null
 }
 
 // Result of POST /assessment-levels/<id>/import-questions/ — one entry per

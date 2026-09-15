@@ -20,6 +20,11 @@ export interface OrganizationSettings {
   seconds_per_question: number
   total_exam_minutes: number
   pass_mark_percent: number
+  // null = unlimited (the original behavior); a positive number is a hard
+  // cap — see backend OrganizationSettings' own field docstring for exactly
+  // what each counts.
+  max_level_assessment_attempts: number | null
+  max_course_retake_attempts: number | null
   logged_in_inactive_reminder_enabled: boolean
   logged_in_inactive_reminder_frequency: ReminderFrequency
   logged_in_inactive_last_sent_at: string | null
@@ -36,6 +41,8 @@ export type OrganizationSettingsInput = Partial<
     | 'seconds_per_question'
     | 'total_exam_minutes'
     | 'pass_mark_percent'
+    | 'max_level_assessment_attempts'
+    | 'max_course_retake_attempts'
     | 'logged_in_inactive_reminder_enabled'
     | 'logged_in_inactive_reminder_frequency'
     | 'never_logged_in_reminder_enabled'

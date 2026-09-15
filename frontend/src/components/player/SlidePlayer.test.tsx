@@ -43,6 +43,8 @@ function makeEnrollment(): Enrollment {
     completed_lesson_ids: [],
     slide_progress: [],
     certificate_ineligible_reason: null,
+    retake_count: 0,
+    retake_limit_reached: false,
   }
 }
 

@@ -124,4 +124,10 @@ export interface Enrollment {
   // the course-wide quiz average falling short of the course's pass
   // threshold. See backend certificates.services.certificate_ineligibility_reason.
   certificate_ineligible_reason: string | null
+  // How many times "Retake Course" has been used on this enrollment (not
+  // counting the original attempt), and whether that's reached the
+  // learner's own organization's org_settings.OrganizationSettings.
+  // max_course_retake_attempts (always false when that's unset — unlimited).
+  retake_count: number
+  retake_limit_reached: boolean
 }

@@ -7,7 +7,8 @@ import type { AssessmentLevelSummary, LevelAssessmentAttempt, MyAssessmentLevelS
 
 vi.mock('../lib/levelAssessmentsApi')
 
-const START_BUTTON_NAME = "I'm Ready — Start Exam"
+const START_BUTTON_NAME = "I'm Ready, Start Exam"
+const CONTINUE_BUTTON_NAME = "I'm Ready, Continue Exam"
 
 // Real time, not mocked — a self-rescheduling setTimeout effect (the
 // countdown reschedules itself every tick) doesn't compose reliably with
@@ -41,7 +42,7 @@ const fixedTotalAssessmentLevel: AssessmentLevelSummary = {
   total_exam_minutes: TOTAL_EXAM_SECONDS / 60,
 }
 
-function buildAttempt(): LevelAssessmentAttempt {
+function buildAttempt(overrides: Partial<LevelAssessmentAttempt> = {}): LevelAssessmentAttempt {
   return {
     id: 500,
     user: 1,
@@ -52,6 +53,9 @@ function buildAttempt(): LevelAssessmentAttempt {
     submitted_at: null,
     score_percent: '0.00',
     passed: false,
+    current_question_index: 0,
+    answers_so_far: {},
+    remaining_seconds: SECONDS_PER_QUESTION,
     questions: [
       {
         id: 1,
@@ -75,11 +79,41 @@ function buildAttempt(): LevelAssessmentAttempt {
       },
     ],
     answers: [],
+    ...overrides,
   }
 }
 
-function buildStatus(level: AssessmentLevelSummary): MyAssessmentLevelStatus {
-  return { assigned: true, assessment_level: level, status: 'NOT_STARTED', open_attempt_id: null }
+function buildStatus(
+  level: AssessmentLevelSummary,
+  overrides: Partial<MyAssessmentLevelStatus> = {},
+): MyAssessmentLevelStatus {
+  return { assigned: true, assessment_level: level, status: 'NOT_STARTED', open_attempt_id: null, ...overrides }
+}
+
+// A minimal stand-in for the backend's own attempt state — save-answer and
+// advance both mutate it and echo it back, exactly like the real endpoints,
+// so tests that click through multiple questions see realistic responses
+// (a fresh remaining_seconds on each PER_QUESTION advance, the running
+// answers_so_far map, etc.) instead of a static mock that can't react to
+// what the component actually sent.
+function setupFakeAttemptBackend(initial: LevelAssessmentAttempt) {
+  let current = initial
+
+  vi.mocked(levelAssessmentsApi.startLevelAssessmentAttempt).mockImplementation(async () => current)
+  vi.mocked(levelAssessmentsApi.fetchLevelAssessmentAttempt).mockImplementation(async () => current)
+  vi.mocked(levelAssessmentsApi.saveLevelAssessmentAnswerProgress).mockImplementation(async (_id, answer) => {
+    current = {
+      ...current,
+      answers_so_far: { ...current.answers_so_far, [String(answer.question)]: answer.selected_choices },
+    }
+    return current
+  })
+  vi.mocked(levelAssessmentsApi.advanceLevelAssessmentAttempt).mockImplementation(async (_id, newIndex) => {
+    current = { ...current, current_question_index: newIndex, remaining_seconds: SECONDS_PER_QUESTION }
+    return current
+  })
+
+  return { getCurrent: () => current }
 }
 
 async function renderLanding(level: AssessmentLevelSummary = assessmentLevel) {
@@ -92,9 +126,9 @@ async function renderLanding(level: AssessmentLevelSummary = assessmentLevel) {
   await screen.findByRole('button', { name: START_BUTTON_NAME })
 }
 
-async function startAssessment(level: AssessmentLevelSummary = assessmentLevel) {
+async function startAssessment(level: AssessmentLevelSummary = assessmentLevel, initialRemainingSeconds = SECONDS_PER_QUESTION) {
   vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(buildStatus(level))
-  vi.mocked(levelAssessmentsApi.startLevelAssessmentAttempt).mockResolvedValue(buildAttempt())
+  const backend = setupFakeAttemptBackend(buildAttempt({ remaining_seconds: initialRemainingSeconds }))
 
   render(
     <MemoryRouter>
@@ -103,6 +137,7 @@ async function startAssessment(level: AssessmentLevelSummary = assessmentLevel) 
   )
   fireEvent.click(await screen.findByRole('button', { name: START_BUTTON_NAME }))
   await screen.findByText('First question?')
+  return backend
 }
 
 describe('LevelAssessmentPage landing screen', () => {
@@ -110,34 +145,45 @@ describe('LevelAssessmentPage landing screen', () => {
     vi.resetAllMocks()
   })
 
-  it('describes per-question timing, shows the integrity declaration, and has not started any timer yet', async () => {
+  it('describes per-question timing exactly, shows the instructions, and has not started any timer yet', async () => {
     await renderLanding(assessmentLevel)
 
-    expect(screen.getByText(new RegExp(`${SECONDS_PER_QUESTION}s per question`))).toBeInTheDocument()
-    expect(screen.getByText('Exam Integrity Declaration')).toBeInTheDocument()
-    expect(screen.getByText(/without reference materials, search engines, or AI/)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        `You will have ${SECONDS_PER_QUESTION} seconds to answer each question; once time runs out on a ` +
+          'question, it will lock and be marked as unanswered.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Before You Begin')).toBeInTheDocument()
+    expect(screen.getByText(/independently, without help from colleagues/)).toBeInTheDocument()
+    expect(screen.getByText(/No reference materials or notes/)).toBeInTheDocument()
+    expect(screen.getByText(/No search engines or AI tools/)).toBeInTheDocument()
+    expect(screen.getByText(/stable internet connection/)).toBeInTheDocument()
+    expect(screen.getByText(/evidence of your training and competency/)).toBeInTheDocument()
 
     // No countdown of either shape is rendered before the learner confirms.
     expect(screen.queryByText(/^\d+s$/)).not.toBeInTheDocument()
     expect(screen.queryByText(/remaining/)).not.toBeInTheDocument()
   })
 
-  it('describes fixed-total timing instead, when the organization is configured that way', async () => {
+  it('describes fixed-total timing exactly instead, when the organization is configured that way', async () => {
     await renderLanding(fixedTotalAssessmentLevel)
 
-    expect(screen.getByText(/minutes total for the entire exam/)).toBeInTheDocument()
-    expect(screen.queryByText(/s per question/)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        `You will have ${fixedTotalAssessmentLevel.total_exam_minutes} minutes for the entire exam; if time runs ` +
+          'out before you finish, the exam will submit automatically with your answers so far, and any ' +
+          'unanswered questions will be marked as zero.',
+      ),
+    ).toBeInTheDocument()
     expect(screen.queryByText(/remaining/)).not.toBeInTheDocument()
   })
 
   it('shows the landing screen first (not the question directly) when resuming an already-open attempt, then resumes on confirmation', async () => {
     const openAttempt = buildAttempt()
-    vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue({
-      assigned: true,
-      assessment_level: assessmentLevel,
-      status: 'IN_PROGRESS',
-      open_attempt_id: openAttempt.id,
-    })
+    vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(
+      buildStatus(assessmentLevel, { status: 'IN_PROGRESS', open_attempt_id: openAttempt.id }),
+    )
     vi.mocked(levelAssessmentsApi.fetchLevelAssessmentAttempt).mockResolvedValue(openAttempt)
 
     render(
@@ -148,10 +194,10 @@ describe('LevelAssessmentPage landing screen', () => {
 
     // Landing/declaration screen first — not dropped straight into the
     // question — with resume-specific wording, not the fresh-start one.
-    const resumeButton = await screen.findByRole('button', { name: "I'm Ready — Continue Exam" })
+    const resumeButton = await screen.findByRole('button', { name: CONTINUE_BUTTON_NAME })
     expect(screen.queryByText('First question?')).not.toBeInTheDocument()
     expect(screen.getByText(/already in progress/i)).toBeInTheDocument()
-    expect(screen.getByText('Exam Integrity Declaration')).toBeInTheDocument()
+    expect(screen.getByText('Before You Begin')).toBeInTheDocument()
     expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
 
     fireEvent.click(resumeButton)
@@ -159,6 +205,55 @@ describe('LevelAssessmentPage landing screen', () => {
 
     // Resumed the existing attempt (fetched by id), never started a new one.
     expect(levelAssessmentsApi.fetchLevelAssessmentAttempt).toHaveBeenCalledWith(openAttempt.id)
+    expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
+  })
+
+  it('resumes at the correct question with the prefilled answer and correctly reduced time, not a fresh attempt', async () => {
+    // Simulates what the backend's own away-time catch-up would return after
+    // a browser crash/closure mid-exam: parked on question 2 (index 1) with
+    // question 1's answer already saved, and only 42s left in this segment —
+    // not the full per-question allocation.
+    const resumedAttempt = buildAttempt({
+      current_question_index: 1,
+      answers_so_far: { '1': [10] },
+      remaining_seconds: 42,
+    })
+    vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(
+      buildStatus(assessmentLevel, { status: 'IN_PROGRESS', open_attempt_id: resumedAttempt.id }),
+    )
+    vi.mocked(levelAssessmentsApi.fetchLevelAssessmentAttempt).mockResolvedValue(resumedAttempt)
+
+    render(
+      <MemoryRouter>
+        <LevelAssessmentPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: CONTINUE_BUTTON_NAME }))
+
+    // Same attempt, resumed at the correct (second) question — not restarted.
+    await screen.findByText('Second question?')
+    expect(screen.queryByText('First question?')).not.toBeInTheDocument()
+    expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
+
+    // Correctly reduced remaining time, not a fresh full countdown.
+    await waitFor(() => expect(screen.getByText('42s')).toBeInTheDocument())
+  })
+
+  it('disables starting when the configured attempt cap is already exhausted, with a clear message', async () => {
+    vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(
+      buildStatus(assessmentLevel, { status: 'FAILED', attempts_remaining: 0 }),
+    )
+    render(
+      <MemoryRouter>
+        <LevelAssessmentPage />
+      </MemoryRouter>,
+    )
+
+    const button = await screen.findByRole('button', { name: START_BUTTON_NAME })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/reached the maximum number of attempts/i)).toBeInTheDocument()
+
+    fireEvent.click(button)
     expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
   })
 })
@@ -169,7 +264,7 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
   })
 
   it('shows one question at a time, with no back/skip control, and gates Next on answering', async () => {
-    await startAssessment()
+    const backend = await startAssessment()
 
     // Only the current question's content is in the DOM at all — nothing to
     // skip ahead to even by inspecting markup, let alone a visible control.
@@ -189,6 +284,11 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
     // that could take the learner back to it.
     expect(screen.queryByText('First question?')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /previous|back/i })).not.toBeInTheDocument()
+
+    // The server was told to advance (not just local state) — needed for
+    // resume to work correctly after this point.
+    expect(levelAssessmentsApi.advanceLevelAssessmentAttempt).toHaveBeenCalledWith(500, 1)
+    expect(backend.getCurrent().current_question_index).toBe(1)
   })
 
   it(
@@ -290,7 +390,7 @@ describe('LevelAssessmentPage FIXED_TOTAL exam-wide flow', () => {
   it(
     'shows one overall countdown that persists across questions instead of resetting',
     async () => {
-      await startAssessment(fixedTotalAssessmentLevel)
+      await startAssessment(fixedTotalAssessmentLevel, TOTAL_EXAM_SECONDS)
 
       // The whole-exam readout, not the per-question style ("Xs") — and not
       // stuck at zero (which the auto-submit race this mode is prone to on
@@ -340,7 +440,7 @@ describe('LevelAssessmentPage FIXED_TOTAL exam-wide flow', () => {
       }
       vi.mocked(levelAssessmentsApi.submitLevelAssessmentAttempt).mockResolvedValue(submitted)
 
-      await startAssessment(fixedTotalAssessmentLevel)
+      await startAssessment(fixedTotalAssessmentLevel, TOTAL_EXAM_SECONDS)
 
       // Never answer anything — let the whole-exam timer run out for real.
       // There is no per-question lock message in this mode; only the

@@ -115,6 +115,24 @@ class LevelAssessmentAttempt(models.Model):
     # later even if the pool changes (questions added/edited/removed).
     questions_drawn = models.JSONField(default=list)
     started_at = models.DateTimeField(auto_now_add=True)
+    # Resume support (an open attempt surviving a browser crash/closure/lost
+    # connection) — see levelassessments.services.resume_level_assessment_attempt.
+    # current_question_index: which question (an index into questions_drawn)
+    # the learner is currently on.
+    current_question_index = models.PositiveIntegerField(default=0)
+    # timer_segment_started_at: when the CURRENT timer segment began — reset
+    # to now() every time current_question_index advances under
+    # PER_QUESTION timing, but for FIXED_TOTAL it's set once here at
+    # creation and never touched again (the whole attempt is one segment).
+    timer_segment_started_at = models.DateTimeField(default=timezone.now)
+    # A scratch-pad of the learner's own selections so far, keyed by
+    # LevelQuestion id (as a string, per JSONField's key type) ->
+    # [selected LevelChoice id, ...] — NOT graded answer-key data (unlike
+    # LevelAssessmentAnswer below, which is only ever created at final
+    # grading, whether by an explicit submit or the timeout auto-submit in
+    # resume_level_assessment_attempt) so it's always safe to hand back to
+    # the learner who owns this attempt, even mid-exam.
+    answers_so_far = models.JSONField(default=dict, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
     score_percent = models.DecimalField(
         max_digits=5,

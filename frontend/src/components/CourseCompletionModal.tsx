@@ -49,6 +49,11 @@ interface CourseCompletionModalProps {
   // True while the retake reset request is in flight — disables the button
   // and swaps its label so a slow request can't be double-submitted.
   isRetaking?: boolean
+  // True once Enrollment.retake_count has reached the learner's own
+  // organization's org_settings.OrganizationSettings.max_course_retake_attempts
+  // (always false when that's unset — unlimited, the original behavior).
+  // Disables the Retake Course action entirely and explains why instead.
+  retakeLimitReached?: boolean
   // Tier(s) this specific completion just finished (see backend
   // courses.learning_path.check_learning_path_milestones) — when non-empty,
   // Mr. Siorik's milestone congratulation replaces the plain "Congratulations"
@@ -79,6 +84,7 @@ export function CourseCompletionModal({
   courseName,
   isEligible,
   isRetaking = false,
+  retakeLimitReached = false,
   newlyCompletedTiers,
   isPathFinale = false,
   onRetake,
@@ -111,10 +117,17 @@ export function CourseCompletionModal({
   return (
     <Modal title="Course Complete" onClose={onBackToCourse}>
       <p className="text-sm text-neutral-700">
-        You didn't quite reach the pass mark for this course. Would you like to retake it?
+        You didn't quite reach the pass mark for this course.{' '}
+        {retakeLimitReached ? '' : 'Would you like to retake it?'}
       </p>
+      {retakeLimitReached && (
+        <p className="mt-2 text-sm text-red-600">
+          You have reached the maximum number of retake attempts for this course. Please contact your training
+          administrator.
+        </p>
+      )}
       <div className="mt-4 flex flex-wrap gap-3">
-        <Button disabled={isRetaking} onClick={onRetake}>
+        <Button disabled={isRetaking || retakeLimitReached} onClick={onRetake}>
           {isRetaking ? 'Resetting…' : 'Retake Course'}
         </Button>
         <Button variant="outline" disabled={isRetaking} onClick={onBackToCourse}>

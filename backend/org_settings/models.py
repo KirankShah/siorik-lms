@@ -59,6 +59,17 @@ class OrganizationSettings(models.Model):
     # this single value, read from the enrolled learner's own organization).
     pass_mark_percent = models.PositiveIntegerField(default=70, validators=PERCENT_VALIDATORS)
 
+    # Null means unlimited (the original, still-default behavior) — a
+    # positive number is a hard cap. max_level_assessment_attempts counts
+    # every attempt (the first plus every retake) — see
+    # levelassessments.services.start_level_assessment_attempt.
+    # max_course_retake_attempts counts only the Retake Course action itself
+    # (not the original attempt) — see courses.views.EnrollmentViewSet.retake
+    # and Enrollment.retake_count. Deliberately two independent fields, not
+    # one shared cap: the two field names above reflect that same distinction.
+    max_level_assessment_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+    max_course_retake_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+
     # Reminder for staff who HAVE logged in at least once but have zero
     # completed courses and zero level-assessment attempts — see
     # org_settings.services.logged_in_inactive_staff.
