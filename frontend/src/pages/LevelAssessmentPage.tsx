@@ -405,11 +405,6 @@ export function LevelAssessmentPage() {
           </div>
 
           <div className="mt-5 space-y-1.5">
-            {isResuming && (
-              <p className="text-sm text-neutral-600">
-                You have an exam already in progress — continuing will pick up where you left off.
-              </p>
-            )}
             {!isResuming && lastStatus === 'FAILED' && (
               <p className="text-sm text-red-600">You did not pass your last attempt — you may retake it now.</p>
             )}

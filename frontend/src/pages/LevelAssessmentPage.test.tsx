@@ -193,10 +193,10 @@ describe('LevelAssessmentPage landing screen', () => {
     )
 
     // Landing/declaration screen first — not dropped straight into the
-    // question — with resume-specific wording, not the fresh-start one.
+    // question — with resume-specific wording (via the button label), not
+    // the fresh-start one.
     const resumeButton = await screen.findByRole('button', { name: CONTINUE_BUTTON_NAME })
     expect(screen.queryByText('First question?')).not.toBeInTheDocument()
-    expect(screen.getByText(/already in progress/i)).toBeInTheDocument()
     expect(screen.getByText('Before You Begin')).toBeInTheDocument()
     expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
 
