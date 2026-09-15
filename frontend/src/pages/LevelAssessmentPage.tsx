@@ -43,6 +43,11 @@ export function LevelAssessmentPage() {
   const [attempt, setAttempt] = useState<LevelAssessmentAttempt | null>(null)
   const [answers, setAnswers] = useState<Record<number, Set<number>>>({})
   const [error, setError] = useState<string | null>(null)
+  // Set when the learner already has an open (unsubmitted) attempt — the
+  // landing/declaration screen still shows first either way (see the load()
+  // effect below and its own comment); this just tells that screen's button
+  // whether to resume this attempt instead of starting a brand new one.
+  const [pendingOpenAttemptId, setPendingOpenAttemptId] = useState<number | null>(null)
 
   // Sequential flow state — a single question shown at a time, no skipping
   // ahead and no returning to a previous one once currentIndex advances past
@@ -79,19 +84,13 @@ export function LevelAssessmentPage() {
         }
         setAssessmentLevel(myStatus.assessment_level)
         setLastStatus(myStatus.status ?? null)
-
-        if (myStatus.status === 'IN_PROGRESS' && myStatus.open_attempt_id) {
-          const openAttempt = await fetchLevelAssessmentAttempt(myStatus.open_attempt_id)
-          if (cancelled) return
-          setAttempt(openAttempt)
-          setAnswers(buildInitialAnswers(openAttempt))
-          setCurrentIndex(0)
-          setQuestionLocked(false)
-          setAutoSubmitReason(null)
-          setStage('in_progress')
-        } else {
-          setStage('landing')
-        }
+        // The landing/declaration screen always shows first — including when
+        // resuming an already-open attempt (e.g. after a page reload), since
+        // "before any question is shown" applies there too. Only the button's
+        // behavior differs once clicked (resume vs. a fresh start) — see
+        // handleContinue below.
+        setPendingOpenAttemptId(myStatus.status === 'IN_PROGRESS' ? (myStatus.open_attempt_id ?? null) : null)
+        setStage('landing')
       } catch {
         if (!cancelled) setStage('error')
       }
@@ -227,6 +226,35 @@ export function LevelAssessmentPage() {
     }
   }
 
+  async function handleResume(openAttemptId: number) {
+    setStage('loading')
+    setError(null)
+    setAutoSubmitReason(null)
+    try {
+      const openAttempt = await fetchLevelAssessmentAttempt(openAttemptId)
+      setAttempt(openAttempt)
+      setAnswers(buildInitialAnswers(openAttempt))
+      setCurrentIndex(0)
+      setQuestionLocked(false)
+      setStage('in_progress')
+    } catch {
+      setError('Could not resume your assessment. Please try again.')
+      setStage('landing')
+    }
+  }
+
+  // The landing screen's single confirmation button — resumes the open
+  // attempt if there is one, otherwise starts a brand new one. Either way,
+  // this is the only path into 'in_progress', so the timer (of either mode)
+  // never starts before this click.
+  function handleContinue() {
+    if (pendingOpenAttemptId !== null) {
+      void handleResume(pendingOpenAttemptId)
+    } else {
+      void handleStart()
+    }
+  }
+
   function toggleChoice(questionId: number, choiceId: number, isMultiple: boolean) {
     if (questionLocked) return
     setAnswers((prev) => {
@@ -254,6 +282,7 @@ export function LevelAssessmentPage() {
       const result = await submitLevelAssessmentAttempt(attempt.id, payload)
       setAttempt(result)
       setLastStatus(result.passed ? 'PASSED' : 'FAILED')
+      setPendingOpenAttemptId(null)
       setStage('results')
     } catch {
       setError('Could not submit the assessment. Please try again.')
@@ -278,11 +307,13 @@ export function LevelAssessmentPage() {
   }
 
   if (stage === 'landing' && assessmentLevel) {
-    const isRetake = lastStatus === 'PASSED' || lastStatus === 'FAILED'
+    const isResuming = pendingOpenAttemptId !== null
+    const isRetake = !isResuming && (lastStatus === 'PASSED' || lastStatus === 'FAILED')
     const isFixedTotal = assessmentLevel.timing_mode === 'FIXED_TOTAL'
     const timeAllocationText = isFixedTotal
       ? `${assessmentLevel.total_exam_minutes} minutes total for the entire exam`
       : `${assessmentLevel.seconds_per_question}s per question`
+    const confirmLabel = isResuming ? "I'm Ready — Continue Exam" : "I'm Ready — Start Exam"
 
     return (
       <Card className="text-center">
@@ -302,18 +333,25 @@ export function LevelAssessmentPage() {
           <p className="text-sm font-semibold text-amber-900">Exam Integrity Declaration</p>
           <p className="mt-1 text-xs text-amber-800">
             This assessment must be completed independently — without reference materials, search engines, or AI
-            tools of any kind — matching professional exam-proctoring standards. By clicking "I'm Ready — Start
-            Exam" below, you confirm you will comply with this requirement.
+            tools of any kind — matching professional exam-proctoring standards. By clicking "{confirmLabel}" below,
+            you confirm you will comply with this requirement.
           </p>
         </div>
 
-        {lastStatus === 'FAILED' && (
+        {isResuming && (
+          <p className="mt-2 text-sm text-neutral-600">
+            You have an exam already in progress — continuing will pick up where you left off.
+          </p>
+        )}
+        {!isResuming && lastStatus === 'FAILED' && (
           <p className="mt-2 text-sm text-red-600">You did not pass your last attempt — you may retake it now.</p>
         )}
-        {lastStatus === 'PASSED' && <p className="mt-2 text-sm text-emerald-700">You've already passed this assessment.</p>}
+        {!isResuming && lastStatus === 'PASSED' && (
+          <p className="mt-2 text-sm text-emerald-700">You've already passed this assessment.</p>
+        )}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-        <Button className="mt-4" onClick={handleStart}>
-          I'm Ready — Start Exam
+        <Button className="mt-4" onClick={handleContinue}>
+          {confirmLabel}
         </Button>
         {isRetake && <p className="mt-2 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>}
       </Card>
@@ -450,7 +488,16 @@ export function LevelAssessmentPage() {
           {/* Routes back to the landing/declaration screen rather than
               starting a fresh attempt directly — every exam start (including
               a retake) must go through the explicit "I'm Ready" confirmation. */}
-          {!attempt.passed && <Button onClick={() => setStage('landing')}>Retake Assessment</Button>}
+          {!attempt.passed && (
+            <Button
+              onClick={() => {
+                setPendingOpenAttemptId(null)
+                setStage('landing')
+              }}
+            >
+              Retake Assessment
+            </Button>
+          )}
         </div>
       </Card>
     )

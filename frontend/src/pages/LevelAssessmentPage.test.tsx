@@ -129,6 +129,38 @@ describe('LevelAssessmentPage landing screen', () => {
     expect(screen.queryByText(/s per question/)).not.toBeInTheDocument()
     expect(screen.queryByText(/remaining/)).not.toBeInTheDocument()
   })
+
+  it('shows the landing screen first (not the question directly) when resuming an already-open attempt, then resumes on confirmation', async () => {
+    const openAttempt = buildAttempt()
+    vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue({
+      assigned: true,
+      assessment_level: assessmentLevel,
+      status: 'IN_PROGRESS',
+      open_attempt_id: openAttempt.id,
+    })
+    vi.mocked(levelAssessmentsApi.fetchLevelAssessmentAttempt).mockResolvedValue(openAttempt)
+
+    render(
+      <MemoryRouter>
+        <LevelAssessmentPage />
+      </MemoryRouter>,
+    )
+
+    // Landing/declaration screen first — not dropped straight into the
+    // question — with resume-specific wording, not the fresh-start one.
+    const resumeButton = await screen.findByRole('button', { name: "I'm Ready — Continue Exam" })
+    expect(screen.queryByText('First question?')).not.toBeInTheDocument()
+    expect(screen.getByText(/already in progress/i)).toBeInTheDocument()
+    expect(screen.getByText('Exam Integrity Declaration')).toBeInTheDocument()
+    expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
+
+    fireEvent.click(resumeButton)
+    await screen.findByText('First question?')
+
+    // Resumed the existing attempt (fetched by id), never started a new one.
+    expect(levelAssessmentsApi.fetchLevelAssessmentAttempt).toHaveBeenCalledWith(openAttempt.id)
+    expect(levelAssessmentsApi.startLevelAssessmentAttempt).not.toHaveBeenCalled()
+  })
 })
 
 describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
@@ -164,7 +196,14 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
     async () => {
       await startAssessment()
 
-      expect(screen.getByText(`${SECONDS_PER_QUESTION}s`)).toBeInTheDocument()
+      // Polled rather than checked instantly: the reset effect that sets
+      // this to the full starting value commits in a render just after the
+      // one "First question?" first appears in, so under load the two can
+      // be observed a beat apart — harness overhead, not a product bug (see
+      // the identical reasoning on the FIXED_TOTAL tests below).
+      await waitFor(() => {
+        expect(screen.getByText(`${SECONDS_PER_QUESTION}s`)).toBeInTheDocument()
+      })
 
       // Genuine real-time depletion — some seconds in, the readout must be
       // measurably lower than the starting value and not yet zero.
