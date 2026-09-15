@@ -58,8 +58,12 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // Distinct from "Assessments" above — this is the standalone role-based
     // knowledge check (levelassessments app). A separate top-level entry
     // so the two never get confused for one another — see
-    // LevelAssessmentPage.tsx.
-    { to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap },
+    // LevelAssessmentPage.tsx. This is the learner's own exam-taking page —
+    // hidden from ORG_ADMIN/INSTRUCTOR (see LevelAssessmentRoute), kept for
+    // LEARNER and PLATFORM_ADMIN.
+    ...(user?.role === 'LEARNER' || isPlatformAdminRole(user?.role)
+      ? [{ to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap }]
+      : []),
     // Second entry point into LevelQuestionsImportPage (the Level Assessment
     // question bank Excel import) alongside the existing "Level Assessments"
     // tab inside AdminSectionLayout — this one is directly reachable without
@@ -110,18 +114,20 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
         ))}
 
         {isPlatformAdminRole(user?.role) && (
-          <NavLink to="/admin/organizations" className={linkClass} onClick={onNavigate}>
-            <Building2 className="h-[18px] w-[18px]" />
-            Organizations
-          </NavLink>
-        )}
-
-        {isOrgSettingsRole(user?.role) && (
           <>
+            <NavLink to="/admin/organizations" className={linkClass} onClick={onNavigate}>
+              <Building2 className="h-[18px] w-[18px]" />
+              Organizations
+            </NavLink>
             <NavLink to="/admin/learners" className={linkClass} onClick={onNavigate}>
               <Users className="h-[18px] w-[18px]" />
               Learners
             </NavLink>
+          </>
+        )}
+
+        {isOrgSettingsRole(user?.role) && (
+          <>
             <NavLink to="/admin/staff-enrollment" className={linkClass} onClick={onNavigate}>
               <UserPlus className="h-[18px] w-[18px]" />
               Staff Enrollment

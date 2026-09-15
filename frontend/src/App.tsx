@@ -33,6 +33,7 @@ import { ReportsPage } from './pages/admin/ReportsPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
 import { AssessmentsRoute } from './routes/AssessmentsRoute'
+import { LevelAssessmentRoute } from './routes/LevelAssessmentRoute'
 import { OrgAdminRoute } from './routes/OrgAdminRoute'
 import { PlatformAdminRoute } from './routes/PlatformAdminRoute'
 import { ProtectedRoute } from './routes/ProtectedRoute'
@@ -55,7 +56,9 @@ function App() {
           <Route element={<AssessmentsRoute />}>
             <Route path="/assessments" element={<AssessmentsPage />} />
           </Route>
-          <Route path="/level-assessment" element={<LevelAssessmentPage />} />
+          <Route element={<LevelAssessmentRoute />}>
+            <Route path="/level-assessment" element={<LevelAssessmentPage />} />
+          </Route>
           <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />
           <Route path="/resources" element={<ResourcesPage />} />
@@ -87,13 +90,16 @@ function App() {
 
           <Route element={<OrgAdminRoute />}>
             <Route path="/admin/organization" element={<OrganizationSettingsPage />} />
-            <Route path="/admin/learners" element={<LearnersPage />} />
             <Route path="/admin/staff-enrollment" element={<StaffEnrollmentPage />} />
             <Route path="/admin/staff-training-report" element={<StaffTrainingReportPage />} />
           </Route>
 
           <Route element={<PlatformAdminRoute />}>
             <Route path="/admin/organizations" element={<OrganizationsPage />} />
+            {/* Moved out of the OrgAdminRoute block above — Learners is now
+                platform-admin-only, unlike its Staff Enrollment/Staff
+                Training Report/Organization Settings siblings. */}
+            <Route path="/admin/learners" element={<LearnersPage />} />
           </Route>
         </Route>
       </Route>
