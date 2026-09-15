@@ -16,6 +16,7 @@ import type { AssessmentLevelSummary, LevelAssessmentAttempt, LevelAssessmentSta
 type Stage = 'loading' | 'not_assigned' | 'landing' | 'in_progress' | 'submitting' | 'results' | 'error'
 
 const DEFAULT_SECONDS_PER_QUESTION = 60
+const DEFAULT_TOTAL_EXAM_MINUTES = 60
 // How long the "Time's up — 0 marks" message stays on screen before
 // auto-advancing — long enough to actually read it, short enough not to
 // stall the assessment.
@@ -27,6 +28,12 @@ function buildInitialAnswers(attempt: LevelAssessmentAttempt): Record<number, Se
     initial[question.id] = new Set()
   }
   return initial
+}
+
+function formatMinutesSeconds(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
 export function LevelAssessmentPage() {
@@ -42,10 +49,21 @@ export function LevelAssessmentPage() {
   // it (there is simply no control anywhere in this UI that can move it
   // backwards or set it to an arbitrary value).
   const [currentIndex, setCurrentIndex] = useState(0)
+  // PER_QUESTION mode only — resets every question (see the timer effect below).
   const [timeLeft, setTimeLeft] = useState(0)
   const [questionLocked, setQuestionLocked] = useState(false)
+  // FIXED_TOTAL mode only — one countdown for the whole attempt, persisting
+  // across every question (see the overall-timer effect below).
+  const [overallTimeLeft, setOverallTimeLeft] = useState(0)
+  // Set right before an auto-submit triggered by the FIXED_TOTAL overall
+  // timer reaching zero, so the results screen can explain why.
+  const [autoSubmitReason, setAutoSubmitReason] = useState<'time_expired' | null>(null)
 
+  const timingMode = assessmentLevel?.timing_mode ?? 'PER_QUESTION'
   const secondsPerQuestion = assessmentLevel?.seconds_per_question ?? DEFAULT_SECONDS_PER_QUESTION
+  // Rounded defensively — total_exam_minutes is always a whole number from
+  // the backend, but this keeps the countdown exact even so.
+  const totalExamSeconds = Math.round((assessmentLevel?.total_exam_minutes ?? DEFAULT_TOTAL_EXAM_MINUTES) * 60)
 
   useEffect(() => {
     let cancelled = false
@@ -69,6 +87,7 @@ export function LevelAssessmentPage() {
           setAnswers(buildInitialAnswers(openAttempt))
           setCurrentIndex(0)
           setQuestionLocked(false)
+          setAutoSubmitReason(null)
           setStage('in_progress')
         } else {
           setStage('landing')
@@ -97,20 +116,30 @@ export function LevelAssessmentPage() {
     hasAnswerRef.current = hasAnswer
   }, [hasAnswer])
 
-  // The countdown, one interval per question — resets on entry and owns its
-  // own decrement-and-lock decision entirely through functional setState
-  // updates (`setTimeLeft(t => ...)`), rather than a second effect reading
-  // `timeLeft` back out of render state. Reading it back was the original
-  // bug here: on the very first render where `stage` becomes 'in_progress',
-  // a separate "tick" effect and this "reset" effect both ran in the same
-  // commit, and the tick effect saw `timeLeft`'s stale pre-reset value (0,
-  // its initial state) before the reset's setTimeLeft(secondsPerQuestion)
-  // had actually applied — locking the question instantly, every time,
-  // rather than ever visibly counting down. A single effect avoids that
-  // entirely: there's no other code path that can observe `timeLeft` before
-  // this effect's own reset has taken effect.
+  // Always points at the latest handleSubmit closure, read from inside the
+  // FIXED_TOTAL interval below (defined further down, but function
+  // declarations are hoisted) — runs after every render, deliberately with
+  // no dependency array, so a submit triggered by the overall timer hitting
+  // zero always sees the attempt/answers as of that exact moment.
+  const handleSubmitRef = useRef<() => void>(() => {})
   useEffect(() => {
-    if (stage !== 'in_progress') return
+    handleSubmitRef.current = () => void handleSubmit()
+  })
+
+  // PER_QUESTION mode: the countdown, one interval per question — resets on
+  // entry and owns its own decrement-and-lock decision entirely through
+  // functional setState updates (`setTimeLeft(t => ...)`), rather than a
+  // second effect reading `timeLeft` back out of render state. Reading it
+  // back was the original bug here: on the very first render where `stage`
+  // becomes 'in_progress', a separate "tick" effect and this "reset" effect
+  // both ran in the same commit, and the tick effect saw `timeLeft`'s stale
+  // pre-reset value (0, its initial state) before the reset's
+  // setTimeLeft(secondsPerQuestion) had actually applied — locking the
+  // question instantly, every time, rather than ever visibly counting down.
+  // A single effect avoids that entirely: there's no other code path that
+  // can observe `timeLeft` before this effect's own reset has taken effect.
+  useEffect(() => {
+    if (timingMode !== 'PER_QUESTION' || stage !== 'in_progress') return
     setQuestionLocked(false)
     setTimeLeft(secondsPerQuestion)
 
@@ -128,7 +157,48 @@ export function LevelAssessmentPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, stage, secondsPerQuestion])
+  }, [currentIndex, stage, timingMode, secondsPerQuestion])
+
+  // FIXED_TOTAL mode: one countdown for the entire attempt — deliberately
+  // keyed on attempt?.id (not currentIndex, and not stage) so it starts once
+  // when a new attempt begins and keeps running unattended across every
+  // question, never resetting or freezing just because the current question
+  // was answered (unlike the PER_QUESTION timer above, this one only cares
+  // about total elapsed exam time). Hitting zero triggers the auto-submit
+  // directly from inside this same interval's own decrement logic — NOT from
+  // a separate effect watching `overallTimeLeft === 0`, which would be
+  // indistinguishable from that state variable's own pre-reset initial value
+  // (also 0) and would fire the submit immediately on every mount, before
+  // the reset above has even applied. Same hazard, same fix, as the
+  // PER_QUESTION timer's own comment above describes.
+  useEffect(() => {
+    if (timingMode !== 'FIXED_TOTAL' || !attempt) return
+    setOverallTimeLeft(totalExamSeconds)
+
+    const interval = setInterval(() => {
+      setOverallTimeLeft((t) => {
+        if (t <= 1) {
+          clearInterval(interval)
+          setAutoSubmitReason('time_expired')
+          handleSubmitRef.current()
+          return 0
+        }
+        return t - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attempt?.id, timingMode, totalExamSeconds])
+
+  // Auto-advance (or auto-submit, on the last question) after the "Time's
+  // up" message has had a moment to be read — PER_QUESTION mode only.
+  useEffect(() => {
+    if (!questionLocked) return
+    const timeout = setTimeout(goToNextOrFinish, TIMEOUT_MESSAGE_DELAY_MS)
+    return () => clearTimeout(timeout)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionLocked])
 
   function goToNextOrFinish() {
     if (!attempt) return
@@ -140,18 +210,10 @@ export function LevelAssessmentPage() {
     }
   }
 
-  // Auto-advance (or auto-submit, on the last question) after the "Time's
-  // up" message has had a moment to be read.
-  useEffect(() => {
-    if (!questionLocked) return
-    const timeout = setTimeout(goToNextOrFinish, TIMEOUT_MESSAGE_DELAY_MS)
-    return () => clearTimeout(timeout)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questionLocked])
-
   async function handleStart() {
     setStage('loading')
     setError(null)
+    setAutoSubmitReason(null)
     try {
       const newAttempt = await startLevelAssessmentAttempt()
       setAttempt(newAttempt)
@@ -217,33 +279,55 @@ export function LevelAssessmentPage() {
 
   if (stage === 'landing' && assessmentLevel) {
     const isRetake = lastStatus === 'PASSED' || lastStatus === 'FAILED'
+    const isFixedTotal = assessmentLevel.timing_mode === 'FIXED_TOTAL'
+    const timeAllocationText = isFixedTotal
+      ? `${assessmentLevel.total_exam_minutes} minutes total for the entire exam`
+      : `${assessmentLevel.seconds_per_question}s per question`
+
     return (
       <Card className="text-center">
         <h1 className="text-base font-semibold text-neutral-900">{assessmentLevel.name_display} Assessment</h1>
         <p className="mt-2 text-sm text-neutral-500">
           {assessmentLevel.questions_per_attempt} question{assessmentLevel.questions_per_attempt === 1 ? '' : 's'} · Pass
-          mark: {assessmentLevel.pass_threshold}% · {assessmentLevel.seconds_per_question}s per question
+          mark: {assessmentLevel.pass_threshold}% · {timeAllocationText}
         </p>
         <p className="mt-1 text-xs text-neutral-400">
-          Questions are shown one at a time. Once you move on you can't go back, and an unanswered question locks at
-          zero marks when its timer runs out.
+          Questions are shown one at a time. Once you move on you can't go back.{' '}
+          {isFixedTotal
+            ? "If the overall exam timer runs out, your exam is submitted automatically and any question you haven't answered yet is marked at zero."
+            : 'An unanswered question locks at zero marks when its timer runs out.'}
         </p>
+
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-left">
+          <p className="text-sm font-semibold text-amber-900">Exam Integrity Declaration</p>
+          <p className="mt-1 text-xs text-amber-800">
+            This assessment must be completed independently — without reference materials, search engines, or AI
+            tools of any kind — matching professional exam-proctoring standards. By clicking "I'm Ready — Start
+            Exam" below, you confirm you will comply with this requirement.
+          </p>
+        </div>
+
         {lastStatus === 'FAILED' && (
           <p className="mt-2 text-sm text-red-600">You did not pass your last attempt — you may retake it now.</p>
         )}
         {lastStatus === 'PASSED' && <p className="mt-2 text-sm text-emerald-700">You've already passed this assessment.</p>}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <Button className="mt-4" onClick={handleStart}>
-          {isRetake ? 'Retake Assessment' : 'Start Assessment'}
+          I'm Ready — Start Exam
         </Button>
+        {isRetake && <p className="mt-2 text-xs text-neutral-400">Starting again begins a fresh, timed attempt.</p>}
       </Card>
     )
   }
 
   if ((stage === 'in_progress' || stage === 'submitting') && attempt && currentQuestion) {
     const isLast = currentIndex === attempt.questions.length - 1
-    const timePercent = Math.max(0, Math.min(100, (timeLeft / secondsPerQuestion) * 100))
+    const isFixedTotal = timingMode === 'FIXED_TOTAL'
+    const timePercent = isFixedTotal
+      ? Math.max(0, Math.min(100, (overallTimeLeft / totalExamSeconds) * 100))
+      : Math.max(0, Math.min(100, (timeLeft / secondsPerQuestion) * 100))
     const barColor = timePercent <= 20 ? 'bg-red-500' : timePercent <= 50 ? 'bg-brand-gold' : 'bg-brand-navy'
+    const timeReadout = isFixedTotal ? `${formatMinutesSeconds(overallTimeLeft)} remaining` : `${questionLocked ? 0 : timeLeft}s`
 
     return (
       <Card>
@@ -254,14 +338,16 @@ export function LevelAssessmentPage() {
           </span>
         </div>
 
-        {/* Depleting countdown bar — frozen once answered, see the timer effect above. */}
+        {/* Depleting countdown bar — for PER_QUESTION, frozen once answered
+            and reset every question; for FIXED_TOTAL, one continuous bar for
+            the whole attempt that never resets or freezes. */}
         <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
           <div
             className={`h-full rounded-full transition-all duration-1000 ease-linear ${barColor}`}
             style={{ width: `${timePercent}%` }}
           />
         </div>
-        <p className="mt-1 text-right text-xs text-neutral-400">{questionLocked ? '0' : timeLeft}s</p>
+        <p className="mt-1 text-right text-xs text-neutral-400">{timeReadout}</p>
 
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
@@ -311,6 +397,13 @@ export function LevelAssessmentPage() {
   if (stage === 'results' && attempt) {
     return (
       <Card>
+        {autoSubmitReason === 'time_expired' && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Your exam time ran out, so it was submitted automatically. Any question you hadn't answered yet was
+            marked at zero.
+          </div>
+        )}
+
         <div className={`rounded-lg p-4 ${attempt.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'}`}>
           <p className="text-lg font-semibold">{attempt.passed ? 'You passed!' : 'You did not pass'}</p>
           <p className="text-sm">
@@ -354,7 +447,10 @@ export function LevelAssessmentPage() {
           <Link to="/dashboard" className="inline-flex">
             <Button variant="secondary">Back to Dashboard</Button>
           </Link>
-          {!attempt.passed && <Button onClick={handleStart}>Retake Assessment</Button>}
+          {/* Routes back to the landing/declaration screen rather than
+              starting a fresh attempt directly — every exam start (including
+              a retake) must go through the explicit "I'm Ready" confirmation. */}
+          {!attempt.passed && <Button onClick={() => setStage('landing')}>Retake Assessment</Button>}
         </div>
       </Card>
     )

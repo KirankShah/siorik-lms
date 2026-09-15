@@ -32,14 +32,27 @@ class OrganizationSettings(models.Model):
         FORTNIGHTLY = 'fortnightly', 'Fortnightly'
         MONTHLY = 'monthly', 'Monthly'
 
+    class TimingMode(models.TextChoices):
+        # One countdown per question, resetting every time the learner
+        # advances — the original behavior, and still the default.
+        PER_QUESTION = 'PER_QUESTION', 'Per question'
+        # A single countdown for the whole attempt, shown as one persistent
+        # progress bar across every question — see LevelAssessmentPage.tsx.
+        FIXED_TOTAL = 'FIXED_TOTAL', 'Fixed total for the exam'
+
     organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name='settings')
     # Matches AssessmentLevel.questions_per_attempt's old default — see
     # levelassessments.services.start_level_assessment_attempt.
     questions_per_attempt = models.PositiveIntegerField(default=15, validators=[MinValueValidator(1)])
-    # New: per-question countdown for the sequential level-assessment flow
-    # (frontend LevelAssessmentPage) — a question locks at zero marks once
-    # this many seconds elapse unanswered.
+    timing_mode = models.CharField(max_length=20, choices=TimingMode.choices, default=TimingMode.PER_QUESTION)
+    # Used only when timing_mode=PER_QUESTION — the sequential level-assessment
+    # flow's per-question countdown; a question locks at zero marks once this
+    # many seconds elapse unanswered.
     seconds_per_question = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
+    # Used only when timing_mode=FIXED_TOTAL — one countdown for the entire
+    # attempt; the exam auto-submits (unanswered questions scored zero) the
+    # instant it reaches zero, wherever the learner currently is in the exam.
+    total_exam_minutes = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
     # Matches AssessmentLevel.pass_threshold's old default — also now the
     # course-completion certificate threshold (Course.certificate_pass_threshold
     # used to hold this per-course; every course in an organization now shares

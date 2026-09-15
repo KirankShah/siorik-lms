@@ -1,6 +1,7 @@
 import type { Organization } from './auth'
 
 export type ReminderFrequency = 'daily' | 'weekly' | 'fortnightly' | 'monthly'
+export type TimingMode = 'PER_QUESTION' | 'FIXED_TOTAL'
 
 // Mirrors org_settings.serializers.OrganizationSettingsSerializer. One row
 // per organization (auto-created server-side, never created from here) —
@@ -15,7 +16,9 @@ export interface OrganizationSettings {
   id: number
   organization: Organization
   questions_per_attempt: number
+  timing_mode: TimingMode
   seconds_per_question: number
+  total_exam_minutes: number
   pass_mark_percent: number
   logged_in_inactive_reminder_enabled: boolean
   logged_in_inactive_reminder_frequency: ReminderFrequency
@@ -29,7 +32,9 @@ export type OrganizationSettingsInput = Partial<
   Pick<
     OrganizationSettings,
     | 'questions_per_attempt'
+    | 'timing_mode'
     | 'seconds_per_question'
+    | 'total_exam_minutes'
     | 'pass_mark_percent'
     | 'logged_in_inactive_reminder_enabled'
     | 'logged_in_inactive_reminder_frequency'

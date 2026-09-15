@@ -18,15 +18,19 @@ class AssessmentLevelSerializer(serializers.ModelSerializer):
     questions_per_attempt = serializers.IntegerField(
         source='organization.settings.questions_per_attempt', read_only=True
     )
+    timing_mode = serializers.CharField(source='organization.settings.timing_mode', read_only=True)
     seconds_per_question = serializers.IntegerField(
         source='organization.settings.seconds_per_question', read_only=True
+    )
+    total_exam_minutes = serializers.IntegerField(
+        source='organization.settings.total_exam_minutes', read_only=True
     )
 
     class Meta:
         model = AssessmentLevel
         fields = [
             'id', 'organization', 'name', 'name_display',
-            'pass_threshold', 'questions_per_attempt', 'seconds_per_question',
+            'pass_threshold', 'questions_per_attempt', 'timing_mode', 'seconds_per_question', 'total_exam_minutes',
         ]
         # The four tiers are fixed per org (seeded on org creation); their
         # scoring config now lives entirely on OrganizationSettings, so every

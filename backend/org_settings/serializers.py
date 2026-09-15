@@ -12,7 +12,8 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrganizationSettings
         fields = [
-            'id', 'organization', 'questions_per_attempt', 'seconds_per_question', 'pass_mark_percent',
+            'id', 'organization', 'questions_per_attempt', 'timing_mode', 'seconds_per_question',
+            'total_exam_minutes', 'pass_mark_percent',
             'logged_in_inactive_reminder_enabled', 'logged_in_inactive_reminder_frequency',
             'logged_in_inactive_last_sent_at',
             'never_logged_in_reminder_enabled', 'never_logged_in_reminder_frequency', 'never_logged_in_last_sent_at',

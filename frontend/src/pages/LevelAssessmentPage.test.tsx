@@ -7,6 +7,8 @@ import type { AssessmentLevelSummary, LevelAssessmentAttempt, MyAssessmentLevelS
 
 vi.mock('../lib/levelAssessmentsApi')
 
+const START_BUTTON_NAME = "I'm Ready — Start Exam"
+
 // Real time, not mocked — a self-rescheduling setTimeout effect (the
 // countdown reschedules itself every tick) doesn't compose reliably with
 // React's async act() + fake timers: act's flush loop drains the whole
@@ -15,6 +17,11 @@ vi.mock('../lib/levelAssessmentsApi')
 // gives comfortable margin over test-harness overhead (module transform,
 // mock resolution, render) while these tests wait on the real clock.
 const SECONDS_PER_QUESTION = 10
+// Same real-clock reasoning for the FIXED_TOTAL tests below. total_exam_minutes
+// is minutes-only in the real data model, but nothing stops a test mock from
+// using a fractional value — the component converts to seconds and rounds
+// (Math.round), so this lands on exactly 10 seconds, same as SECONDS_PER_QUESTION.
+const TOTAL_EXAM_SECONDS = 10
 
 const assessmentLevel: AssessmentLevelSummary = {
   id: 1,
@@ -23,7 +30,15 @@ const assessmentLevel: AssessmentLevelSummary = {
   name_display: 'Officer Level',
   pass_threshold: 70,
   questions_per_attempt: 2,
+  timing_mode: 'PER_QUESTION',
   seconds_per_question: SECONDS_PER_QUESTION,
+  total_exam_minutes: 60,
+}
+
+const fixedTotalAssessmentLevel: AssessmentLevelSummary = {
+  ...assessmentLevel,
+  timing_mode: 'FIXED_TOTAL',
+  total_exam_minutes: TOTAL_EXAM_SECONDS / 60,
 }
 
 function buildAttempt(): LevelAssessmentAttempt {
@@ -63,15 +78,22 @@ function buildAttempt(): LevelAssessmentAttempt {
   }
 }
 
-const notStartedStatus: MyAssessmentLevelStatus = {
-  assigned: true,
-  assessment_level: assessmentLevel,
-  status: 'NOT_STARTED',
-  open_attempt_id: null,
+function buildStatus(level: AssessmentLevelSummary): MyAssessmentLevelStatus {
+  return { assigned: true, assessment_level: level, status: 'NOT_STARTED', open_attempt_id: null }
 }
 
-async function startAssessment() {
-  vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(notStartedStatus)
+async function renderLanding(level: AssessmentLevelSummary = assessmentLevel) {
+  vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(buildStatus(level))
+  render(
+    <MemoryRouter>
+      <LevelAssessmentPage />
+    </MemoryRouter>,
+  )
+  await screen.findByRole('button', { name: START_BUTTON_NAME })
+}
+
+async function startAssessment(level: AssessmentLevelSummary = assessmentLevel) {
+  vi.mocked(levelAssessmentsApi.fetchMyAssessmentLevel).mockResolvedValue(buildStatus(level))
   vi.mocked(levelAssessmentsApi.startLevelAssessmentAttempt).mockResolvedValue(buildAttempt())
 
   render(
@@ -79,11 +101,37 @@ async function startAssessment() {
       <LevelAssessmentPage />
     </MemoryRouter>,
   )
-  fireEvent.click(await screen.findByRole('button', { name: 'Start Assessment' }))
+  fireEvent.click(await screen.findByRole('button', { name: START_BUTTON_NAME }))
   await screen.findByText('First question?')
 }
 
-describe('LevelAssessmentPage sequential flow', () => {
+describe('LevelAssessmentPage landing screen', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+  })
+
+  it('describes per-question timing, shows the integrity declaration, and has not started any timer yet', async () => {
+    await renderLanding(assessmentLevel)
+
+    expect(screen.getByText(new RegExp(`${SECONDS_PER_QUESTION}s per question`))).toBeInTheDocument()
+    expect(screen.getByText('Exam Integrity Declaration')).toBeInTheDocument()
+    expect(screen.getByText(/without reference materials, search engines, or AI/)).toBeInTheDocument()
+
+    // No countdown of either shape is rendered before the learner confirms.
+    expect(screen.queryByText(/^\d+s$/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/remaining/)).not.toBeInTheDocument()
+  })
+
+  it('describes fixed-total timing instead, when the organization is configured that way', async () => {
+    await renderLanding(fixedTotalAssessmentLevel)
+
+    expect(screen.getByText(/minutes total for the entire exam/)).toBeInTheDocument()
+    expect(screen.queryByText(/s per question/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/remaining/)).not.toBeInTheDocument()
+  })
+})
+
+describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
   beforeEach(() => {
     vi.resetAllMocks()
   })
@@ -186,5 +234,91 @@ describe('LevelAssessmentPage sequential flow', () => {
       ])
     },
     (SECONDS_PER_QUESTION + 8) * 1000,
+  )
+})
+
+function parseRemainingSeconds(text: string): number {
+  const match = text.match(/^(\d+):(\d+) remaining$/)
+  if (!match) throw new Error(`Could not parse remaining time from "${text}"`)
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+describe('LevelAssessmentPage FIXED_TOTAL exam-wide flow', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+  })
+
+  it(
+    'shows one overall countdown that persists across questions instead of resetting',
+    async () => {
+      await startAssessment(fixedTotalAssessmentLevel)
+
+      // The whole-exam readout, not the per-question style ("Xs") — and not
+      // stuck at zero (which the auto-submit race this mode is prone to on
+      // mount would produce immediately and permanently). Polled with a
+      // little retry budget rather than checked instantly: harness overhead
+      // between the render and this check is expected and fine, a countdown
+      // that never shows anything above zero is the actual regression.
+      let atStart = 0
+      await waitFor(() => {
+        atStart = parseRemainingSeconds(screen.getByText(/remaining/).textContent!)
+        expect(atStart).toBeGreaterThan(0)
+      })
+      expect(screen.queryByText(/^\d+s$/)).not.toBeInTheDocument()
+
+      // Let it tick down for real before advancing.
+      await waitFor(
+        () => expect(parseRemainingSeconds(screen.getByText(/remaining/).textContent!)).toBeLessThan(atStart),
+        { timeout: TOTAL_EXAM_SECONDS * 1000 },
+      )
+      const beforeAdvance = parseRemainingSeconds(screen.getByText(/remaining/).textContent!)
+      expect(beforeAdvance).toBeLessThan(TOTAL_EXAM_SECONDS)
+
+      fireEvent.click(screen.getByLabelText('Choice A'))
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+      await screen.findByText('Second question?')
+
+      // Still counting from close to where it left off on question 1 —
+      // monotonically at or below where it was, and nowhere near a reset
+      // back to the full starting value, which a per-question reset bug
+      // would produce.
+      const afterAdvance = parseRemainingSeconds(screen.getByText(/remaining/).textContent!)
+      expect(afterAdvance).toBeLessThanOrEqual(beforeAdvance)
+      expect(afterAdvance).toBeGreaterThan(0)
+      expect(afterAdvance).toBeLessThan(TOTAL_EXAM_SECONDS)
+    },
+    (TOTAL_EXAM_SECONDS + 8) * 1000,
+  )
+
+  it(
+    'auto-submits with zero marks for every unanswered question once the overall timer reaches zero',
+    async () => {
+      const submitted: LevelAssessmentAttempt = {
+        ...buildAttempt(),
+        submitted_at: '2026-01-01T00:05:00Z',
+        passed: false,
+        score_percent: '0.00',
+      }
+      vi.mocked(levelAssessmentsApi.submitLevelAssessmentAttempt).mockResolvedValue(submitted)
+
+      await startAssessment(fixedTotalAssessmentLevel)
+
+      // Never answer anything — let the whole-exam timer run out for real.
+      // There is no per-question lock message in this mode; only the
+      // overall timer reaching zero triggers the auto-submit.
+      await waitFor(
+        () => expect(levelAssessmentsApi.submitLevelAssessmentAttempt).toHaveBeenCalled(),
+        { timeout: (TOTAL_EXAM_SECONDS + 3) * 1000 },
+      )
+
+      const [, payload] = vi.mocked(levelAssessmentsApi.submitLevelAssessmentAttempt).mock.calls[0]
+      expect(payload).toEqual([
+        { question: 1, selected_choices: [] },
+        { question: 2, selected_choices: [] },
+      ])
+
+      await screen.findByText(/exam time ran out/i)
+    },
+    (TOTAL_EXAM_SECONDS + 8) * 1000,
   )
 })

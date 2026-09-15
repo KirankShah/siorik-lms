@@ -4156,6 +4156,16 @@ class AssessmentLevelConfigApiTests(BaseAPITestCase):
         self.assertEqual(level['questions_per_attempt'], 20)
         self.assertEqual(level['seconds_per_question'], 45)
 
+    def test_level_reflects_org_settings_timing_mode_and_total_exam_minutes(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.FIXED_TOTAL, total_exam_minutes=90,
+        )
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/assessment-levels/')
+        level = next(row for row in response.data if row['name'] == User.AssessmentLevel.OFFICER)
+        self.assertEqual(level['timing_mode'], 'FIXED_TOTAL')
+        self.assertEqual(level['total_exam_minutes'], 90)
+
     def test_patching_a_level_is_no_longer_allowed(self):
         level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
         self.auth_as(self.org_admin)
@@ -4176,8 +4186,26 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['organization']['id'], self.org.id)
         self.assertEqual(response.data[0]['questions_per_attempt'], 15)
+        self.assertEqual(response.data[0]['timing_mode'], 'PER_QUESTION')
         self.assertEqual(response.data[0]['seconds_per_question'], 60)
+        self.assertEqual(response.data[0]['total_exam_minutes'], 60)
         self.assertEqual(response.data[0]['pass_mark_percent'], 70)
+
+    def test_org_admin_can_switch_to_fixed_total_timing_mode(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'timing_mode': 'FIXED_TOTAL', 'total_exam_minutes': 45},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.timing_mode, 'FIXED_TOTAL')
+        self.assertEqual(settings_obj.total_exam_minutes, 45)
+        # seconds_per_question is left untouched — switching modes doesn't
+        # silently reset the setting for the other one.
+        self.assertEqual(settings_obj.seconds_per_question, 60)
 
     def test_org_admin_can_update_their_own_settings(self):
         settings_obj = OrganizationSettings.objects.get(organization=self.org)

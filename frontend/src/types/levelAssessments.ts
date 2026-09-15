@@ -1,4 +1,5 @@
 import type { Organization } from './auth'
+import type { TimingMode } from './orgSettings'
 
 export type LevelQuestionType = 'SINGLE_CHOICE' | 'MULTIPLE_ANSWER'
 
@@ -21,10 +22,13 @@ export interface LevelQuestion {
   choices: LevelChoice[]
 }
 
-// pass_threshold/questions_per_attempt/seconds_per_question are computed
-// server-side from org_settings.OrganizationSettings (one row per
-// organization, shared by all four levels) — read-only here; edited from the
-// Organization Settings screen (pages/admin/OrganizationSettingsPage.tsx).
+// pass_threshold/questions_per_attempt/timing_mode/seconds_per_question/
+// total_exam_minutes are computed server-side from
+// org_settings.OrganizationSettings (one row per organization, shared by all
+// four levels) — read-only here; edited from the Organization Settings
+// screen (pages/admin/OrganizationSettingsPage.tsx). seconds_per_question
+// only applies when timing_mode is 'PER_QUESTION'; total_exam_minutes only
+// when it's 'FIXED_TOTAL' — see LevelAssessmentPage.tsx.
 export interface AssessmentLevelSummary {
   id: number
   organization: Organization
@@ -32,7 +36,9 @@ export interface AssessmentLevelSummary {
   name_display: string
   pass_threshold: number
   questions_per_attempt: number
+  timing_mode: TimingMode
   seconds_per_question: number
+  total_exam_minutes: number
 }
 
 export interface LevelAssessmentAnswer {
