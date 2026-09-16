@@ -267,6 +267,50 @@ def provision_org_admin(*, name, email, organization, designation='', phone_numb
     return user
 
 
+def send_password_reset_email(user, uid, token):
+    """
+    Self-service "forgot password" email — link expires per Django's own
+    PASSWORD_RESET_TIMEOUT_DAYS (default 3 days) since it's built on the
+    stdlib PasswordResetTokenGenerator, and is invalidated early if the
+    account's password changes or it logs in before the link is used.
+    """
+    display_name = user.get_full_name() or user.email
+    reset_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reset-password/{uid}/{token}/"
+    subject = 'Reset your Siorik LMS password'
+
+    text_body = (
+        f'Dear {display_name},\n\n'
+        f'We received a request to reset the password for your Siorik LMS account ({user.email}).\n\n'
+        f'Reset your password: {reset_url}\n\n'
+        f"This link will expire soon for your security. If you didn't request this, you can safely "
+        f'ignore this email — your password will not be changed.\n\n'
+        f'Best regards,\n'
+        f'Siorik Consultancy Pvt. Ltd.'
+    )
+
+    html_body = f'''
+<div style="font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto;">
+  <p>Dear {display_name},</p>
+  <p>We received a request to reset the password for your Siorik LMS account (<strong>{user.email}</strong>).</p>
+  <p>
+    <a href="{reset_url}"
+       style="display: inline-block; padding: 12px 28px; background-color: {_BRAND_NAVY}; color: {_BRAND_GOLD};
+              text-decoration: none; font-weight: bold; border-radius: 6px;">
+      Reset Your Password &rarr;
+    </a>
+  </p>
+  <p>This link will expire soon for your security. If you didn't request this, you can safely ignore this
+     email — your password will not be changed.</p>
+  <p>
+    Best regards,<br>
+    Siorik Consultancy Pvt. Ltd.
+  </p>
+</div>
+'''
+
+    _send_invite_email(to_email=user.email, subject=subject, text_body=text_body, html_body=html_body)
+
+
 def send_staff_learner_invite_email(user, temp_password):
     display_name = user.get_full_name() or user.email
     org_name = user.organization.name if user.organization else 'your institution'

@@ -131,3 +131,19 @@ export function setPassword(newPassword: string): Promise<User> {
     body: { new_password: newPassword },
   })
 }
+
+export function requestPasswordReset(email: string): Promise<{ detail: string }> {
+  return apiFetch<{ detail: string }>('/auth/password-reset/', {
+    method: 'POST',
+    body: { email },
+    skipAuth: true,
+  })
+}
+
+export function confirmPasswordReset(uid: string, token: string, newPassword: string): Promise<{ detail: string }> {
+  return apiFetch<{ detail: string }>('/auth/password-reset-confirm/', {
+    method: 'POST',
+    body: { uid, token, new_password: newPassword },
+    skipAuth: true,
+  })
+}

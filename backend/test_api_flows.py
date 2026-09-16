@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -17,6 +18,8 @@ from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageDraw
 from rest_framework.test import APITestCase
@@ -2983,6 +2986,14 @@ class RateLimitingTests(BaseAPITestCase):
         throttled = self.client.post('/api/auth/login/', payload)
         self.assertEqual(throttled.status_code, 429)
 
+    def test_password_reset_request_is_rate_limited(self):
+        payload = {'email': self.learner.email}
+        statuses = [self.client.post('/api/auth/password-reset/', payload).status_code for _ in range(5)]
+        self.assertTrue(all(code == 200 for code in statuses))
+
+        throttled = self.client.post('/api/auth/password-reset/', payload)
+        self.assertEqual(throttled.status_code, 429)
+
     def test_quiz_submit_is_rate_limited(self):
         self.auth_as(self.learner)
         payload = {'answers': [
@@ -3543,6 +3554,118 @@ class SetPasswordApiTests(BaseAPITestCase):
         response = self.client.get('/api/auth/me/')
         self.assertTrue(response.data['must_reset_password'])
         self.assertTrue(response.data['is_demo'])
+
+
+class PasswordResetApiTests(BaseAPITestCase):
+    GENERIC_DETAIL = "If an account exists for that email, we've sent a password reset link."
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()  # isolate the password-reset throttle counter used by these endpoints
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
+
+    def _valid_uid_token(self, user):
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        return uid, token
+
+    def test_request_sends_email_and_generic_response_for_existing_user(self):
+        response = self.client.post('/api/auth/password-reset/', {'email': self.learner.email})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['detail'], self.GENERIC_DETAIL)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.learner.email, mail.outbox[0].to)
+        self.assertIn('/reset-password/', mail.outbox[0].body)
+
+    def test_request_is_case_insensitive_on_email(self):
+        response = self.client.post('/api/auth/password-reset/', {'email': self.learner.email.upper()})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_request_returns_generic_response_and_no_email_for_unknown_address(self):
+        response = self.client.post('/api/auth/password-reset/', {'email': 'nobody@example.com'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['detail'], self.GENERIC_DETAIL)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_request_returns_generic_response_and_no_email_for_inactive_user(self):
+        self.learner.is_active = False
+        self.learner.save(update_fields=['is_active'])
+
+        response = self.client.post('/api/auth/password-reset/', {'email': self.learner.email})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['detail'], self.GENERIC_DETAIL)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_request_still_returns_generic_response_when_email_send_fails(self):
+        # An SMTP outage on a real account must not 500 — that would turn
+        # this endpoint into an account-existence oracle (only existing
+        # accounts reach the send call at all).
+        with patch('accounts.views.send_password_reset_email', side_effect=Exception('smtp down')):
+            response = self.client.post('/api/auth/password-reset/', {'email': self.learner.email})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['detail'], self.GENERIC_DETAIL)
+
+    def test_confirm_with_valid_token_resets_password_and_clears_must_reset_flag(self):
+        self.learner.must_reset_password = True
+        self.learner.save(update_fields=['must_reset_password'])
+        uid, token = self._valid_uid_token(self.learner)
+
+        response = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': uid, 'token': token, 'new_password': 'BrandNewPassw0rd1',
+        })
+        self.assertEqual(response.status_code, 200)
+
+        self.learner.refresh_from_db()
+        self.assertTrue(self.learner.check_password('BrandNewPassw0rd1'))
+        self.assertFalse(self.learner.must_reset_password)
+
+        login = self.client.post('/api/auth/login/', {
+            'email': self.learner.email, 'password': 'BrandNewPassw0rd1',
+        })
+        self.assertEqual(login.status_code, 200)
+
+    def test_confirm_with_invalid_token_returns_400_and_leaves_password_unchanged(self):
+        uid, _ = self._valid_uid_token(self.learner)
+        response = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': uid, 'token': 'not-a-real-token', 'new_password': 'BrandNewPassw0rd1',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(self.learner.check_password('pass12345'))
+
+    def test_confirm_with_invalid_uid_returns_400(self):
+        _, token = self._valid_uid_token(self.learner)
+        response = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': 'not-a-real-uid', 'token': token, 'new_password': 'BrandNewPassw0rd1',
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_confirm_token_cannot_be_reused_after_password_already_changed(self):
+        uid, token = self._valid_uid_token(self.learner)
+        first = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': uid, 'token': token, 'new_password': 'BrandNewPassw0rd1',
+        })
+        self.assertEqual(first.status_code, 200)
+
+        second = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': uid, 'token': token, 'new_password': 'AnotherPassw0rd2',
+        })
+        self.assertEqual(second.status_code, 400)
+        self.learner.refresh_from_db()
+        self.assertTrue(self.learner.check_password('BrandNewPassw0rd1'))
+
+    def test_confirm_rejects_password_failing_validators(self):
+        uid, token = self._valid_uid_token(self.learner)
+        response = self.client.post('/api/auth/password-reset-confirm/', {
+            'uid': uid, 'token': token, 'new_password': '12345678',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.learner.refresh_from_db()
+        self.assertTrue(self.learner.check_password('pass12345'))
 
 
 class DemoUserCatalogVisibilityTests(BaseAPITestCase):

@@ -5,8 +5,10 @@ import { CertificatesPage } from './pages/CertificatesPage'
 import { CourseDetailPage } from './pages/CourseDetailPage'
 import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LevelAssessmentPage } from './pages/LevelAssessmentPage'
 import { LoginPage } from './pages/LoginPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { ResourcesPage } from './pages/ResourcesPage'
 import { ResourceViewerPage } from './pages/ResourceViewerPage'
 import { AdminCourseListPage } from './pages/admin/AdminCourseListPage'
@@ -42,6 +44,8 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password/:uid/:token" element={<ResetPasswordPage />} />
 
       <Route element={<ProtectedRoute />}>
         {/* Outside AppLayout: a distraction-free full-bleed reader with no

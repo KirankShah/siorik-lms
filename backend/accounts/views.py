@@ -1,9 +1,13 @@
 import csv
 import io
+import logging
 
 from django.contrib.auth.models import update_last_login
+from django.contrib.auth.tokens import default_token_generator
 from django.db.models import Q, Value
 from django.db.models.functions import Concat
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -24,6 +28,8 @@ from .models import Organization, User
 from .serializers import (
     DemoUserCreateSerializer,
     OrganizationSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     SetPasswordSerializer,
     StaffCreateSerializer,
     UserPreferenceSerializer,
@@ -34,9 +40,12 @@ from .services import (
     provision_demo_user,
     provision_org_admin,
     provision_staff_learner,
+    send_password_reset_email,
 )
 from .staff_import import StaffImportError, parse_staff_rows
 from .staff_import import resolve_assessment_level as _resolve_staff_level
+
+logger = logging.getLogger(__name__)
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
@@ -555,3 +564,66 @@ class SetPasswordView(APIView):
 
         log_action(user, AuditLog.Action.PASSWORD_RESET_COMPLETED, user)
         return Response(UserSerializer(user).data)
+
+
+_GENERIC_RESET_REQUESTED_RESPONSE = {
+    'detail': "If an account exists for that email, we've sent a password reset link."
+}
+
+
+class PasswordResetRequestView(APIView):
+    """
+    Start of the self-service "forgot password" flow — request step. Always
+    returns the same generic response regardless of whether the email
+    matched an account, an inactive account, or nothing at all, so this
+    endpoint can't be used to enumerate registered emails.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'password-reset'
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = User.objects.filter(
+            email__iexact=serializer.validated_data['email'], is_active=True
+        ).first()
+        if user is not None:
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            try:
+                send_password_reset_email(user, uid, token)
+            except Exception:
+                # Swallowed rather than propagated: letting this 500 would
+                # turn "does this email have an account" into a timing/
+                # status-code oracle (only existing accounts reach the send
+                # call). Logged so an SMTP outage is still visible to ops.
+                logger.exception('Password reset email failed to send for user %s', user.pk)
+
+        return Response(_GENERIC_RESET_REQUESTED_RESPONSE)
+
+
+class PasswordResetConfirmView(APIView):
+    """
+    Completion of the self-service "forgot password" flow — the uid/token
+    from the emailed link, validated by PasswordResetConfirmSerializer,
+    which also resolves and attaches the target user.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'password-reset'
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data['user']
+        user.set_password(serializer.validated_data['new_password'])
+        user.must_reset_password = False
+        user.save(update_fields=['password', 'must_reset_password'])
+
+        log_action(user, AuditLog.Action.PASSWORD_RESET_COMPLETED, user)
+        return Response({'detail': 'Your password has been reset. You can now log in.'})

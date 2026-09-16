@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 import loginHero from '../assets/login-hero.jpg'
 import siorikLogoIcon from '../img/siorik_logo_icon.png'
@@ -145,9 +145,9 @@ export function LoginPage() {
                 />
                 Remember me
               </label>
-              <button type="button" className={`rounded text-sm font-medium text-brand-navy hover:underline ${FOCUS_RING}`}>
+              <Link to="/forgot-password" className={`rounded text-sm font-medium text-brand-navy hover:underline ${FOCUS_RING}`}>
                 Forgot Password?
-              </button>
+              </Link>
             </div>
 
             {error && (

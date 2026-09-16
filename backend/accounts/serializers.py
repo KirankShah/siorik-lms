@@ -1,4 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from django.utils.text import slugify
 from rest_framework import serializers
 
@@ -122,3 +125,46 @@ class SetPasswordSerializer(serializers.Serializer):
     def validate_new_password(self, value):
         validate_password(value)
         return value
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """
+    Input for the self-service "forgot password" request step. Deliberately
+    carries no information about whether the email matched an account — see
+    accounts.views.PasswordResetRequestView, which always responds the same
+    way regardless, to avoid leaking account existence.
+    """
+
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """
+    Input for the self-service "forgot password" confirm step. uid/token
+    come from the link in accounts.services.send_password_reset_email;
+    validate() resolves and attaches the target user (as attrs['user']) so
+    the view doesn't have to re-decode them.
+    """
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_new_password(self, value):
+        validate_password(value)
+        return value
+
+    def validate(self, attrs):
+        invalid = serializers.ValidationError(
+            {'detail': 'This password reset link is invalid or has expired.'}
+        )
+        try:
+            user_pk = force_str(urlsafe_base64_decode(attrs['uid']))
+            user = User.objects.get(pk=user_pk, is_active=True)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            raise invalid
+        if not default_token_generator.check_token(user, attrs['token']):
+            raise invalid
+
+        attrs['user'] = user
+        return attrs

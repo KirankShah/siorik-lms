@@ -135,13 +135,14 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
     # No blanket throttle — only endpoints that opt in via throttle_scope
-    # (login, quiz submission) are rate-limited. See SECURITY.md.
+    # (login, quiz submission, password reset) are rate-limited. See SECURITY.md.
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.ScopedRateThrottle',
     ),
     'DEFAULT_THROTTLE_RATES': {
         'login': '10/min',
         'quiz-submit': '20/min',
+        'password-reset': '5/min',
     },
 }
 
