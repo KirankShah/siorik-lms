@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from assessments.models import QuizAttempt
 from certificates.models import Certificate
-from courses.models import Enrollment
+from courses.models import Enrollment, LevelCourseAssignment
 from levelassessments.models import LevelAssessmentAttempt
 
 from .models import Badge, LeaderboardEntry, UserBadge
@@ -58,18 +58,10 @@ def recalculate_leaderboard_entry(user):
     """
     Recomputes and persists this user's LeaderboardEntry:
 
-    - 100 points per completed course THAT'S ACTUALLY PART OF THE LEARNER'S
-      OWN LEARNING PATH — course.path_order must be set, and
-      course.minimum_assessment_level must be null (Foundation, open to
-      everyone) or at-or-below the learner's own assessment_level, using
-      courses.learning_path.tier_rank's ordinal comparison. A completed
-      course outside the learner's assigned path (or one never given a
-      path_order at all) contributes nothing — this is deliberately a
-      LOOSER "at or below" comparison than the exact single-tier match
-      courses.learning_path.build_learning_path uses for path
-      membership/gating (a Senior Management learner's own dashboard path
-      only ever shows Foundation + Senior Management, but a
-      previously-completed Officer-tier course still counts here).
+    - 100 points per completed course that's actually part of the learner's
+      effective Learning Path. This uses the same exact per-level assignments
+      (or legacy fallback) as courses.learning_path.build_learning_path, so
+      the dashboard, access rules, and leaderboard cannot disagree.
       Plus up to 50 bonus points scaled linearly to that course's own quiz
       average (each quiz counted once, at its best score).
     - round(LEVEL_ASSESSMENT_PASS_POINTS * score_percent / 100) for each
@@ -97,17 +89,26 @@ def recalculate_leaderboard_entry(user):
     # Deferred import: courses.learning_path imports this module at its own
     # top level (award_badges_by_keys), so importing it back at module level
     # here would be a circular import.
-    from courses.learning_path import tier_rank
+    from courses.learning_path import learning_path_course_ids, tier_rank
 
     completed_enrollments = Enrollment.objects.filter(user=user, status=Enrollment.Status.COMPLETED)
 
-    user_tier_rank = tier_rank(user.assessment_level)
-    path_scoped_enrollments = [
-        enrollment
-        for enrollment in completed_enrollments.select_related('course')
-        if enrollment.course.path_order is not None
-        and tier_rank(enrollment.course.minimum_assessment_level) <= user_tier_rank
-    ]
+    if LevelCourseAssignment.objects.filter(
+        assessment_level__organization_id=user.organization_id
+    ).exists():
+        path_course_ids = learning_path_course_ids(user)
+        path_scoped_enrollments = list(completed_enrollments.filter(course_id__in=path_course_ids))
+    else:
+        # Preserve the legacy scoring contract until this organization opts
+        # into exact role assignments. Historically this included unpublished
+        # path-tagged courses in direct/service-level recalculations too.
+        user_tier_rank = tier_rank(user.assessment_level)
+        path_scoped_enrollments = [
+            enrollment
+            for enrollment in completed_enrollments.select_related('course')
+            if enrollment.course.path_order is not None
+            and tier_rank(enrollment.course.minimum_assessment_level) <= user_tier_rank
+        ]
 
     total_points = 0
     for enrollment in path_scoped_enrollments:

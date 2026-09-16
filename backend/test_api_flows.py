@@ -1059,9 +1059,7 @@ class PathAccessEnforcementTests(BaseAPITestCase):
 
 class LevelCourseAssignmentApiTests(BaseAPITestCase):
     """Role-Based Training admin screen (courses.models.LevelCourseAssignment)
-    — additive-only phase 1: also confirms it has zero effect on the live
-    Learning Path/gating/leaderboard/certificate behavior, none of which
-    read this model."""
+    and its exact-level integration with the live learner Learning Path."""
 
     def setUp(self):
         super().setUp()
@@ -1249,23 +1247,87 @@ class LevelCourseAssignmentApiTests(BaseAPITestCase):
         })
         self.assertEqual(response.status_code, 404)
 
-    # --- Zero effect on live Learning Path / gating / leaderboard / certificate behavior ---
+    # --- Live Learning Path integration ---
 
-    def test_assignments_have_no_effect_on_live_learning_path(self):
-        # self.published_org_course (from BaseAPITestCase) has no path_order,
-        # so it's not part of anyone's Learning Path — assigning it here via
-        # the new model must not change that, since nothing reads
-        # LevelCourseAssignment yet.
+    def test_assignments_define_the_exact_live_path_in_configured_order(self):
         self.auth_as(self.org_admin)
-        self.client.post('/api/level-course-assignments/', {
-            'assessment_level': self.assistant_level.id, 'course': self.published_org_course.id,
-        })
+        for course in (self.course_c, self.course_a):
+            self.client.post('/api/level-course-assignments/', {
+                'assessment_level': self.assistant_level.id, 'course': course.id,
+            })
+
+        self.learner.assessment_level = User.AssessmentLevel.ASSISTANT_SUPERVISOR
+        self.learner.save(update_fields=['assessment_level'])
 
         self.auth_as(self.learner)
         response = self.client.get('/api/learning-path/')
         self.assertEqual(response.status_code, 200)
-        path_course_ids = {c['id'] for tier in response.data['tiers'] for c in tier['courses']}
-        self.assertNotIn(self.published_org_course.id, path_course_ids)
+        self.assertEqual([tier['tier_key'] for tier in response.data['tiers']], [User.AssessmentLevel.ASSISTANT_SUPERVISOR])
+        path_courses = response.data['tiers'][0]['courses']
+        self.assertEqual([course['id'] for course in path_courses], [self.course_c.id, self.course_a.id])
+        self.assertEqual([course['path_order'] for course in path_courses], [1, 2])
+        self.assertNotIn(self.course_b.id, {course['id'] for course in path_courses})
+
+    def test_different_levels_receive_only_their_own_assignments(self):
+        self.auth_as(self.org_admin)
+        self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.officer_level.id, 'course': self.course_b.id,
+        })
+
+        self.learner.assessment_level = User.AssessmentLevel.ASSISTANT_SUPERVISOR
+        self.learner.save(update_fields=['assessment_level'])
+        self.auth_as(self.learner)
+        assistant_path = self.client.get('/api/learning-path/')
+        self.assertEqual(
+            [course['id'] for tier in assistant_path.data['tiers'] for course in tier['courses']],
+            [self.course_a.id],
+        )
+
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+        officer_path = self.client.get('/api/learning-path/')
+        self.assertEqual(
+            [course['id'] for tier in officer_path.data['tiers'] for course in tier['courses']],
+            [self.course_b.id],
+        )
+
+    def test_reordering_assignments_immediately_reorders_the_live_path(self):
+        self.auth_as(self.org_admin)
+        for course in (self.course_a, self.course_b):
+            self.client.post('/api/level-course-assignments/', {
+                'assessment_level': self.management_level.id, 'course': course.id,
+            })
+        self.client.post('/api/level-course-assignments/reorder/', {
+            'assessment_level': self.management_level.id,
+            'course_ids': [self.course_b.id, self.course_a.id],
+        }, format='json')
+
+        self.learner.assessment_level = User.AssessmentLevel.MANAGEMENT
+        self.learner.save(update_fields=['assessment_level'])
+        self.auth_as(self.learner)
+        response = self.client.get('/api/learning-path/')
+        self.assertEqual(
+            [course['id'] for tier in response.data['tiers'] for course in tier['courses']],
+            [self.course_b.id, self.course_a.id],
+        )
+
+    def test_learner_course_catalog_matches_the_assigned_path_and_order(self):
+        self.auth_as(self.org_admin)
+        for course in (self.course_c, self.course_a):
+            self.client.post('/api/level-course-assignments/', {
+                'assessment_level': self.senior_level.id, 'course': course.id,
+            })
+
+        self.learner.assessment_level = User.AssessmentLevel.SENIOR_MANAGEMENT
+        self.learner.save(update_fields=['assessment_level'])
+        self.auth_as(self.learner)
+        response = self.client.get('/api/courses/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([course['id'] for course in response.data], [self.course_c.id, self.course_a.id])
 
 
 class LearnerCatalogPathViewTests(BaseAPITestCase):

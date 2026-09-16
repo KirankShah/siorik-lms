@@ -133,8 +133,8 @@ export interface Enrollment {
 }
 
 // --- Role-Based Training admin screen (courses.models.LevelCourseAssignment) ---
-// Phase 1, additive-only: none of the live Learning Path/gating/leaderboard/
-// certificate behavior reads these yet — see that model's own docstring.
+// These exact per-level assignments drive the live learner path once an
+// organization has configured at least one assignment.
 
 // Row shape for the "Unassigned Courses" list.
 export interface AssignableCourse {

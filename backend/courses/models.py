@@ -120,20 +120,12 @@ class Course(models.Model):
         blank=True,
         related_name='created_courses',
     )
-    # This course's position in the single learner-facing sequential Learning
-    # Path (see courses.learning_path). Null means the course isn't part of
-    # the path at all — it's still reachable from the general catalog like
-    # any other course, just not shown as a path node. Every path-order'd
-    # course shares one ascending sequence; ties broken by id.
+    # Legacy Learning Path position retained for organizations that have not
+    # configured LevelCourseAssignment yet. In configured organizations the
+    # per-level assignment's order is authoritative instead.
     path_order = models.PositiveIntegerField(null=True, blank=True, db_index=True)
-    # Null means this course sits in the path's "Foundation" tier — open to
-    # every learner regardless of role. Otherwise one of
-    # accounts.User.AssessmentLevel's codes: only a learner whose own
-    # User.assessment_level matches this value ever sees the course in their
-    # path, mirroring levelassessments.services.assigned_assessment_level_for_user
-    # (a learner is only ever assigned the single tier matching their own
-    # assessment_level, never a ladder of lower ones) — see
-    # courses.learning_path for the full gating rule.
+    # Legacy tier tag paired with path_order. The live path reads it only for
+    # organizations with no LevelCourseAssignment rows.
     minimum_assessment_level = models.CharField(
         max_length=30, choices=User.AssessmentLevel.choices, blank=True, null=True
     )
@@ -168,13 +160,10 @@ class CourseAccess(models.Model):
 
 class LevelCourseAssignment(models.Model):
     """
-    Phase 1 of a role-based training model meant to eventually replace
-    Course.path_order + Course.minimum_assessment_level above (see
-    courses.learning_path's module docstring for the current cumulative/
-    sequential system those two fields still drive) — additive only for
-    now. Nothing reads this model yet: the live Learning Path, gating,
-    leaderboard, and certificate logic are all untouched, and will only
-    start consuming it in a deliberate, separate cutover.
+    Explicit role-based training configuration consumed by the live Learning
+    Path once an organization has at least one assignment. Organizations with
+    no assignment rows retain the legacy Course.path_order +
+    Course.minimum_assessment_level behavior as a migration fallback.
 
     Explicit, per-(assessment level, course) assignment with its own order,
     rather than one global path_order shared across every tier — a course

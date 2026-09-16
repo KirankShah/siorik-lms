@@ -154,8 +154,7 @@ export function RoleBasedTrainingPage() {
       <div>
         <h1 className="text-lg font-semibold text-neutral-900">Role-Based Training</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Configure course assignments and ordering for each assessment level. These settings do not yet change live
-          learner paths.
+          Configure the exact courses and order learners at each assessment level see in their Learning Path.
         </p>
       </div>
 

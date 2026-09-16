@@ -1,22 +1,15 @@
 """
 Assembles a learner's "My Learning Path" dashboard section — the single
-sequential trail of path_order'd courses, grouped by tier, with a
+sequential trail of courses assigned to their role, with a
 completed/current/locked state per course.
 
 Design notes:
 
-- Path membership: every course visible to the learner (visible_courses_for_user)
-  that has a path_order set, whether or not they're enrolled yet — enrolling
-  happens implicitly the moment they open a path course via its Continue
-  button, same as any other course.
-- Tier membership is CUMULATIVE, not exact-match: Course.minimum_assessment_level
-  is null for "Foundation" (open to everyone), or one of
-  accounts.User.AssessmentLevel's codes for a role tier, and a learner's path
-  includes every tier at or below their own assessment_level — see tier_rank.
-  A Senior Management learner's path includes Foundation + Assistant-Supervisor
-  + Officer + Management + Senior Management tier courses, the same ordinal
-  comparison gamification.services.recalculate_leaderboard_entry uses for
-  scoring, so the two stay consistent with each other.
+- Path membership: once an organization has configured Role-Based Training,
+  courses come from LevelCourseAssignment for the learner's exact assessment
+  level, in the Org Admin's configured order. Organizations with no assignments
+  at all retain the legacy cumulative Course.path_order /
+  Course.minimum_assessment_level behavior until they are configured.
 - Sequential unlock: courses unlock strictly in path_order, purely on whether
   the immediately preceding path course is completed. Nothing about a
   Level Assessment gates a course's unlock state — passing one is a
@@ -33,6 +26,8 @@ Design notes:
   milestone" tint instead of the ordinary per-course teal.
 """
 
+from dataclasses import dataclass
+
 from django.db.models import Count, Q
 
 from accounts.models import User
@@ -40,7 +35,7 @@ from gamification.models import UserBadge
 from gamification.services import award_badges_by_keys
 from levelassessments.models import LevelAssessmentAttempt
 
-from .models import Course, Enrollment
+from .models import Course, Enrollment, LevelCourseAssignment
 from .permissions import visible_courses_for_user
 
 FOUNDATION_TIER_KEY = 'FOUNDATION'
@@ -94,12 +89,48 @@ def has_passed_tier_assessment(user, tier_code):
     ).exists()
 
 
-def _path_courses_for_user(user):
-    """Path-order'd courses visible to `user`, restricted to Foundation plus
-    every tier at or below their own assessment_level (tier_rank) —
-    cumulative: a Senior Management learner's path includes
-    Assistant-Supervisor/Officer/Management/Senior-Management tier courses,
-    not just Senior Management's own."""
+@dataclass(frozen=True)
+class PathCourseEntry:
+    course: Course
+    order: int
+    tier_code: str | None
+
+
+def _path_course_entries_for_user(user):
+    """Ordered path entries for a learner.
+
+    A single assignment anywhere in the organization activates the new exact-
+    level configuration for that organization. This makes an intentionally
+    empty level stay empty instead of silently falling back to legacy courses,
+    while organizations not migrated to Role-Based Training continue to use
+    their existing cumulative path unchanged.
+    """
+    organization_assignments = LevelCourseAssignment.objects.filter(
+        assessment_level__organization_id=user.organization_id
+    )
+    if user.organization_id is not None and organization_assignments.exists():
+        if not user.assessment_level:
+            return []
+        assignments = (
+            organization_assignments
+            .filter(
+                assessment_level__name=user.assessment_level,
+                course__in=visible_courses_for_user(user),
+            )
+            .select_related('course')
+            .order_by('order', 'id')
+        )
+        return [
+            PathCourseEntry(
+                course=assignment.course,
+                order=assignment.order,
+                tier_code=user.assessment_level,
+            )
+            for assignment in assignments
+        ]
+
+    # Compatibility path for organizations that have not configured any
+    # LevelCourseAssignment rows yet.
     user_tier_rank = tier_rank(user.assessment_level)
     allowed_tiers = [level for level in TIER_RANK_ORDER if tier_rank(level) <= user_tier_rank]
 
@@ -107,12 +138,25 @@ def _path_courses_for_user(user):
     if allowed_tiers:
         tier_filter |= Q(minimum_assessment_level__in=allowed_tiers)
 
-    return list(
+    courses = list(
         visible_courses_for_user(user)
         .filter(path_order__isnull=False)
         .filter(tier_filter)
         .order_by('path_order', 'id')
     )
+    return [
+        PathCourseEntry(
+            course=course,
+            order=course.path_order,
+            tier_code=course.minimum_assessment_level,
+        )
+        for course in courses
+    ]
+
+
+def learning_path_course_ids(user):
+    """Course ids in the learner's effective path, in configured order."""
+    return [entry.course.id for entry in _path_course_entries_for_user(user)]
 
 
 def branch_completion_percentile(user, path_course_ids):
@@ -162,7 +206,8 @@ def build_learning_path(user):
     {'tier_key', 'tier_label', 'is_complete', 'courses': [...]}; each course
     is {'id', 'slug', 'title', 'path_order', 'state'} where state is one of
     'completed' | 'current' | 'locked'."""
-    courses = _path_courses_for_user(user)
+    entries = _path_course_entries_for_user(user)
+    courses = [entry.course for entry in entries]
     course_ids = [course.id for course in courses]
 
     enrollment_by_course_id = {
@@ -191,27 +236,30 @@ def build_learning_path(user):
         course_states[course.id] = state
         previous_course_completed = is_completed
 
-    user_tier_rank = tier_rank(user.assessment_level)
-    tier_order = [None] + [level for level in TIER_RANK_ORDER if tier_rank(level) <= user_tier_rank]
+    # In configured organizations this is one exact role tier. In legacy
+    # organizations it retains the existing Foundation-to-current sequence.
+    tier_order = list(dict.fromkeys(entry.tier_code for entry in entries))
 
     tiers = []
     for tier_code in tier_order:
-        tier_courses = [course for course in courses if course.minimum_assessment_level == tier_code]
-        if not tier_courses:
+        tier_entries = [entry for entry in entries if entry.tier_code == tier_code]
+        if not tier_entries:
             continue
         tiers.append({
             'tier_key': _tier_key(tier_code),
             'tier_label': _tier_label(tier_code),
-            'is_complete': all(course_states[course.id] == 'completed' for course in tier_courses),
+            'is_complete': all(course_states[entry.course.id] == 'completed' for entry in tier_entries),
             'courses': [
                 {
-                    'id': course.id,
-                    'slug': course.slug,
-                    'title': course.title,
-                    'path_order': course.path_order,
-                    'state': course_states[course.id],
+                    'id': entry.course.id,
+                    'slug': entry.course.slug,
+                    'title': entry.course.title,
+                    # Kept as path_order in the API contract; for configured
+                    # role paths this is LevelCourseAssignment.order.
+                    'path_order': entry.order,
+                    'state': course_states[entry.course.id],
                 }
-                for course in tier_courses
+                for entry in tier_entries
             ],
         })
 

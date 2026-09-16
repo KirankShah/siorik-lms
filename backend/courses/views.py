@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Max, Sum
+from django.db.models import Case, IntegerField, Max, Sum, When
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -58,7 +58,7 @@ from .permissions import (
     path_accessible_courses_for_user,
     visible_courses_for_user,
 )
-from .learning_path import build_learning_path, check_learning_path_milestones
+from .learning_path import build_learning_path, check_learning_path_milestones, learning_path_course_ids
 from .services import clone_course
 from .serializers import (
     AssignableCourseSerializer,
@@ -145,9 +145,9 @@ class CourseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.action == 'list':
             user = self.request.user
-            # A non-demo learner with at least one path-ordered course
+            # A non-demo learner with at least one assigned path course
             # available to them sees ONLY their Learning Path — same
-            # course set, same path_order sequence, same lock states as the
+            # course set, configured sequence, and lock states as the
             # dashboard widget (courses.learning_path.build_learning_path),
             # so the two views can never contradict each other. A learner
             # with no path assigned yet (path_order not configured for any
@@ -158,10 +158,15 @@ class CourseViewSet(viewsets.ModelViewSet):
                 course_ids = [course['id'] for tier in path['tiers'] for course in tier['courses']]
                 if course_ids:
                     self._learner_path = path
+                    path_order = Case(
+                        *[When(pk=course_id, then=position) for position, course_id in enumerate(course_ids)],
+                        output_field=IntegerField(),
+                    )
                     return (
                         Course.objects.filter(id__in=course_ids)
                         .select_related('organization', 'cloned_from')
-                        .order_by('path_order', 'id')
+                        .annotate(_assigned_path_order=path_order)
+                        .order_by('_assigned_path_order')
                     )
             return catalog_courses_for_user(user).select_related('organization', 'cloned_from')
         if self.action == 'retrieve':
@@ -739,8 +744,8 @@ def _assessment_level_for_admin(request, level_id):
 class LevelCourseAssignmentListView(APIView):
     """
     Role-Based Training admin screen (courses.models.LevelCourseAssignment)
-    — ORG_ADMIN/PLATFORM_ADMIN only, additive-only phase 1 (see that model's
-    own docstring: nothing else reads it yet).
+    — ORG_ADMIN/PLATFORM_ADMIN only. Once an organization has any assignment,
+    these exact per-level lists drive its learners' live Learning Paths.
 
     GET  ?assessment_level=<id> -> {'assigned': [...], 'unassigned': [...]}
     for that one level — assigned in current order, unassigned being every
@@ -956,7 +961,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
-            if enrollment.course.path_order is not None:
+            if enrollment.course_id in learning_path_course_ids(enrollment.user):
                 milestones = check_learning_path_milestones(enrollment.user)
             try_issue_learning_path_certificate(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
@@ -1014,7 +1019,7 @@ class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):
         milestones = None
         if newly_completed:
             update_gamification_for_user(enrollment.user)
-            if enrollment.course.path_order is not None:
+            if enrollment.course_id in learning_path_course_ids(enrollment.user):
                 milestones = check_learning_path_milestones(enrollment.user)
             try_issue_learning_path_certificate(enrollment.user)
         log_action(request.user, AuditLog.Action.ENROLLMENT_UPDATED, enrollment)
@@ -1415,7 +1420,7 @@ def _build_staff_training_report(organization, date_from, date_to):
             for e in Enrollment.objects.filter(user=user, course_id__in=[c.id for c in curriculum_courses])
         }
 
-        # Column 6/7: every course in the learner's own (tier-cumulative) path
+        # Column 6/7: every course in the learner's own effective path
         # must be COMPLETED with a completion date inside the range for the
         # path to count as done *for this report period* — blank ("incomplete")
         # if any of them isn't, Pass/Fail only once every one of them is.
