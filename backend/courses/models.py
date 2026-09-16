@@ -166,6 +166,45 @@ class CourseAccess(models.Model):
         return f'{self.course.title} -> {self.organization.name}'
 
 
+class LevelCourseAssignment(models.Model):
+    """
+    Phase 1 of a role-based training model meant to eventually replace
+    Course.path_order + Course.minimum_assessment_level above (see
+    courses.learning_path's module docstring for the current cumulative/
+    sequential system those two fields still drive) — additive only for
+    now. Nothing reads this model yet: the live Learning Path, gating,
+    leaderboard, and certificate logic are all untouched, and will only
+    start consuming it in a deliberate, separate cutover.
+
+    Explicit, per-(assessment level, course) assignment with its own order,
+    rather than one global path_order shared across every tier — a course
+    can be assigned to several different levels independently (e.g. both
+    Officer's and Management's list), each with its own position. No
+    inheritance between levels: every level starts empty and is built up
+    from scratch, nothing carries over from a lower tier automatically.
+
+    'levelassessments.AssessmentLevel' is a string reference (not a direct
+    import) because assessments.models already imports courses.models
+    (for Slide) and levelassessments.models imports assessments.models —
+    importing levelassessments.models here at module level would be
+    circular. Same pattern this file already uses for certificate_template
+    above.
+    """
+
+    assessment_level = models.ForeignKey(
+        'levelassessments.AssessmentLevel', on_delete=models.CASCADE, related_name='course_assignments'
+    )
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='level_assignments')
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['assessment_level', 'order', 'id']
+        unique_together = ('assessment_level', 'course')
+
+    def __str__(self):
+        return f'{self.assessment_level} - {self.course.title} (#{self.order})'
+
+
 class Module(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='modules')
     title = models.CharField(max_length=255)

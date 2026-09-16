@@ -28,6 +28,7 @@ import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
 import { LevelQuestionsImportPage } from './pages/admin/LevelQuestionsImportPage'
 import { QuestionBankPage } from './pages/admin/QuestionBankPage'
+import { RoleBasedTrainingPage } from './pages/admin/RoleBasedTrainingPage'
 import { StaffEnrollmentPage } from './pages/admin/StaffEnrollmentPage'
 import { StaffTrainingReportPage } from './pages/admin/StaffTrainingReportPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
@@ -99,6 +100,7 @@ function App() {
             <Route path="/admin/organization" element={<OrganizationSettingsPage />} />
             <Route path="/admin/staff-enrollment" element={<StaffEnrollmentPage />} />
             <Route path="/admin/staff-training-report" element={<StaffTrainingReportPage />} />
+            <Route path="/admin/role-based-training" element={<RoleBasedTrainingPage />} />
           </Route>
 
           <Route element={<PlatformAdminRoute />}>

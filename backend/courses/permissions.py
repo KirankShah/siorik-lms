@@ -46,6 +46,23 @@ def curriculum_courses_for_organization(organization_id):
     )
 
 
+def all_courses_for_organization(organization_id):
+    """
+    Every course belonging to an organization's curriculum, regardless of
+    path_order/minimum_assessment_level tagging — same ownership rule as
+    curriculum_courses_for_organization, but without that function's
+    path_order__isnull=False filter, since the Role-Based Training screen
+    (courses.views.LevelCourseAssignmentView) needs the full pool of
+    assignable courses, not just ones already tagged under the old system.
+    """
+    own_org_courses = Q(content_owner=Course.ContentOwner.ORGANIZATION, organization_id=organization_id)
+    granted_platform_courses = Q(
+        content_owner=Course.ContentOwner.PLATFORM,
+        access_grants__organization_id=organization_id,
+    )
+    return Course.objects.filter(own_org_courses | granted_platform_courses).distinct()
+
+
 def visible_courses_for_user(user):
     """
     Courses a given user is allowed to see:

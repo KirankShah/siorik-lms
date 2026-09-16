@@ -131,3 +131,31 @@ export interface Enrollment {
   retake_count: number
   retake_limit_reached: boolean
 }
+
+// --- Role-Based Training admin screen (courses.models.LevelCourseAssignment) ---
+// Phase 1, additive-only: none of the live Learning Path/gating/leaderboard/
+// certificate behavior reads these yet — see that model's own docstring.
+
+// Row shape for the "Unassigned Courses" list.
+export interface AssignableCourse {
+  id: number
+  title: string
+  slug: string
+}
+
+// Row shape for the "Assigned Courses" list — the assignment record itself
+// (id, order) plus enough of the course to label it without a separate
+// cross-reference lookup.
+export interface LevelCourseAssignment {
+  id: number
+  assessment_level: number
+  course_id: number
+  course_title: string
+  course_slug: string
+  order: number
+}
+
+export interface LevelCourseAssignmentList {
+  assigned: LevelCourseAssignment[]
+  unassigned: AssignableCourse[]
+}

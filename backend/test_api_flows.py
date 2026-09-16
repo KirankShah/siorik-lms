@@ -1057,6 +1057,217 @@ class PathAccessEnforcementTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class LevelCourseAssignmentApiTests(BaseAPITestCase):
+    """Role-Based Training admin screen (courses.models.LevelCourseAssignment)
+    — additive-only phase 1: also confirms it has zero effect on the live
+    Learning Path/gating/leaderboard/certificate behavior, none of which
+    read this model."""
+
+    def setUp(self):
+        super().setUp()
+        self.assistant_level = configure_assessment_level(self.org, User.AssessmentLevel.ASSISTANT_SUPERVISOR)
+        self.officer_level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER)
+        self.management_level = configure_assessment_level(self.org, User.AssessmentLevel.MANAGEMENT)
+        self.senior_level = configure_assessment_level(self.org, User.AssessmentLevel.SENIOR_MANAGEMENT)
+        self.other_org_level = configure_assessment_level(self.other_org, User.AssessmentLevel.OFFICER)
+
+        self.course_a = Course.objects.create(
+            title='Course A', slug='rbt-course-a', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+        self.course_b = Course.objects.create(
+            title='Course B', slug='rbt-course-b', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+        self.course_c = Course.objects.create(
+            title='Course C', slug='rbt-course-c', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+
+    def list_url(self, level):
+        return f'/api/level-course-assignments/?assessment_level={level.id}'
+
+    # --- Blank starting point / basic assign+list ---
+
+    def test_level_starts_with_zero_assignments_and_full_unassigned_pool(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['assigned'], [])
+        # Superset check, not exact equality — BaseAPITestCase.setUp already
+        # creates other org-owned courses (published_org_course etc.) that
+        # legitimately belong to this same organization's curriculum too.
+        unassigned_ids = {c['id'] for c in response.data['unassigned']}
+        self.assertTrue({self.course_a.id, self.course_b.id, self.course_c.id}.issubset(unassigned_ids))
+
+    def test_assigning_a_course_appends_it_and_moves_it_out_of_unassigned(self):
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['course_id'], self.course_a.id)
+        self.assertEqual(response.data['order'], 1)
+
+        listing = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual([c['course_id'] for c in listing.data['assigned']], [self.course_a.id])
+        unassigned_ids = {c['id'] for c in listing.data['unassigned']}
+        self.assertTrue({self.course_b.id, self.course_c.id}.issubset(unassigned_ids))
+        self.assertNotIn(self.course_a.id, unassigned_ids)
+
+    def test_creating_assignments_for_all_four_levels_from_blank(self):
+        self.auth_as(self.org_admin)
+        levels = [self.assistant_level, self.officer_level, self.management_level, self.senior_level]
+        for level in levels:
+            response = self.client.post('/api/level-course-assignments/', {
+                'assessment_level': level.id, 'course': self.course_a.id,
+            })
+            self.assertEqual(response.status_code, 201)
+
+        for level in levels:
+            listing = self.client.get(self.list_url(level))
+            self.assertEqual([c['course_id'] for c in listing.data['assigned']], [self.course_a.id])
+
+    def test_duplicate_assignment_returns_400_not_500(self):
+        self.auth_as(self.org_admin)
+        self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        self.assertEqual(response.status_code, 400)
+
+    # --- Reordering ---
+
+    def test_reorder_persists_new_order(self):
+        self.auth_as(self.org_admin)
+        for course in [self.course_a, self.course_b, self.course_c]:
+            self.client.post('/api/level-course-assignments/', {
+                'assessment_level': self.assistant_level.id, 'course': course.id,
+            })
+
+        reorder_response = self.client.post('/api/level-course-assignments/reorder/', {
+            'assessment_level': self.assistant_level.id,
+            'course_ids': [self.course_c.id, self.course_a.id, self.course_b.id],
+        }, format='json')
+        self.assertEqual(reorder_response.status_code, 200)
+        self.assertEqual(
+            [c['course_id'] for c in reorder_response.data], [self.course_c.id, self.course_a.id, self.course_b.id],
+        )
+
+        listing = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual(
+            [c['course_id'] for c in listing.data['assigned']], [self.course_c.id, self.course_a.id, self.course_b.id],
+        )
+
+    def test_reorder_rejects_a_course_id_set_that_does_not_match(self):
+        self.auth_as(self.org_admin)
+        self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        response = self.client.post('/api/level-course-assignments/reorder/', {
+            'assessment_level': self.assistant_level.id,
+            'course_ids': [self.course_a.id, self.course_b.id],
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    # --- Same course, independent assignment across levels ---
+
+    def test_same_course_can_be_assigned_to_multiple_levels_independently(self):
+        self.auth_as(self.org_admin)
+        officer_response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.officer_level.id, 'course': self.course_a.id,
+        })
+        management_response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.management_level.id, 'course': self.course_a.id,
+        })
+        self.assertEqual(officer_response.status_code, 201)
+        self.assertEqual(management_response.status_code, 201)
+
+        officer_listing = self.client.get(self.list_url(self.officer_level))
+        management_listing = self.client.get(self.list_url(self.management_level))
+        self.assertEqual([c['course_id'] for c in officer_listing.data['assigned']], [self.course_a.id])
+        self.assertEqual([c['course_id'] for c in management_listing.data['assigned']], [self.course_a.id])
+
+        # Removing it from one level leaves the other untouched.
+        assignment_id = officer_listing.data['assigned'][0]['id']
+        delete_response = self.client.delete(f'/api/level-course-assignments/{assignment_id}/')
+        self.assertEqual(delete_response.status_code, 204)
+
+        officer_listing_after = self.client.get(self.list_url(self.officer_level))
+        management_listing_after = self.client.get(self.list_url(self.management_level))
+        self.assertEqual(officer_listing_after.data['assigned'], [])
+        self.assertEqual([c['course_id'] for c in management_listing_after.data['assigned']], [self.course_a.id])
+
+    # --- Delete doesn't touch the Course itself ---
+
+    def test_unassigning_deletes_only_the_assignment_not_the_course(self):
+        self.auth_as(self.org_admin)
+        create_response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.course_a.id,
+        })
+        assignment_id = create_response.data['id']
+
+        self.client.delete(f'/api/level-course-assignments/{assignment_id}/')
+
+        self.assertTrue(Course.objects.filter(id=self.course_a.id).exists())
+        listing = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual(listing.data['assigned'], [])
+        self.assertIn(self.course_a.id, {c['id'] for c in listing.data['unassigned']})
+
+    # --- Permissions/scoping ---
+
+    def test_org_admin_cannot_manage_another_organizations_level(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.list_url(self.other_org_level))
+        self.assertEqual(response.status_code, 403)
+
+    def test_platform_admin_can_manage_any_organizations_level(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(self.list_url(self.other_org_level))
+        self.assertEqual(response.status_code, 200)
+
+    def test_instructor_is_forbidden(self):
+        self.auth_as(self.instructor)
+        response = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual(response.status_code, 403)
+
+    def test_learner_is_forbidden(self):
+        self.auth_as(self.learner)
+        response = self.client.get(self.list_url(self.assistant_level))
+        self.assertEqual(response.status_code, 403)
+
+    def test_cannot_assign_a_course_from_another_organization(self):
+        other_org_course = Course.objects.create(
+            title='Other Org Course For RBT', slug='rbt-other-org-course', organization=self.other_org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': other_org_course.id,
+        })
+        self.assertEqual(response.status_code, 404)
+
+    # --- Zero effect on live Learning Path / gating / leaderboard / certificate behavior ---
+
+    def test_assignments_have_no_effect_on_live_learning_path(self):
+        # self.published_org_course (from BaseAPITestCase) has no path_order,
+        # so it's not part of anyone's Learning Path — assigning it here via
+        # the new model must not change that, since nothing reads
+        # LevelCourseAssignment yet.
+        self.auth_as(self.org_admin)
+        self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.assistant_level.id, 'course': self.published_org_course.id,
+        })
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/learning-path/')
+        self.assertEqual(response.status_code, 200)
+        path_course_ids = {c['id'] for tier in response.data['tiers'] for c in tier['courses']}
+        self.assertNotIn(self.published_org_course.id, path_course_ids)
+
+
 class LearnerCatalogPathViewTests(BaseAPITestCase):
     """GET /api/courses/ (the general Courses catalog) for a LEARNER — must
     match the Learning Path widget exactly once a path is assigned (same

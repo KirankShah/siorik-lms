@@ -13,6 +13,7 @@ from .models import (
     DemoLessonAccess,
     Element,
     Enrollment,
+    LevelCourseAssignment,
     Lesson,
     Module,
     Slide,
@@ -471,3 +472,29 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             validated_data['completed_at'] = timezone.now()
             validated_data.setdefault('progress_percent', 100)
         return super().update(instance, validated_data)
+
+
+class AssignableCourseSerializer(serializers.ModelSerializer):
+    """Row shape for the Role-Based Training screen's "Unassigned Courses"
+    list — just enough to identify and label a course; see
+    LevelCourseAssignmentSerializer for an already-assigned one."""
+
+    class Meta:
+        model = Course
+        fields = ['id', 'title', 'slug']
+
+
+class LevelCourseAssignmentSerializer(serializers.ModelSerializer):
+    """Row shape for the Role-Based Training screen's "Assigned Courses"
+    list — the assignment record itself (id, order) plus enough of the
+    course to label it, so the frontend never has to cross-reference a
+    separate course list to render this one."""
+
+    course_id = serializers.IntegerField(source='course.id', read_only=True)
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    course_slug = serializers.CharField(source='course.slug', read_only=True)
+
+    class Meta:
+        model = LevelCourseAssignment
+        fields = ['id', 'assessment_level', 'course_id', 'course_title', 'course_slug', 'order']
+        read_only_fields = ['id', 'assessment_level', 'course_id', 'course_title', 'course_slug', 'order']

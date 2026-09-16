@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   FileText,
   GraduationCap,
+  Layers,
   LayoutDashboard,
   Library,
   ListChecks,
@@ -140,6 +141,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
             <NavLink to="/admin/staff-training-report" className={linkClass} onClick={onNavigate}>
               <FileSpreadsheet className="h-[18px] w-[18px]" />
               Staff Training Report
+            </NavLink>
+            <NavLink to="/admin/role-based-training" className={linkClass} onClick={onNavigate}>
+              <Layers className="h-[18px] w-[18px]" />
+              Role-Based Training
             </NavLink>
             <NavLink to="/admin/organization" className={linkClass} onClick={onNavigate}>
               <Settings className="h-[18px] w-[18px]" />

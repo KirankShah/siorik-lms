@@ -11,6 +11,9 @@ from .views import (
     LearnerRosterView,
     LearningPathView,
     LessonViewSet,
+    LevelCourseAssignmentDetailView,
+    LevelCourseAssignmentListView,
+    LevelCourseAssignmentReorderView,
     MediaUploadView,
     ModuleViewSet,
     SlideTemplateViewSet,
@@ -29,6 +32,17 @@ router.register('slide-templates', SlideTemplateViewSet, basename='slide-templat
 
 urlpatterns = router.urls + [
     path('learning-path/', LearningPathView.as_view(), name='learning-path'),
+    path('level-course-assignments/', LevelCourseAssignmentListView.as_view(), name='level-course-assignment-list'),
+    path(
+        'level-course-assignments/reorder/',
+        LevelCourseAssignmentReorderView.as_view(),
+        name='level-course-assignment-reorder',
+    ),
+    path(
+        'level-course-assignments/<int:pk>/',
+        LevelCourseAssignmentDetailView.as_view(),
+        name='level-course-assignment-detail',
+    ),
     path('reports/enrollments/', EnrollmentReportView.as_view(), name='enrollment-report'),
     path('reports/learners/', LearnerRosterView.as_view(), name='learner-roster'),
     path('reports/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),

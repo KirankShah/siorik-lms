@@ -30,7 +30,7 @@ from audit.services import log_action
 from certificates.services import certificate_ineligibility_reason, try_issue_learning_path_certificate
 from core.permissions import IsAdminRole, IsOrgAdminRole, RoleScopedQuerysetMixin
 from gamification.services import record_learning_activity, update_gamification_for_user
-from levelassessments.models import LevelAssessmentAttempt
+from levelassessments.models import AssessmentLevel, LevelAssessmentAttempt
 from levelassessments.services import assigned_assessment_level_for_user
 from scenarios.models import ScenarioAttempt
 
@@ -40,6 +40,7 @@ from .models import (
     DemoLessonAccess,
     Element,
     Enrollment,
+    LevelCourseAssignment,
     Lesson,
     LessonProgress,
     Module,
@@ -48,6 +49,7 @@ from .models import (
     SlideTemplate,
 )
 from .permissions import (
+    all_courses_for_organization,
     catalog_courses_for_user,
     curriculum_courses_for_organization,
     editable_courses_for_user,
@@ -59,6 +61,7 @@ from .permissions import (
 from .learning_path import build_learning_path, check_learning_path_milestones
 from .services import clone_course
 from .serializers import (
+    AssignableCourseSerializer,
     CourseAccessSerializer,
     CourseDetailSerializer,
     CourseListSerializer,
@@ -68,6 +71,7 @@ from .serializers import (
     EnrollmentSerializer,
     LessonOrderSerializer,
     LessonWriteSerializer,
+    LevelCourseAssignmentSerializer,
     ModuleOrderSerializer,
     ModuleWriteSerializer,
     SlideProgressSerializer,
@@ -717,6 +721,143 @@ class LearningPathView(APIView):
 
     def get(self, request):
         return Response(build_learning_path(request.user))
+
+
+def _assessment_level_for_admin(request, level_id):
+    """
+    AssessmentLevel lookup shared by every Role-Based Training view below —
+    404s on a bad id, 403s an ORG_ADMIN reaching for another organization's
+    level (PLATFORM_ADMIN has no such restriction). Centralized so the three
+    views below can't drift out of sync on this check.
+    """
+    level = get_object_or_404(AssessmentLevel.objects.select_related('organization'), pk=level_id)
+    if request.user.role != User.Role.PLATFORM_ADMIN and level.organization_id != request.user.organization_id:
+        raise PermissionDenied("You do not have permission to manage this organization's assessment levels.")
+    return level
+
+
+class LevelCourseAssignmentListView(APIView):
+    """
+    Role-Based Training admin screen (courses.models.LevelCourseAssignment)
+    — ORG_ADMIN/PLATFORM_ADMIN only, additive-only phase 1 (see that model's
+    own docstring: nothing else reads it yet).
+
+    GET  ?assessment_level=<id> -> {'assigned': [...], 'unassigned': [...]}
+    for that one level — assigned in current order, unassigned being every
+    other course in the same organization's curriculum.
+
+    POST {'assessment_level': <id>, 'course': <id>} -> creates an
+    assignment, appended to the end of that level's current order. 400s on
+    a duplicate rather than relying solely on the DB's unique_together, so
+    the caller gets a clean error instead of an IntegrityError 500.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+
+    def get(self, request):
+        level_id = request.query_params.get('assessment_level')
+        if not level_id:
+            return Response({'detail': 'assessment_level is required.'}, status=400)
+        level = _assessment_level_for_admin(request, level_id)
+
+        assigned = (
+            LevelCourseAssignment.objects.filter(assessment_level=level)
+            .select_related('course').order_by('order', 'id')
+        )
+        unassigned = (
+            all_courses_for_organization(level.organization_id)
+            .exclude(id__in=assigned.values_list('course_id', flat=True))
+            .order_by('title')
+        )
+        return Response({
+            'assigned': LevelCourseAssignmentSerializer(assigned, many=True).data,
+            'unassigned': AssignableCourseSerializer(unassigned, many=True).data,
+        })
+
+    def post(self, request):
+        level_id = request.data.get('assessment_level')
+        course_id = request.data.get('course')
+        if not level_id or not course_id:
+            return Response({'detail': 'assessment_level and course are required.'}, status=400)
+        level = _assessment_level_for_admin(request, level_id)
+
+        course = get_object_or_404(all_courses_for_organization(level.organization_id), pk=course_id)
+
+        with transaction.atomic():
+            # Serialize assignment changes for this level. Keeping the
+            # duplicate check and append-order calculation behind the same
+            # row lock prevents simultaneous requests from either surfacing
+            # the unique constraint as a 500 or choosing the same order.
+            AssessmentLevel.objects.select_for_update().get(pk=level.pk)
+            if LevelCourseAssignment.objects.filter(assessment_level=level, course=course).exists():
+                return Response({'detail': 'This course is already assigned to this level.'}, status=400)
+            assignment = LevelCourseAssignment.objects.create(
+                assessment_level=level,
+                course=course,
+                order=_append_order(LevelCourseAssignment.objects.filter(assessment_level=level)),
+            )
+        return Response(LevelCourseAssignmentSerializer(assignment).data, status=201)
+
+
+class LevelCourseAssignmentDetailView(APIView):
+    """DELETE /api/level-course-assignments/<pk>/ — unassigns one course from
+    one level (deletes only the LevelCourseAssignment row; the Course itself
+    is completely untouched and remains assignable elsewhere)."""
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+
+    def delete(self, request, pk):
+        assignment = get_object_or_404(
+            LevelCourseAssignment.objects.select_related('assessment_level'), pk=pk
+        )
+        _assessment_level_for_admin(request, assignment.assessment_level_id)
+        assignment.delete()
+        return Response(status=204)
+
+
+class LevelCourseAssignmentReorderView(APIView):
+    """
+    POST /api/level-course-assignments/reorder/
+    {'assessment_level': <id>, 'course_ids': [<id>, ...]} — persists a full
+    reorder of one level's assigned list; `course_ids` must be exactly that
+    level's current set of assigned course ids, in the new order. Same
+    two-phase temp-offset renumber as ModuleViewSet/LessonViewSet/
+    SlideViewSet.reorder, for consistency even though (unlike those) `order`
+    here has no DB-level uniqueness constraint to race against.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgAdminRole]
+
+    def post(self, request):
+        level_id = request.data.get('assessment_level')
+        course_ids = request.data.get('course_ids')
+        if not level_id or not isinstance(course_ids, list) or not course_ids:
+            return Response({'detail': 'assessment_level and course_ids are required.'}, status=400)
+        level = _assessment_level_for_admin(request, level_id)
+
+        assignments_by_course_id = {
+            a.course_id: a for a in LevelCourseAssignment.objects.filter(assessment_level=level)
+        }
+        if set(course_ids) != set(assignments_by_course_id) or len(course_ids) != len(assignments_by_course_id):
+            return Response(
+                {'detail': "course_ids must exactly match this level's currently assigned courses."}, status=400
+            )
+
+        with transaction.atomic():
+            for offset, course_id in enumerate(course_ids):
+                LevelCourseAssignment.objects.filter(
+                    pk=assignments_by_course_id[course_id].pk
+                ).update(order=REORDER_TEMP_OFFSET + offset)
+            for index, course_id in enumerate(course_ids, start=1):
+                LevelCourseAssignment.objects.filter(
+                    pk=assignments_by_course_id[course_id].pk
+                ).update(order=index)
+
+        assigned = (
+            LevelCourseAssignment.objects.filter(assessment_level=level)
+            .select_related('course').order_by('order', 'id')
+        )
+        return Response(LevelCourseAssignmentSerializer(assigned, many=True).data)
 
 
 class MediaUploadView(APIView):

@@ -8,6 +8,8 @@ import type {
   DemoLessonAccessGrant,
   Enrollment,
   LessonType,
+  LevelCourseAssignment,
+  LevelCourseAssignmentList,
 } from '../types/courses'
 import type { LearningPathMilestones } from '../types/learningPath'
 
@@ -375,4 +377,31 @@ export function downloadStaffTrainingReportCsv(filters: StaffTrainingReportFilte
 
 export function downloadStaffTrainingReportXlsx(filters: StaffTrainingReportFilters): Promise<void> {
   return downloadStaffTrainingReport(filters, 'xlsx')
+}
+
+// --- Role-Based Training admin screen ---
+
+export function fetchLevelCourseAssignments(assessmentLevelId: number): Promise<LevelCourseAssignmentList> {
+  return apiFetch<LevelCourseAssignmentList>(`/level-course-assignments/?assessment_level=${assessmentLevelId}`)
+}
+
+export function assignCourseToLevel(assessmentLevelId: number, courseId: number): Promise<LevelCourseAssignment> {
+  return apiFetch<LevelCourseAssignment>('/level-course-assignments/', {
+    method: 'POST',
+    body: { assessment_level: assessmentLevelId, course: courseId },
+  })
+}
+
+export function unassignCourseFromLevel(assignmentId: number): Promise<void> {
+  return apiFetch<void>(`/level-course-assignments/${assignmentId}/`, { method: 'DELETE' })
+}
+
+export function reorderLevelCourseAssignments(
+  assessmentLevelId: number,
+  orderedCourseIds: number[],
+): Promise<LevelCourseAssignment[]> {
+  return apiFetch<LevelCourseAssignment[]>('/level-course-assignments/reorder/', {
+    method: 'POST',
+    body: { assessment_level: assessmentLevelId, course_ids: orderedCourseIds },
+  })
 }
