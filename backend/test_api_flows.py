@@ -4297,6 +4297,343 @@ class LevelQuestionImportApiTests(BaseAPITestCase):
         response = self.client.post(self.import_url(self.level), {}, format='multipart')
         self.assertEqual(response.status_code, 400)
 
+    def test_default_import_is_additive_even_when_replace_omitted(self):
+        # (a) Existing behavior unchanged: without `replace`, re-uploading
+        # into a Question Set that already has questions adds to it rather
+        # than touching what's there.
+        existing_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        LevelQuestion.objects.create(
+            question_set=existing_set, question_text='Old Q?',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+        )
+        rows = [('Set 1', 'New Q?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', '')]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(self.import_url(self.level), {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 1)
+        self.assertEqual(
+            set(existing_set.questions.values_list('question_text', flat=True)), {'Old Q?', 'New Q?'},
+        )
+
+    def test_replace_only_touches_question_set_labels_present_in_the_file(self):
+        # (b) replace=true clears prior questions in the Question Set(s) the
+        # uploaded file references and imports the new rows in their place —
+        # other Question Sets under the same level are left alone.
+        replaced_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        old_question = LevelQuestion.objects.create(
+            question_set=replaced_set, question_text='Stale Q?',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+        )
+        untouched_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 2')
+        LevelQuestion.objects.create(
+            question_set=untouched_set, question_text='Keep me',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+        )
+
+        rows = [('Set 1', 'Fresh Q?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', '')]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            self.import_url(self.level), {'file': upload, 'replace': 'true'}, format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['created']), 1)
+        self.assertFalse(LevelQuestion.objects.filter(id=old_question.id).exists())
+        self.assertEqual(
+            list(QuestionSet.objects.get(assessment_level=self.level, label='Set 1').questions.values_list(
+                'question_text', flat=True,
+            )),
+            ['Fresh Q?'],
+        )
+        self.assertEqual(
+            list(untouched_set.questions.values_list('question_text', flat=True)), ['Keep me'],
+        )
+
+    def test_replace_dry_run_reports_affected_question_and_answer_counts(self):
+        replaced_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        question = LevelQuestion.objects.create(
+            question_set=replaced_set, question_text='Stale Q?',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+        )
+        choice = LevelChoice.objects.create(question=question, choice_text='A', is_correct=True, order=0)
+        attempt = LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=self.level, questions_drawn=[question.id],
+            submitted_at=timezone.now(),
+        )
+        answer = LevelAssessmentAnswer.objects.create(attempt=attempt, question=question, is_correct=True)
+        answer.selected_choices.add(choice)
+
+        rows = [('Set 1', 'Fresh Q?', 'Single Choice', 'A', 'B', 'C', 'D', '', 'A', 1, '', '', '')]
+        upload = make_question_template_upload({'Sheet1': rows})
+
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            self.import_url(self.level), {'file': upload, 'replace': 'true', 'dry_run': 'true'}, format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['question_set_labels'], ['Set 1'])
+        self.assertEqual(response.data['existing_question_count'], 1)
+        self.assertEqual(response.data['affected_answer_count'], 1)
+        # Dry run never mutates anything.
+        self.assertTrue(LevelQuestion.objects.filter(id=question.id).exists())
+
+    def test_replace_with_unreadable_file_leaves_existing_questions_intact(self):
+        # (c) Atomicity: a whole-file read failure with replace=true must not
+        # delete the level's existing questions when nothing gets imported to
+        # replace them.
+        existing_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        LevelQuestion.objects.create(
+            question_set=existing_set, question_text='Keep me',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE, marks=1,
+        )
+        upload = SimpleUploadedFile('questions.xlsx', b'not a real workbook', content_type='text/plain')
+
+        self.auth_as(self.instructor)
+        response = self.client.post(
+            self.import_url(self.level), {'file': upload, 'replace': 'true'}, format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(existing_set.questions.count(), 1)
+
+
+class LevelQuestionAdminApiTests(BaseAPITestCase):
+    """Question Bank admin surface: list/filter/search, view/edit, and
+    delete-with-usage-warning for LevelQuestion rows (levelassessments.views.
+    LevelQuestionAdminViewSet)."""
+
+    def setUp(self):
+        super().setUp()
+        self.officer_level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        )
+        self.management_level = configure_assessment_level(
+            self.org, User.AssessmentLevel.MANAGEMENT, questions_per_attempt=2,
+        )
+        self.other_org_level = configure_assessment_level(
+            self.other_org, User.AssessmentLevel.OFFICER, questions_per_attempt=2,
+        )
+
+        self.officer_set = QuestionSet.objects.create(assessment_level=self.officer_level, label='Set 1')
+        self.management_set = QuestionSet.objects.create(assessment_level=self.management_level, label='Set 1')
+        self.other_org_set = QuestionSet.objects.create(assessment_level=self.other_org_level, label='Set 1')
+
+        self.officer_question = self._make_question(self.officer_set, 'What is AML?', marks=2)
+        self.management_question = self._make_question(self.management_set, 'What is KYC?')
+        self.other_org_question = self._make_question(self.other_org_set, 'Other org question?')
+
+    def _make_question(self, question_set, text, marks=1, question_type=LevelQuestion.QuestionType.SINGLE_CHOICE):
+        question = LevelQuestion.objects.create(
+            question_set=question_set, question_text=text, question_type=question_type, marks=marks,
+        )
+        LevelChoice.objects.create(question=question, choice_text='Option A', is_correct=True, order=0)
+        LevelChoice.objects.create(question=question, choice_text='Option B', is_correct=False, order=1)
+        LevelChoice.objects.create(question=question, choice_text='Option C', is_correct=False, order=2)
+        LevelChoice.objects.create(question=question, choice_text='Option D', is_correct=False, order=3)
+        return question
+
+    def list_url(self, **params):
+        query = '&'.join(f'{key}={value}' for key, value in params.items())
+        return f'/api/level-questions/{"?" + query if query else ""}'
+
+    # --- Scoping ---
+
+    def test_org_admin_list_is_strictly_scoped_to_own_organization(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.list_url())
+        ids = {row['id'] for row in response.data['results']}
+        self.assertEqual(ids, {self.officer_question.id, self.management_question.id})
+        self.assertNotIn(self.other_org_question.id, ids)
+
+    def test_org_admin_organization_query_param_is_ignored(self):
+        # Passing another organization's id must not leak its questions.
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.list_url(organization=self.other_org.id))
+        ids = {row['id'] for row in response.data['results']}
+        self.assertNotIn(self.other_org_question.id, ids)
+        self.assertEqual(ids, {self.officer_question.id, self.management_question.id})
+
+    def test_instructor_list_is_strictly_scoped_to_own_organization(self):
+        self.auth_as(self.instructor)
+        response = self.client.get(self.list_url())
+        ids = {row['id'] for row in response.data['results']}
+        self.assertEqual(ids, {self.officer_question.id, self.management_question.id})
+
+    def test_learner_cannot_access_question_bank(self):
+        self.auth_as(self.learner)
+        response = self.client.get(self.list_url())
+        self.assertEqual(response.status_code, 403)
+
+    # --- Platform admin filtering ---
+
+    def test_platform_admin_can_filter_by_organization_alone(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(self.list_url(organization=self.org.id))
+        ids = {row['id'] for row in response.data['results']}
+        self.assertEqual(ids, {self.officer_question.id, self.management_question.id})
+
+    def test_platform_admin_can_filter_by_assessment_level_alone(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(self.list_url(assessment_level='officer'))
+        ids = {row['id'] for row in response.data['results']}
+        # Narrows to every org's Officer-level questions — both self.org's and
+        # other_org's — since no organization filter was given.
+        self.assertEqual(ids, {self.officer_question.id, self.other_org_question.id})
+
+    def test_platform_admin_can_combine_organization_and_assessment_level(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.get(self.list_url(organization=self.org.id, assessment_level='officer'))
+        ids = {row['id'] for row in response.data['results']}
+        self.assertEqual(ids, {self.officer_question.id})
+
+    # --- Search ---
+
+    def test_search_filters_by_question_text(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(self.list_url(search='KYC'))
+        ids = {row['id'] for row in response.data['results']}
+        self.assertEqual(ids, {self.management_question.id})
+
+    # --- View/Edit ---
+
+    def test_retrieve_returns_full_editable_record(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(f'/api/level-questions/{self.officer_question.id}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['question_text'], 'What is AML?')
+        self.assertEqual(response.data['options']['A'], 'Option A')
+        self.assertEqual(response.data['correct_answers'], ['A'])
+        self.assertEqual(response.data['marks'], 2)
+
+    def test_edit_persists_text_options_and_feedback(self):
+        self.auth_as(self.org_admin)
+        payload = {
+            'question_text': 'Updated question text?',
+            'question_type': 'SINGLE_CHOICE',
+            'options': {'A': 'New A', 'B': 'New B', 'C': 'New C', 'D': 'New D', 'E': ''},
+            'correct_answers': ['B'],
+            'marks': 3,
+            'explanation': 'Because B is right.',
+            'feedback_correct': 'Nice work.',
+            'feedback_incorrect': 'Try again.',
+        }
+        response = self.client.patch(
+            f'/api/level-questions/{self.officer_question.id}/', payload, format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.officer_question.refresh_from_db()
+        self.assertEqual(self.officer_question.question_text, 'Updated question text?')
+        self.assertEqual(self.officer_question.marks, 3)
+        self.assertEqual(self.officer_question.explanation, 'Because B is right.')
+        choices = {c.choice_text: c.is_correct for c in self.officer_question.choices.all()}
+        self.assertEqual(choices, {'New A': False, 'New B': True, 'New C': False, 'New D': False})
+
+    def test_edit_rejects_correct_answer_referencing_empty_option(self):
+        # Same rule the Excel import enforces (imports.validate_options) —
+        # an edit must not be able to accept what the import would reject.
+        self.auth_as(self.org_admin)
+        payload = {
+            'question_text': 'Updated?',
+            'question_type': 'SINGLE_CHOICE',
+            'options': {'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D', 'E': ''},
+            'correct_answers': ['E'],
+            'marks': 1,
+        }
+        response = self.client.patch(
+            f'/api/level-questions/{self.officer_question.id}/', payload, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_edit_preserves_choice_ids_for_options_that_remain_filled(self):
+        # Historical LevelAssessmentAnswer.selected_choices references must
+        # survive an edit that doesn't remove the option itself.
+        original_choice_a_id = self.officer_question.choices.get(order=0).id
+        self.auth_as(self.org_admin)
+        payload = {
+            'question_text': 'Updated text only',
+            'question_type': 'SINGLE_CHOICE',
+            'options': {'A': 'Option A', 'B': 'Option B', 'C': 'Option C', 'D': 'Option D', 'E': ''},
+            'correct_answers': ['A'],
+            'marks': 2,
+        }
+        self.client.patch(f'/api/level-questions/{self.officer_question.id}/', payload, format='json')
+        self.assertTrue(LevelChoice.objects.filter(id=original_choice_a_id).exists())
+
+    def test_org_admin_cannot_edit_another_organizations_question(self):
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/level-questions/{self.other_org_question.id}/',
+            {
+                'question_text': 'Hijacked', 'question_type': 'SINGLE_CHOICE',
+                'options': {'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D', 'E': ''},
+                'correct_answers': ['A'], 'marks': 1,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 404)
+
+    # --- Usage check + delete ---
+
+    def test_usage_check_reports_zero_for_a_never_used_question(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get(f'/api/level-questions/{self.officer_question.id}/usage/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['attempt_count'], 0)
+
+    def test_usage_check_reports_correct_count_for_a_used_question(self):
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=self.officer_level,
+            questions_drawn=[self.officer_question.id, self.management_question.id],
+            submitted_at=timezone.now(),
+        )
+        LevelAssessmentAttempt.objects.create(
+            user=self.org_admin, assessment_level=self.officer_level,
+            questions_drawn=[self.officer_question.id],
+            submitted_at=timezone.now(),
+        )
+        self.auth_as(self.org_admin)
+        response = self.client.get(f'/api/level-questions/{self.officer_question.id}/usage/')
+        self.assertEqual(response.data['attempt_count'], 2)
+
+    def test_delete_of_never_used_question_succeeds(self):
+        self.auth_as(self.org_admin)
+        response = self.client.delete(f'/api/level-questions/{self.management_question.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(LevelQuestion.objects.filter(id=self.management_question.id).exists())
+
+    def test_deleted_question_shows_placeholder_in_past_attempt_results_without_breaking_it(self):
+        attempt = LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=self.officer_level,
+            questions_drawn=[self.officer_question.id, self.management_question.id],
+            submitted_at=timezone.now(), score_percent=Decimal('50.00'),
+        )
+        LevelAssessmentAnswer.objects.create(
+            attempt=attempt, question=self.officer_question, is_correct=True,
+        )
+
+        self.auth_as(self.org_admin)
+        delete_response = self.client.delete(f'/api/level-questions/{self.management_question.id}/')
+        self.assertEqual(delete_response.status_code, 204)
+
+        self.auth_as(self.learner)
+        review = self.client.get(f'/api/level-attempts/{attempt.id}/')
+        self.assertEqual(review.status_code, 200)
+
+        questions_by_id = {q['id']: q for q in review.data['questions']}
+        self.assertFalse(questions_by_id[self.officer_question.id]['removed'])
+        self.assertTrue(questions_by_id[self.management_question.id]['removed'])
+        # The rest of the attempt's results are unaffected.
+        self.assertEqual(review.data['score_percent'], '50.00')
+        answers_by_question = {a['question']: a for a in review.data['answers']}
+        self.assertTrue(answers_by_question[self.officer_question.id]['is_correct'])
+
 
 class AssessmentLevelConfigApiTests(BaseAPITestCase):
     """Every org is auto-seeded four AssessmentLevel rows, read-only from this

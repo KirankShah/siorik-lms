@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from accounts.models import User
 
+from .imports import OPTION_LETTERS
 from .models import AssessmentLevel, LevelAssessmentAttempt, LevelChoice, LevelQuestion
 
 # Every organization gets exactly these four assessment tiers, one row per
@@ -13,6 +14,74 @@ from .models import AssessmentLevel, LevelAssessmentAttempt, LevelChoice, LevelQ
 # org-wide (org_settings.OrganizationSettings), not per level — see
 # start_level_assessment_attempt below.
 DEFAULT_LEVEL_NAMES = [choice.value for choice in User.AssessmentLevel]
+
+
+def apply_question_edit(question, validated_data):
+    """
+    Persists a validated Question Bank edit (levelassessments.serializers.
+    LevelQuestionEditSerializer) onto an existing LevelQuestion.
+
+    Updates each option's LevelChoice IN PLACE (matched by its `order`
+    0-4 <-> letter A-E position — see imports._create_question, the only
+    other place these rows are created) rather than delete-and-recreate:
+    LevelAssessmentAnswer.selected_choices is a ManyToManyField to
+    LevelChoice, so deleting a choice row that a past attempt's answer
+    still references would silently wipe that historical "what did they
+    actually pick" data, even though this edit has nothing to do with that
+    attempt. A choice row is only ever deleted here if its option is
+    cleared to blank in the edit (there's no option left for it to
+    represent), and only ever created if a previously-blank option is now
+    filled — every option that stays filled keeps its existing row (and
+    id) across the edit.
+    """
+    question.question_text = validated_data['question_text']
+    question.question_type = validated_data['question_type']
+    question.marks = validated_data['marks']
+    question.explanation = validated_data['explanation']
+    question.feedback_correct = validated_data['feedback_correct']
+    question.feedback_incorrect = validated_data['feedback_incorrect']
+    question.save()
+
+    existing_by_order = {choice.order: choice for choice in question.choices.all()}
+    for order, letter in enumerate(OPTION_LETTERS):
+        option_text = validated_data['options'].get(letter, '')
+        is_correct = letter in validated_data['correct_letters']
+        existing = existing_by_order.get(order)
+
+        if not option_text:
+            if existing is not None:
+                existing.delete()
+            continue
+
+        if existing is not None:
+            existing.choice_text = option_text
+            existing.is_correct = is_correct
+            existing.save(update_fields=['choice_text', 'is_correct'])
+        else:
+            LevelChoice.objects.create(
+                question=question, choice_text=option_text, is_correct=is_correct, order=order,
+            )
+
+    return question
+
+
+def usage_count_for_question(question_id):
+    """
+    How many LevelAssessmentAttempts ever drew this question — checked
+    before a permanent delete so the admin can be warned first (see
+    levelassessments.views.LevelQuestionAdminViewSet.usage). Walked in
+    Python rather than a DB-side JSONField `contains` lookup: MariaDB (the
+    production engine — see CLAUDE.md) doesn't support that lookup the way
+    PostgreSQL (the local dev engine) does, so this is the one form of the
+    check that's correct on both. questions_drawn is a frozen per-attempt
+    snapshot (see the model's own docstring), not a live relation, so this
+    is the only way to answer "was this question ever used" at all.
+    """
+    return sum(
+        1
+        for drawn in LevelAssessmentAttempt.objects.values_list('questions_drawn', flat=True)
+        if question_id in drawn
+    )
 
 
 def ensure_assessment_levels_for_organization(organization):

@@ -8,6 +8,7 @@ import {
   FileText,
   GraduationCap,
   LayoutDashboard,
+  Library,
   ListChecks,
   LogOut,
   PanelLeftClose,
@@ -71,6 +72,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     ...(admin
       ? [{ to: '/admin/assessment-questions', label: 'Manage Assessment Questions', icon: ListChecks }]
       : []),
+    // Browse/edit/delete individual questions already in the pool — distinct
+    // from "Manage Assessment Questions" above, which is Excel import/replace
+    // only and never lets an admin see or touch a single existing question.
+    ...(admin ? [{ to: '/admin/question-bank', label: 'Question Bank', icon: Library }] : []),
     { to: '/certificates', label: 'Certificates', icon: Award },
     { to: '/achievements', label: 'Achievements', icon: Trophy },
     // Deliberately LEARNER/ORG_ADMIN only — not INSTRUCTOR, not

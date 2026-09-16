@@ -62,6 +62,7 @@ function buildAttempt(overrides: Partial<LevelAssessmentAttempt> = {}): LevelAss
         question_text: 'First question?',
         question_type: 'SINGLE_CHOICE',
         marks: 1,
+        removed: false,
         choices: [
           { id: 10, choice_text: 'Choice A', order: 1 },
           { id: 11, choice_text: 'Choice B', order: 2 },
@@ -72,6 +73,7 @@ function buildAttempt(overrides: Partial<LevelAssessmentAttempt> = {}): LevelAss
         question_text: 'Second question?',
         question_type: 'SINGLE_CHOICE',
         marks: 1,
+        removed: false,
         choices: [
           { id: 20, choice_text: 'Choice C', order: 1 },
           { id: 21, choice_text: 'Choice D', order: 2 },

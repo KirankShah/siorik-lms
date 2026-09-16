@@ -18,6 +18,8 @@ class AuditLog(models.Model):
         LEARNER_DELETED = 'LEARNER_DELETED', 'Learner deleted'
         ORG_ADMIN_CREATED = 'ORG_ADMIN_CREATED', 'Organization admin created'
         LEVEL_QUESTIONS_IMPORTED = 'LEVEL_QUESTIONS_IMPORTED', 'Level assessment questions imported'
+        LEVEL_QUESTION_UPDATED = 'LEVEL_QUESTION_UPDATED', 'Level assessment question updated'
+        LEVEL_QUESTION_DELETED = 'LEVEL_QUESTION_DELETED', 'Level assessment question deleted'
         STAFF_ENROLLED = 'STAFF_ENROLLED', 'Staff learner enrolled'
         STAFF_DEACTIVATED = 'STAFF_DEACTIVATED', 'Staff learner deactivated'
         STAFF_REACTIVATED = 'STAFF_REACTIVATED', 'Staff learner reactivated'

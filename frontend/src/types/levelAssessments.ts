@@ -17,9 +17,13 @@ export interface LevelChoice {
 export interface LevelQuestion {
   id: number
   question_text: string
-  question_type: LevelQuestionType
+  question_type: LevelQuestionType | ''
   marks: number
   choices: LevelChoice[]
+  // true when this question has since been deleted from the Question Bank
+  // (levelassessments.serializers.LevelAssessmentAttemptSerializer.get_questions)
+  // — every other field on the placeholder is blank/zeroed, never real data.
+  removed: boolean
 }
 
 // pass_threshold/questions_per_attempt/timing_mode/seconds_per_question/
@@ -106,4 +110,70 @@ export interface LevelQuestionImportFailure {
 export interface LevelQuestionImportResult {
   created: LevelQuestionImportCreated[]
   failed: LevelQuestionImportFailure[]
+}
+
+// Dry-run preview of a replace-import's destructive impact — see
+// lib/levelAssessmentsApi.ts previewReplaceLevelQuestions.
+export interface LevelQuestionReplaceImpact {
+  question_set_labels: string[]
+  existing_question_count: number
+  affected_answer_count: number
+}
+
+// --- Question Bank admin (levelassessments.views.LevelQuestionAdminViewSet) ---
+
+// Row shape for the Question Bank list — correct_answers here is the
+// correct choice TEXT(s), for quick scanning; contrast with
+// LevelQuestionDetail.correct_answers below, which is option letters (A-E),
+// what the edit form actually needs.
+export interface LevelQuestionListItem {
+  id: number
+  question_set_label: string
+  assessment_level_name: string
+  organization_name: string
+  question_text: string
+  question_type: LevelQuestionType
+  correct_answers: string[]
+  marks: number
+}
+
+// Options keyed by letter (A-E) — a blank string for any letter this
+// question doesn't use, so the edit form always has exactly 5 fields to
+// render regardless of how many options were actually filled in.
+export type LevelQuestionOptions = Record<'A' | 'B' | 'C' | 'D' | 'E', string>
+
+export interface LevelQuestionDetail {
+  id: number
+  question_set: number
+  question_set_label: string
+  assessment_level_name: string
+  question_text: string
+  question_type: LevelQuestionType
+  options: LevelQuestionOptions
+  // Option letters (A-E), not text — which checkboxes/radios the edit form
+  // should show as checked.
+  correct_answers: string[]
+  marks: number
+  explanation: string
+  feedback_correct: string
+  feedback_incorrect: string
+}
+
+// Write side of a Question Bank edit — validated server-side by the exact
+// same rules as the Excel bulk import (see backend imports.py).
+export interface LevelQuestionEditInput {
+  question_text: string
+  question_type: LevelQuestionType
+  options: LevelQuestionOptions
+  correct_answers: string[]
+  marks: number
+  explanation: string
+  feedback_correct: string
+  feedback_incorrect: string
+}
+
+// How many past attempts drew this question — fetched before a delete so
+// the admin can be warned first (see components/admin/DeleteQuestionModal).
+export interface LevelQuestionUsage {
+  attempt_count: number
 }

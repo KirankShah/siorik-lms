@@ -27,6 +27,7 @@ import { DemoUsersPage } from './pages/admin/DemoUsersPage'
 import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
 import { LevelQuestionsImportPage } from './pages/admin/LevelQuestionsImportPage'
+import { QuestionBankPage } from './pages/admin/QuestionBankPage'
 import { StaffEnrollmentPage } from './pages/admin/StaffEnrollmentPage'
 import { StaffTrainingReportPage } from './pages/admin/StaffTrainingReportPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
@@ -80,6 +81,8 @@ function App() {
               <Route path="demo-users" element={<DemoUsersPage />} />
               <Route path="assessment-questions" element={<LevelQuestionsImportPage />} />
             </Route>
+
+            <Route path="/admin/question-bank" element={<QuestionBankPage />} />
 
             <Route path="/admin/courses/:slug" element={<CourseDashboardLayout />}>
               <Route index element={<Navigate to="slides" replace />} />

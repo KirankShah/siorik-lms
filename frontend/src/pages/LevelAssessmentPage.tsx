@@ -532,6 +532,16 @@ export function LevelAssessmentPage() {
 
           <div className="mt-6 space-y-4">
             {attempt.questions.map((question) => {
+              if (question.removed) {
+                return (
+                  <div key={question.id} className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+                    <p className="text-sm text-neutral-500 italic">
+                      This question has since been removed from the question bank.
+                    </p>
+                  </div>
+                )
+              }
+
               const answer = attempt.answers.find((a) => a.question === question.id)
               return (
                 <div key={question.id} className="rounded-lg border border-neutral-200 p-4">

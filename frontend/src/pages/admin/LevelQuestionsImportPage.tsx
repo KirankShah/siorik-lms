@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ApiError } from '../../lib/apiClient'
-import { fetchAssessmentLevels, importLevelQuestions } from '../../lib/levelAssessmentsApi'
+import { fetchAssessmentLevels, importLevelQuestions, previewReplaceLevelQuestions } from '../../lib/levelAssessmentsApi'
 import type { AssessmentLevelSummary, LevelQuestionImportResult } from '../../types/levelAssessments'
 
 const TEMPLATE_COLUMNS = [
@@ -45,6 +45,7 @@ export function LevelQuestionsImportPage() {
   const [levelsError, setLevelsError] = useState<string | null>(null)
   const [levelId, setLevelId] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [replace, setReplace] = useState(false)
   const [result, setResult] = useState<LevelQuestionImportResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -66,7 +67,25 @@ export function LevelQuestionsImportPage() {
     setError(null)
     setResult(null)
     try {
-      setResult(await importLevelQuestions(Number(levelId), file))
+      if (replace) {
+        const impact = await previewReplaceLevelQuestions(Number(levelId), file)
+        if (impact.existing_question_count > 0) {
+          const setList = impact.question_set_labels.join(', ')
+          const answerWarning =
+            impact.affected_answer_count > 0
+              ? ` This will also permanently erase ${impact.affected_answer_count} past learner answer${
+                  impact.affected_answer_count === 1 ? '' : 's'
+                } recorded against ${impact.affected_answer_count === 1 ? 'it' : 'them'}.`
+              : ''
+          const confirmed = window.confirm(
+            `This replaces ${impact.existing_question_count} existing question${
+              impact.existing_question_count === 1 ? '' : 's'
+            } in Question Set${impact.question_set_labels.length === 1 ? '' : 's'} "${setList}".${answerWarning} This cannot be undone. Continue?`,
+          )
+          if (!confirmed) return
+        }
+      }
+      setResult(await importLevelQuestions(Number(levelId), file, replace))
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
         const body = err.body as { detail?: string } | null
@@ -144,6 +163,20 @@ export function LevelQuestionsImportPage() {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             className="mt-1 text-sm"
           />
+        </div>
+
+        <div className="flex items-start gap-2">
+          <input
+            id="import-replace"
+            type="checkbox"
+            checked={replace}
+            onChange={(e) => setReplace(e.target.checked)}
+            className="mt-0.5"
+          />
+          <label htmlFor="import-replace" className="text-sm text-neutral-700">
+            Replace existing questions in the Question Set(s) named in this file, instead of adding to them. Other
+            Question Sets in this level are left untouched. You'll be shown exactly what this removes before it runs.
+          </label>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
