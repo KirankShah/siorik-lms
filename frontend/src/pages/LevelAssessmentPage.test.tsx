@@ -294,7 +294,7 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
   })
 
   it(
-    'depletes the countdown bar in real time and freezes it once the question is answered',
+    'continues depleting the countdown after the question is answered',
     async () => {
       await startAssessment()
 
@@ -319,16 +319,19 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
       )
 
       fireEvent.click(screen.getByLabelText('Choice A'))
-      const frozenAt = screen.getByText(/^\d+s$/).textContent
+      const remainingWhenAnswered = Number(screen.getByText(/^\d+s$/).textContent!.replace('s', ''))
 
-      // Frozen once answered — waiting well past when it would otherwise
-      // have hit zero must not change the readout, lock the question, or
-      // show the timeout message.
-      await new Promise((resolve) => setTimeout(resolve, SECONDS_PER_QUESTION * 1000))
-      expect(screen.getByText(frozenAt!)).toBeInTheDocument()
-      expect(screen.queryByText(/Time's up/)).not.toBeInTheDocument()
+      // Selecting an answer only records/highlights it. It must not pause
+      // the question's allocation while the learner waits to click Next.
+      await waitFor(
+        () => {
+          const remaining = Number(screen.getByText(/^\d+s$/).textContent!.replace('s', ''))
+          expect(remaining).toBeLessThan(remainingWhenAnswered)
+        },
+        { timeout: 2500 },
+      )
     },
-    (SECONDS_PER_QUESTION * 2 + 5) * 1000,
+    (SECONDS_PER_QUESTION + 5) * 1000,
   )
 
   it(

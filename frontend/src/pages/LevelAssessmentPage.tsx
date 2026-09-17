@@ -130,16 +130,6 @@ export function LevelAssessmentPage() {
   const currentQuestion = attempt?.questions[currentIndex] ?? null
   const hasAnswer = currentQuestion ? (answers[currentQuestion.id]?.size ?? 0) > 0 : false
 
-  // Kept in sync below and read inside the interval callback so it always
-  // sees the *current* answered state rather than the one captured when the
-  // interval was created — a plain closure over `hasAnswer` would go stale
-  // the moment the learner answers, since the interval itself is only
-  // (re)created once per question, not on every keystroke/selection.
-  const hasAnswerRef = useRef(hasAnswer)
-  useEffect(() => {
-    hasAnswerRef.current = hasAnswer
-  }, [hasAnswer])
-
   // Always points at the latest handleSubmit closure, read from inside the
   // FIXED_TOTAL interval below (defined further down, but function
   // declarations are hoisted) — runs after every render, deliberately with
@@ -171,7 +161,6 @@ export function LevelAssessmentPage() {
     setTimeLeft(attempt.remaining_seconds)
 
     const interval = setInterval(() => {
-      if (hasAnswerRef.current) return // frozen once answered — see hasAnswerRef above
       setTimeLeft((t) => {
         if (t <= 1) {
           clearInterval(interval)
@@ -469,9 +458,9 @@ export function LevelAssessmentPage() {
             </span>
           </div>
 
-          {/* Depleting countdown bar — for PER_QUESTION, frozen once answered
-              and reset every question; for FIXED_TOTAL, one continuous bar for
-              the whole attempt that never resets or freezes. */}
+          {/* Depleting countdown bar — for PER_QUESTION, reset on each new
+              question but never paused by selecting an answer; for FIXED_TOTAL,
+              one continuous bar for the whole attempt. */}
           <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
             <div
               className={`h-full rounded-full transition-all duration-1000 ease-linear ${barColor}`}
