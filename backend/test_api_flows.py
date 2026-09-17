@@ -70,7 +70,7 @@ from levelassessments.models import (
     LevelQuestion,
     QuestionSet,
 )
-from levelassessments.services import LevelAssessmentError, start_level_assessment_attempt
+from levelassessments.services import LevelAssessmentError, normalize_question_text, start_level_assessment_attempt
 from narration.models import SlideNarration
 from org_settings.models import OrganizationSettings
 from org_settings.services import send_due_inactivity_reminders
@@ -4351,6 +4351,41 @@ class LevelAssessmentAttemptServiceTests(TestCase):
         self.assertTrue(set(attempt.questions_drawn).issubset(pool_ids))
         self.assertEqual(len(set(attempt.questions_drawn)), 3)  # no duplicates
 
+    def test_draw_never_includes_duplicate_visible_question_text(self):
+        duplicate = LevelQuestion.objects.create(
+            question_set=self.set_b,
+            question_text='<p>  QUESTION set 1-0!!! </p>',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+        )
+        LevelChoice.objects.create(question=duplicate, choice_text='Correct', is_correct=True)
+        LevelChoice.objects.create(question=duplicate, choice_text='Wrong', is_correct=False)
+
+        attempt = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+        drawn_texts = LevelQuestion.objects.filter(id__in=attempt.questions_drawn).values_list(
+            'question_text', flat=True
+        )
+        normalized_texts = [normalize_question_text(text) for text in drawn_texts]
+
+        self.assertEqual(len(normalized_texts), 3)
+        self.assertEqual(len(set(normalized_texts)), 3)
+
+    def test_rejects_when_rows_are_plentiful_but_unique_questions_are_insufficient(self):
+        LevelQuestion.objects.filter(question_set__assessment_level=self.level).delete()
+        OrganizationSettings.objects.filter(organization=self.org).update(questions_per_attempt=2)
+        for text in ('What is AML?', ' what is aml ', '<strong>WHAT IS AML!!!</strong>'):
+            question = LevelQuestion.objects.create(
+                question_set=self.set_a,
+                question_text=text,
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            )
+            LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+            LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+
+        with self.assertRaisesMessage(LevelAssessmentError, 'Not enough unique questions in the pool'):
+            start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        self.assertEqual(LevelAssessmentAttempt.objects.count(), 0)
+
     def test_second_attempt_blocked_while_one_is_in_progress(self):
         start_level_assessment_attempt(user=self.user, assessment_level=self.level)
 
@@ -5103,6 +5138,27 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         self.assertIn('questions_per_attempt', response.data)
         settings_obj.refresh_from_db()
         self.assertEqual(settings_obj.questions_per_attempt, 15)  # unchanged
+
+    def test_questions_per_attempt_counts_duplicate_wording_only_once(self):
+        level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
+        question_set = QuestionSet.objects.create(assessment_level=level, label='Set 1')
+        for text in ('What is AML?', ' what is aml ', '<strong>WHAT IS AML!!!</strong>'):
+            LevelQuestion.objects.create(
+                question_set=question_set,
+                question_text=text,
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            )
+
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/', {'questions_per_attempt': 2}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('1 unique', str(response.data['questions_per_attempt']))
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.questions_per_attempt, 15)
 
     def test_questions_per_attempt_accepted_when_every_levels_pool_is_large_enough(self):
         for level in AssessmentLevel.objects.filter(organization=self.org):

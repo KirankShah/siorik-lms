@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from accounts.serializers import OrganizationSerializer
 from levelassessments.models import AssessmentLevel, LevelQuestion
+from levelassessments.services import normalize_question_text
 
 from .models import OrganizationSettings
 
@@ -44,14 +45,21 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
 
         short_levels = []
         for level in AssessmentLevel.objects.filter(organization=organization):
-            pool_size = LevelQuestion.objects.filter(question_set__assessment_level=level).count()
-            if 0 < pool_size < value:
-                short_levels.append((level.get_name_display(), pool_size))
+            pool_rows = LevelQuestion.objects.filter(
+                question_set__assessment_level=level
+            ).values_list('id', 'question_text')
+            unique_pool_size = len({
+                normalize_question_text(question_text) or f'__question_{question_id}'
+                for question_id, question_text in pool_rows
+            })
+            if 0 < unique_pool_size < value:
+                short_levels.append((level.get_name_display(), unique_pool_size))
 
         if short_levels:
-            details = '; '.join(f'{name} has only {count}' for name, count in short_levels)
+            details = '; '.join(f'{name} has only {count} unique' for name, count in short_levels)
             raise serializers.ValidationError(
-                f'{value} questions per attempt is more than some levels\' question pools currently hold: {details}. '
+                f'{value} questions per attempt is more than some levels\' unique question pools currently hold: '
+                f'{details}. '
                 'Import more questions for those levels first, or choose a smaller number.'
             )
         return value

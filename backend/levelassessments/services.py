@@ -1,8 +1,12 @@
+import html
 import random
+import re
+import unicodedata
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.html import strip_tags
 
 from accounts.models import User
 
@@ -14,6 +18,20 @@ from .models import AssessmentLevel, LevelAssessmentAttempt, LevelChoice, LevelQ
 # org-wide (org_settings.OrganizationSettings), not per level — see
 # start_level_assessment_attempt below.
 DEFAULT_LEVEL_NAMES = [choice.value for choice in User.AssessmentLevel]
+
+
+def normalize_question_text(question_text):
+    """Canonical text used to keep repeated questions out of one attempt.
+
+    Imports and edits can leave the same visible wording in several Question
+    Sets with differences that learners cannot meaningfully distinguish
+    (HTML markup/entities, Unicode forms, case, punctuation, or whitespace).
+    Those variants share one draw key while their stored rows remain intact
+    for audit history and later admin cleanup.
+    """
+    visible_text = strip_tags(html.unescape(question_text or ''))
+    normalized = unicodedata.normalize('NFKC', visible_text).casefold()
+    return ' '.join(re.findall(r'[^\W_]+', normalized, flags=re.UNICODE))
 
 
 def apply_question_edit(question, validated_data):
@@ -137,11 +155,14 @@ def start_level_assessment_attempt(*, user, assessment_level):
     Starts a new LevelAssessmentAttempt for `user` under `assessment_level`.
 
     Draws a fresh random sample of `assessment_level.organization.settings.
-    questions_per_attempt` LevelQuestion ids from the full pool across ALL of that level's
-    QuestionSets combined — QuestionSet is an authoring label only, so Set
-    boundaries never affect the draw — and stores the drawn ids on the
-    attempt itself so a graded attempt's exact question set stays auditable
-    later even if the underlying pool changes.
+    questions_per_attempt` unique question texts from the full pool across ALL
+    of that level's QuestionSets combined. Rows whose learner-visible wording
+    differs only by markup, case, punctuation, whitespace, or Unicode form are
+    treated as one question; one stored row is selected randomly from that
+    group. QuestionSet is an authoring label only, so Set boundaries never
+    affect the draw. The selected ids are stored on the attempt itself so a
+    graded attempt's exact question set stays auditable later even if the
+    underlying pool changes.
 
     Only one attempt may be in progress (submitted_at is null) per
     user+assessment_level at a time; raises LevelAssessmentError if one
@@ -164,16 +185,27 @@ def start_level_assessment_attempt(*, user, assessment_level):
             'assessment level.'
         )
 
-    pool = list(
-        LevelQuestion.objects.filter(question_set__assessment_level=assessment_level).values_list('id', flat=True)
+    pool_rows = list(
+        LevelQuestion.objects.filter(question_set__assessment_level=assessment_level)
+        .values_list('id', 'question_text')
     )
+    ids_by_normalized_text = {}
+    for question_id, question_text in pool_rows:
+        # Empty text is invalid through every supported write path, but keep
+        # a per-row fallback so legacy bad data cannot collapse unrelated rows.
+        draw_key = normalize_question_text(question_text) or f'__question_{question_id}'
+        ids_by_normalized_text.setdefault(draw_key, []).append(question_id)
+
     questions_per_attempt = assessment_level.organization.settings.questions_per_attempt
-    if len(pool) < questions_per_attempt:
+    unique_question_count = len(ids_by_normalized_text)
+    if unique_question_count < questions_per_attempt:
         raise LevelAssessmentError(
-            f'Not enough questions in the pool ({len(pool)}) to draw {questions_per_attempt} for an attempt.'
+            f'Not enough unique questions in the pool ({unique_question_count} unique from {len(pool_rows)} rows) '
+            f'to draw {questions_per_attempt} for an attempt.'
         )
 
-    questions_drawn = random.sample(pool, questions_per_attempt)
+    selected_groups = random.sample(list(ids_by_normalized_text.values()), questions_per_attempt)
+    questions_drawn = [random.choice(group) for group in selected_groups]
 
     try:
         with transaction.atomic():
