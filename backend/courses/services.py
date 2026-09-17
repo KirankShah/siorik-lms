@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import models, transaction
 
 from .models import Course, Element, Lesson, Module, Slide
 
@@ -138,6 +138,84 @@ _SLIDE_CLONERS = {
     Slide.SlideType.ASSIGNMENT: _clone_assignment_slide,
     Slide.SlideType.SCENARIO: _clone_scenario_slide,
 }
+
+
+@transaction.atomic
+def copy_lesson(source_lesson, target_module, *, order=None):
+    """
+    Deep-copies a single Lesson (and its Slides/Elements/Quiz/Assignment/
+    Scenario/Narration content) into target_module, appending it after that
+    module's existing lessons unless `order` is given.
+
+    Used to backfill a lesson added to a platform master course into course
+    clones that were already forked from it (Course.cloned_from) — clone_course
+    only runs once at fork time and deliberately never re-syncs, so new lessons
+    added afterward need this to reach existing clones. Same field-copy shape
+    as clone_course's per-lesson loop, just scoped to one lesson instead of a
+    whole course.
+    """
+    from narration.models import SlideNarration
+
+    if order is None:
+        last_order = target_module.lessons.aggregate(models.Max('order'))['order__max'] or 0
+        order = last_order + 1
+
+    cloned_lesson = Lesson.objects.create(
+        module=target_module,
+        title=source_lesson.title,
+        lesson_type=source_lesson.lesson_type,
+        content_file=source_lesson.content_file,
+        content_url=source_lesson.content_url,
+        order=order,
+        estimated_minutes=source_lesson.estimated_minutes,
+    )
+
+    for slide in source_lesson.slides.order_by('order'):
+        cloned_slide = Slide.objects.create(
+            lesson=cloned_lesson,
+            title=slide.title,
+            order=slide.order,
+            slide_type=slide.slide_type,
+            layout=slide.layout,
+            image_column_width=slide.image_column_width,
+            template_override=slide.template_override,
+            estimated_minutes=slide.estimated_minutes,
+        )
+
+        for narration in slide.narrations.all():
+            SlideNarration.objects.create(
+                slide=cloned_slide,
+                language=narration.language,
+                script_text=narration.script_text,
+                audio_file=narration.audio_file,
+                voice_name=narration.voice_name,
+                generated_by=narration.generated_by,
+            )
+
+        if slide.slide_type == Slide.SlideType.CONTENT:
+            for element in slide.elements.order_by('order'):
+                Element.objects.create(
+                    slide=cloned_slide,
+                    order=element.order,
+                    element_type=element.element_type,
+                    rich_text=element.rich_text,
+                    file=element.file,
+                    video_url=element.video_url,
+                    video_file=element.video_file,
+                    embed_url=element.embed_url,
+                    caption=element.caption,
+                    align=element.align,
+                    dialogue_scene=element.dialogue_scene,
+                    dialogue_character_left=element.dialogue_character_left,
+                    dialogue_character_right=element.dialogue_character_right,
+                    dialogue_lines=element.dialogue_lines,
+                )
+        else:
+            cloner = _SLIDE_CLONERS.get(slide.slide_type)
+            if cloner:
+                cloner(slide, cloned_slide)
+
+    return cloned_lesson
 
 
 @transaction.atomic
