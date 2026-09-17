@@ -194,8 +194,13 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
         during a live attempt (not just when moving on), so a crash
         mid-selection still resumes with that selection intact. Never
         touches current_question_index or the timer — see `advance` for that.
+
+        Runs the same away-time catch-up as `retrieve` before doing anything
+        else — see the module-level note above `advance` for why this can't
+        rely on the learner eventually triggering a GET.
         """
         attempt = self.get_object()
+        attempt = resume_level_assessment_attempt(attempt)
         if attempt.submitted_at is not None:
             return Response({'detail': 'This attempt has already been submitted.'}, status=400)
 
@@ -218,8 +223,27 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
         exactly where the learner is (needed for resume — see
         resume_level_assessment_attempt) and, under PER_QUESTION timing,
         resets the new question's own countdown.
+
+        Runs the away-time catch-up first (same as `retrieve`) rather than
+        trusting the client to ever have called GET: save_answer/advance/
+        submit are the only endpoints a live in-progress session actually
+        calls (see frontend/src/pages/LevelAssessmentPage.tsx), so without
+        this, a learner who never triggers a reload could sit past their
+        time allocation indefinitely and still have a late advance/submit
+        accepted at face value. If the catch-up itself pushes the attempt
+        into auto-submitted just now (this question's, or several cascaded
+        questions', time fully elapsed during THIS request), that result is
+        returned directly instead of a 400 — the frontend treats a submitted
+        attempt in this response the same way it already treats one from
+        `retrieve`. An attempt that was already submitted before this
+        request even started (a genuine duplicate call) still gets the
+        ordinary 400 below, unchanged.
         """
         attempt = self.get_object()
+        was_already_submitted = attempt.submitted_at is not None
+        attempt = resume_level_assessment_attempt(attempt)
+        if attempt.submitted_at is not None and not was_already_submitted:
+            return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
         if attempt.submitted_at is not None:
             return Response({'detail': 'This attempt has already been submitted.'}, status=400)
 
@@ -235,7 +259,22 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
+        """
+        Runs the same away-time catch-up as `retrieve`/`advance` first — see
+        the docstring on `advance` for why. If the exam's time had already
+        fully elapsed, the attempt is by this point already auto-submitted
+        from whatever was saved via save-answer, and that graded result is
+        returned as-is: a late submit doesn't get to inject answers the
+        learner made after their time ran out. As with `advance`, this only
+        applies when the catch-up is what submitted it just now — an attempt
+        that was already submitted before this request started is still the
+        ordinary 400 duplicate-submit error.
+        """
         attempt = self.get_object()
+        was_already_submitted = attempt.submitted_at is not None
+        attempt = resume_level_assessment_attempt(attempt)
+        if attempt.submitted_at is not None and not was_already_submitted:
+            return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
         if attempt.submitted_at is not None:
             return Response({'detail': 'This attempt has already been submitted.'}, status=400)
 

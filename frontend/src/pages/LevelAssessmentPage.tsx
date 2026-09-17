@@ -242,6 +242,20 @@ export function LevelAssessmentPage() {
     // correctly after a crash right around this moment.
     try {
       const updated = await advanceLevelAssessmentAttempt(attempt.id, currentIndex + 1)
+      if (updated.submitted_at) {
+        // The server's own away-time catch-up (resume_level_assessment_attempt,
+        // now run on every advance/submit, not just a resume-after-reload GET)
+        // found the exam's time had already fully elapsed and auto-submitted
+        // on the learner's behalf before this advance could go through — same
+        // situation handleResume already handles for the reload path.
+        setAttempt(updated)
+        setAutoSubmitReason('time_expired')
+        setLastStatus(updated.passed ? 'PASSED' : 'FAILED')
+        setPendingOpenAttemptId(null)
+        setAttemptsRemaining((prev) => (prev === null ? null : Math.max(0, prev - 1)))
+        setStage('results')
+        return
+      }
       setAttempt(updated)
     } catch {
       setError('Could not move to the next question. Please try again.')
