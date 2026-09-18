@@ -100,6 +100,14 @@ export function AdminCourseListPage() {
                       <Link to={`/admin/courses/${course.slug}`} className="text-brand-navy underline">
                         Manage
                       </Link>
+                      <a
+                        href={`/courses/${course.slug}?preview=1`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-brand-navy underline"
+                      >
+                        Preview
+                      </a>
                       {isPlatformAdmin && (
                         <button
                           type="button"

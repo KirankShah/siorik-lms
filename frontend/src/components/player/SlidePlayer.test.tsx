@@ -51,7 +51,7 @@ function makeEnrollment(): Enrollment {
 // Mirrors how CourseDetailPage wires SlidePlayer's onCanAdvanceChange into
 // SlideNavFooter's disabled/tooltip props — the thing under test is whether
 // this whole chain unlocks Next only after a genuine submission.
-function Harness({ slide }: { slide: SlideSummary }) {
+function Harness({ slide, previewMode = false }: { slide: SlideSummary; previewMode?: boolean }) {
   const [canAdvance, setCanAdvance] = useState(false)
   const [reason, setReason] = useState<string | undefined>(undefined)
   return (
@@ -59,13 +59,14 @@ function Harness({ slide }: { slide: SlideSummary }) {
       <SlidePlayer
         slide={slide}
         courseTemplateId={null}
-        enrollmentId={1}
+        enrollmentId={previewMode ? null : 1}
         existingProgress={undefined}
         onProgressSynced={() => {}}
         onCanAdvanceChange={(advance, _seconds, disabledReason) => {
           setCanAdvance(advance)
           setReason(disabledReason)
         }}
+        previewMode={previewMode}
       />
       <SlideNavFooter
         hasPrevious={false}
@@ -238,5 +239,82 @@ describe('Next-button gating on a CONTENT slide with a Dialogue element', () => 
     render(<Harness slide={contentSlide} />)
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled())
+  })
+})
+
+describe('previewMode bypasses every gate and never writes progress', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(coursesApi.saveSlideProgress).mockResolvedValue(makeEnrollment())
+  })
+
+  it('leaves Next enabled immediately on a CONTENT slide with dwell time and an unfinished Dialogue', async () => {
+    const contentSlide: SlideSummary = { ...baseSlide, slide_type: 'CONTENT', estimated_minutes: 5 }
+    const dialogueElement: SlideElement = {
+      id: 1,
+      slide: contentSlide.id,
+      order: 1,
+      element_type: 'DIALOGUE',
+      rich_text: '',
+      file: null,
+      video_url: '',
+      video_file: null,
+      embed_url: '',
+      caption: '',
+      align: 'CENTER',
+      dialogue_scene: 1,
+      dialogue_character_left: null,
+      dialogue_character_right: null,
+      dialogue_lines: [{ speaker: 'LEFT', text: 'Hi' }],
+      dialogue_scene_detail: { id: 1, name: 'Scene', scene_type: 'FRONT_OFFICE', background_image: 'http://x/scene.png' },
+      dialogue_character_left_detail: null,
+      dialogue_character_right_detail: null,
+    }
+    vi.mocked(slidesApi.fetchElements).mockResolvedValue([dialogueElement])
+
+    render(<Harness slide={contentSlide} previewMode />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled())
+    expect(coursesApi.saveSlideProgress).not.toHaveBeenCalled()
+  })
+
+  it('leaves Next enabled immediately on a QUIZ slide without requiring a submission', async () => {
+    const quizSlide: SlideSummary = { ...baseSlide, slide_type: 'QUIZ' }
+    const quizDetail: QuizDetail = {
+      id: 5,
+      title: 'Quiz',
+      pass_percentage: 70,
+      time_limit_minutes: null,
+      max_attempts: null,
+      slide: quizSlide.id,
+      randomize_questions: false,
+      questions: [
+        {
+          id: 50,
+          question_text: 'Q1',
+          question_type: 'SINGLE_CHOICE',
+          order: 1,
+          points: 1,
+          image: null,
+          video_url: null,
+          marks: 1,
+          choices: [
+            { id: 500, choice_text: 'A', order: 1 },
+            { id: 501, choice_text: 'B', order: 2 },
+          ],
+          buckets: [],
+          categorize_items: [],
+          hotspot_regions: [],
+          word_bank_tokens: [],
+        },
+      ],
+    }
+    vi.mocked(quizApi.fetchQuizForSlide).mockResolvedValue(quizDetail)
+    vi.mocked(quizApi.fetchQuizDetail).mockResolvedValue(quizDetail)
+
+    render(<Harness slide={quizSlide} previewMode />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled())
+    expect(coursesApi.saveSlideProgress).not.toHaveBeenCalled()
   })
 })

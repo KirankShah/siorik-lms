@@ -29,6 +29,7 @@ from .services import (
     assigned_assessment_level_for_user,
     finalize_level_assessment_attempt,
     level_assessment_attempts_remaining,
+    preview_level_assessment,
     resume_level_assessment_attempt,
     save_level_assessment_answer_progress,
     start_level_assessment_attempt,
@@ -98,6 +99,27 @@ class AssessmentLevelViewSet(
             log_action(request.user, AuditLog.Action.LEVEL_QUESTIONS_IMPORTED, assessment_level)
 
         return Response({'created': created, 'failed': failed})
+
+    @action(detail=True, methods=['post'])
+    def preview(self, request, pk=None):
+        """
+        Admin-only content-review surface: simulates what one real attempt at
+        this level would draw (same random sample as
+        start_level_assessment_attempt), including the answer key — already
+        safe to expose since this whole ViewSet is IsAdminRole-gated — but
+        never creates a LevelAssessmentAttempt, so it can be called freely
+        without affecting attempt counts, resume state, or reporting.
+        """
+        assessment_level = self.get_object()
+        try:
+            questions = preview_level_assessment(assessment_level)
+        except LevelAssessmentError as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+        return Response({
+            'assessment_level': AssessmentLevelSerializer(assessment_level, context={'request': request}).data,
+            'questions': LevelQuestionDetailSerializer(questions, many=True).data,
+        })
 
 
 class MyAssessmentLevelView(APIView):

@@ -150,6 +150,59 @@ def level_assessment_attempts_remaining(user, assessment_level):
     return max(0, max_attempts - submitted_attempt_count(user, assessment_level))
 
 
+def draw_question_ids_for_level(assessment_level):
+    """
+    Draws a fresh random sample of `assessment_level.organization.settings.
+    questions_per_attempt` unique question ids from the full pool across ALL
+    of that level's QuestionSets combined — the exact same draw
+    start_level_assessment_attempt persists onto a real attempt, factored out
+    so preview_level_assessment can simulate one without ever touching
+    LevelAssessmentAttempt. See start_level_assessment_attempt's own
+    docstring for the normalized-text-grouping rationale.
+
+    Raises LevelAssessmentError if the pool doesn't have enough unique
+    questions to draw from.
+    """
+    pool_rows = list(
+        LevelQuestion.objects.filter(question_set__assessment_level=assessment_level)
+        .values_list('id', 'question_text')
+    )
+    ids_by_normalized_text = {}
+    for question_id, question_text in pool_rows:
+        # Empty text is invalid through every supported write path, but keep
+        # a per-row fallback so legacy bad data cannot collapse unrelated rows.
+        draw_key = normalize_question_text(question_text) or f'__question_{question_id}'
+        ids_by_normalized_text.setdefault(draw_key, []).append(question_id)
+
+    questions_per_attempt = assessment_level.organization.settings.questions_per_attempt
+    unique_question_count = len(ids_by_normalized_text)
+    if unique_question_count < questions_per_attempt:
+        raise LevelAssessmentError(
+            f'Not enough unique questions in the pool ({unique_question_count} unique from {len(pool_rows)} rows) '
+            f'to draw {questions_per_attempt} for an attempt.'
+        )
+
+    selected_groups = random.sample(list(ids_by_normalized_text.values()), questions_per_attempt)
+    return [random.choice(group) for group in selected_groups]
+
+
+def preview_level_assessment(assessment_level):
+    """
+    Admin-only, non-persistent counterpart to start_level_assessment_attempt:
+    draws one sample the exact same way a real attempt would (same pool, same
+    questions_per_attempt), for content review, but never creates a
+    LevelAssessmentAttempt row — so it can be called freely without affecting
+    attempt counts, resume state, or reporting. Returns the drawn
+    LevelQuestion rows in draw order.
+    """
+    question_ids = draw_question_ids_for_level(assessment_level)
+    questions_by_id = {
+        question.id: question
+        for question in LevelQuestion.objects.filter(pk__in=question_ids).prefetch_related('choices')
+    }
+    return [questions_by_id[question_id] for question_id in question_ids]
+
+
 def start_level_assessment_attempt(*, user, assessment_level):
     """
     Starts a new LevelAssessmentAttempt for `user` under `assessment_level`.
@@ -185,27 +238,7 @@ def start_level_assessment_attempt(*, user, assessment_level):
             'assessment level.'
         )
 
-    pool_rows = list(
-        LevelQuestion.objects.filter(question_set__assessment_level=assessment_level)
-        .values_list('id', 'question_text')
-    )
-    ids_by_normalized_text = {}
-    for question_id, question_text in pool_rows:
-        # Empty text is invalid through every supported write path, but keep
-        # a per-row fallback so legacy bad data cannot collapse unrelated rows.
-        draw_key = normalize_question_text(question_text) or f'__question_{question_id}'
-        ids_by_normalized_text.setdefault(draw_key, []).append(question_id)
-
-    questions_per_attempt = assessment_level.organization.settings.questions_per_attempt
-    unique_question_count = len(ids_by_normalized_text)
-    if unique_question_count < questions_per_attempt:
-        raise LevelAssessmentError(
-            f'Not enough unique questions in the pool ({unique_question_count} unique from {len(pool_rows)} rows) '
-            f'to draw {questions_per_attempt} for an attempt.'
-        )
-
-    selected_groups = random.sample(list(ids_by_normalized_text.values()), questions_per_attempt)
-    questions_drawn = [random.choice(group) for group in selected_groups]
+    questions_drawn = draw_question_ids_for_level(assessment_level)
 
     try:
         with transaction.atomic():

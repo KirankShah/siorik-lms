@@ -3,6 +3,7 @@ import type { PaginatedResult } from './accountsApi'
 import type {
   AssessmentLevelSummary,
   LevelAssessmentAttempt,
+  LevelAssessmentPreview,
   LevelQuestionDetail,
   LevelQuestionEditInput,
   LevelQuestionImportResult,
@@ -59,6 +60,13 @@ export function previewReplaceLevelQuestions(levelId: number, file: File): Promi
     method: 'POST',
     body: formData,
   })
+}
+
+// Admin-only content-review preview: draws one sample the same way a real
+// attempt would, answer key included, but never creates a
+// LevelAssessmentAttempt — safe to call repeatedly for content QA.
+export function previewLevelAssessment(levelId: number): Promise<LevelAssessmentPreview> {
+  return apiFetch<LevelAssessmentPreview>(`/assessment-levels/${levelId}/preview/`, { method: 'POST' })
 }
 
 export function startLevelAssessmentAttempt(): Promise<LevelAssessmentAttempt> {

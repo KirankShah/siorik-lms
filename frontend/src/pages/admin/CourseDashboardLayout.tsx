@@ -65,13 +65,18 @@ export function CourseDashboardLayout() {
           )}
         </div>
 
+        {/* ?preview=1 bypasses every learner-facing progression gate (dwell
+            time, quiz/dialogue completion, sequential slide lock) for this
+            admin's own view only — see CourseDetailPage/SlidePlayer's
+            previewMode. Never creates an Enrollment or writes SlideProgress,
+            so clicking through here can't pollute reporting/leaderboard data. */}
         <a
-          href={`/courses/${course.slug}`}
+          href={`/courses/${course.slug}?preview=1`}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 rounded-md border border-brand-navy px-3 py-1.5 text-sm font-medium text-brand-navy transition hover:bg-brand-navy hover:text-white"
         >
-          View course
+          Preview course
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
       </div>

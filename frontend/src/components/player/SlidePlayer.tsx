@@ -17,7 +17,7 @@ const FLUSH_EVERY_N_TICKS = 10
 interface SlidePlayerProps {
   slide: SlideSummary
   courseTemplateId: number | null
-  enrollmentId: number
+  enrollmentId: number | null
   existingProgress: SlideProgress | undefined
   onProgressSynced: (enrollment: Enrollment) => void
   // Fired only alongside a completing flush whose response carried a
@@ -27,6 +27,15 @@ interface SlidePlayerProps {
   onCanAdvanceChange: (canAdvance: boolean, secondsRemaining: number, nextDisabledReason?: string) => void
   onEnterFullscreen?: () => void
   isFullscreen?: boolean
+  // Admin content-review mode (see CourseDetailPage) — never true for a
+  // LEARNER. Forces canAdvance regardless of dwell time/dialogue/quiz
+  // completion, and skips every saveSlideProgress call entirely, so
+  // previewing never writes a SlideProgress row or touches the enrollment
+  // (enrollmentId is unused in this mode — there may not even be one).
+  // Sub-players still render normally: an admin may optionally submit a
+  // Quiz/Scenario/Assignment to check its grading, which is scoped to their
+  // own account and never required to advance.
+  previewMode?: boolean
 }
 
 export function SlidePlayer({
@@ -39,6 +48,7 @@ export function SlidePlayer({
   onCanAdvanceChange,
   onEnterFullscreen,
   isFullscreen,
+  previewMode = false,
 }: SlidePlayerProps) {
   const [dwellSeconds, setDwellSeconds] = useState(existingProgress?.time_spent_seconds ?? 0)
   const [isMarkedComplete, setIsMarkedComplete] = useState(!!existingProgress?.completed_at)
@@ -55,11 +65,14 @@ export function SlidePlayer({
   const completeSentRef = useRef(!!existingProgress?.completed_at)
 
   async function flush(markCompleted: boolean) {
+    // Preview mode never writes SlideProgress/Enrollment — there may not
+    // even be a real enrollmentId to write against (see CourseDetailPage).
+    if (previewMode) return
     const delta = unsyncedRef.current
     if (delta === 0 && !markCompleted) return
     unsyncedRef.current = 0
     try {
-      const enrollment = await saveSlideProgress(enrollmentId, {
+      const enrollment = await saveSlideProgress(enrollmentId as number, {
         slide: slide.id,
         time_spent_seconds: delta,
         ...(markCompleted ? { completed: true } : {}),
@@ -124,7 +137,8 @@ export function SlidePlayer({
   }, [dwellSatisfied, dialogueGateReady, slide.slide_type])
 
   const canAdvance =
-    slide.slide_type === 'CONTENT' ? (dwellSatisfied && dialogueGateReady) || isMarkedComplete : isMarkedComplete
+    previewMode ||
+    (slide.slide_type === 'CONTENT' ? (dwellSatisfied && dialogueGateReady) || isMarkedComplete : isMarkedComplete)
 
   // CONTENT's dwell-only gate already explains itself via the dwell-timer
   // countdown text (secondsRemaining) — but once dwell time is satisfied

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ApiError } from '../../lib/apiClient'
@@ -137,8 +138,18 @@ export function LevelQuestionsImportPage() {
       </Card>
 
       {selectedLevel && (
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
           <LevelSettingsSummaryCard level={selectedLevel} />
+          {/* Admin-only content review: draws one sample the same way a real
+              attempt would, freely navigable and answer-key visible, without
+              ever creating a LevelAssessmentAttempt — see
+              AssessmentLevelViewSet.preview. */}
+          <Link
+            to={`/admin/level-assessment-preview/${selectedLevel.id}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-brand-navy px-3 py-1.5 text-sm font-medium text-brand-navy transition hover:bg-brand-navy hover:text-white"
+          >
+            Preview Assessment
+          </Link>
         </div>
       )}
 

@@ -5955,6 +5955,80 @@ class LevelAssessmentStudentFlowApiTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class LevelAssessmentPreviewApiTests(BaseAPITestCase):
+    """
+    Admin-only content-review preview (AssessmentLevelViewSet.preview) —
+    simulates one real attempt's random draw, answer key included, without
+    ever creating a LevelAssessmentAttempt row. See courses/SlidePlayer's own
+    preview-mode tests for the equivalent course-content guarantee.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.level = configure_assessment_level(
+            self.org, User.AssessmentLevel.OFFICER, pass_threshold=50, questions_per_attempt=2,
+        )
+        question_set = QuestionSet.objects.create(assessment_level=self.level, label='Set 1')
+        self.q1 = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q1?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        LevelChoice.objects.create(question=self.q1, choice_text='A', is_correct=True, order=0)
+        LevelChoice.objects.create(question=self.q1, choice_text='B', is_correct=False, order=1)
+        self.q2 = LevelQuestion.objects.create(
+            question_set=question_set, question_text='Q2?', question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            marks=1,
+        )
+        LevelChoice.objects.create(question=self.q2, choice_text='A', is_correct=True, order=0)
+        LevelChoice.objects.create(question=self.q2, choice_text='B', is_correct=False, order=1)
+
+    def preview(self):
+        return self.client.post(f'/api/assessment-levels/{self.level.id}/preview/')
+
+    def test_learner_cannot_preview(self):
+        self.auth_as(self.learner)
+        response = self.preview()
+        self.assertEqual(response.status_code, 403)
+
+    def test_instructor_org_admin_and_platform_admin_can_preview(self):
+        for user in (self.instructor, self.org_admin, self.platform_admin):
+            self.auth_as(user)
+            response = self.preview()
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(len(response.data['questions']), 2)
+
+    def test_preview_reveals_the_answer_key(self):
+        self.auth_as(self.org_admin)
+        response = self.preview()
+
+        self.assertEqual(response.status_code, 200)
+        for question in response.data['questions']:
+            self.assertIn('correct_answers', question)
+            self.assertTrue(question['correct_answers'])
+
+    def test_preview_never_creates_a_level_assessment_attempt(self):
+        self.auth_as(self.org_admin)
+
+        self.preview()
+        self.preview()
+        self.preview()
+
+        self.assertEqual(LevelAssessmentAttempt.objects.count(), 0)
+
+    def test_preview_does_not_affect_a_real_attempts_max_attempts_count(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_level_assessment_attempts=1)
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save()
+
+        self.auth_as(self.org_admin)
+        self.preview()
+        self.preview()
+
+        self.auth_as(self.learner)
+        start_response = self.client.post('/api/level-attempts/start/')
+        self.assertEqual(start_response.status_code, 201, start_response.data)
+
+
 class LevelAssessmentMaxAttemptsTests(BaseAPITestCase):
     """OrganizationSettings.max_level_assessment_attempts (null = unlimited,
     the original behavior) — see levelassessments.services.

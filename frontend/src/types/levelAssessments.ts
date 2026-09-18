@@ -177,3 +177,14 @@ export interface LevelQuestionEditInput {
 export interface LevelQuestionUsage {
   attempt_count: number
 }
+
+// --- Admin content-review preview (AssessmentLevelViewSet.preview) ---
+
+// Simulates one real attempt's random draw for content review — same
+// question shape the Question Bank "View/Edit" panel already uses
+// (LevelQuestionDetail, answer key included), but never backed by a
+// LevelAssessmentAttempt: no id, no timer, freely navigable both ways.
+export interface LevelAssessmentPreview {
+  assessment_level: AssessmentLevelSummary
+  questions: LevelQuestionDetail[]
+}

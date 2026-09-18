@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CourseCompletionModal } from '../components/CourseCompletionModal'
 import { CourseSidebar } from '../components/player/CourseSidebar'
 import { FullscreenSlideOverlay } from '../components/player/FullscreenSlideOverlay'
@@ -7,6 +7,7 @@ import { SlideNavFooter } from '../components/player/SlideNavFooter'
 import { SlidePlayer } from '../components/player/SlidePlayer'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { useAuth } from '../context/AuthContext'
 import { enrollInCourse, fetchCourseDetail, fetchEnrollments, retakeCourse } from '../lib/coursesApi'
 import { computeReachedSlideIds, flattenCourseSlides } from '../lib/slideSequence'
 import type { CourseDetail, Enrollment } from '../types/courses'
@@ -15,6 +16,14 @@ import type { LearningPathMilestones } from '../types/learningPath'
 export function CourseDetailPage() {
   const { id: slug } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  // Admin content-review mode: never honored for a LEARNER, even if they
+  // append ?preview=1 themselves — the whole point is that a learner's
+  // gating must never weaken, so this flag is meaningless outside the admin
+  // roles it's meant for. See SlidePlayer's own previewMode prop for what
+  // this actually bypasses.
+  const previewMode = searchParams.get('preview') === '1' && user?.role !== 'LEARNER'
 
   const [course, setCourse] = useState<CourseDetail | null>(null)
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null)
@@ -45,6 +54,11 @@ export function CourseDetailPage() {
         if (cancelled) return
         setCourse(courseDetail)
 
+        // Preview mode never fetches or creates an Enrollment — it renders
+        // content without one, and must never read/write real progress even
+        // if the admin happens to already have a genuine enrollment here.
+        if (previewMode) return
+
         const enrollments = await fetchEnrollments(courseDetail.id)
         if (cancelled) return
         setEnrollment(enrollments[0] ?? null)
@@ -57,7 +71,8 @@ export function CourseDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [slug])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, previewMode])
 
   const entries = useMemo(() => (course ? flattenCourseSlides(course) : []), [course])
 
@@ -66,7 +81,12 @@ export function CourseDetailPage() {
     [enrollment],
   )
 
-  const reachedSlideIds = useMemo(() => computeReachedSlideIds(entries, completedSlideIds), [entries, completedSlideIds])
+  // Preview mode bypasses the sequential slide lock entirely — every slide
+  // is directly reachable, regardless of progress (there is none to check).
+  const reachedSlideIds = useMemo(
+    () => (previewMode ? new Set(entries.map((e) => e.slide.id)) : computeReachedSlideIds(entries, completedSlideIds)),
+    [entries, completedSlideIds, previewMode],
+  )
 
   const allSlidesComplete = entries.length > 0 && entries.every((e) => completedSlideIds.has(e.slide.id))
 
@@ -181,13 +201,13 @@ export function CourseDetailPage() {
   const lessonEntries = activeEntry ? entries.filter((e) => e.lesson.id === activeEntry.lesson.id) : []
   const lessonCompletedCount = lessonEntries.filter((e) => completedSlideIds.has(e.slide.id)).length
 
-  const slidePlayerNode = activeEntry && enrollment && (
+  const slidePlayerNode = activeEntry && (enrollment || previewMode) && (
     <SlidePlayer
       key={activeEntry.slide.id}
       slide={activeEntry.slide}
       courseTemplateId={course.template}
-      enrollmentId={enrollment.id}
-      existingProgress={enrollment.slide_progress.find((p) => p.slide === activeEntry.slide.id)}
+      enrollmentId={enrollment?.id ?? null}
+      existingProgress={enrollment?.slide_progress.find((p) => p.slide === activeEntry.slide.id)}
       onProgressSynced={setEnrollment}
       onMilestones={setCompletionMilestones}
       onCanAdvanceChange={(advance, remaining, disabledReason) => {
@@ -197,6 +217,7 @@ export function CourseDetailPage() {
       }}
       onEnterFullscreen={() => setIsFullscreen(true)}
       isFullscreen={isFullscreen}
+      previewMode={previewMode}
     />
   )
 
@@ -226,7 +247,7 @@ export function CourseDetailPage() {
     />
   )
 
-  if (isFullscreen && activeEntry && enrollment) {
+  if (isFullscreen && activeEntry && (enrollment || previewMode)) {
     return (
       <>
         <FullscreenSlideOverlay
@@ -266,7 +287,12 @@ export function CourseDetailPage() {
       </aside>
 
       <div className="flex-1">
-        {!enrollment ? (
+        {previewMode && (
+          <div className="no-print mb-4 rounded-md border border-brand-gold/40 bg-brand-gold/10 px-3 py-2 text-xs font-medium text-brand-navy">
+            Preview Mode — no progress is being recorded, and every slide is unlocked for review.
+          </div>
+        )}
+        {!enrollment && !previewMode ? (
           <Card className="text-center">
             <p className="text-sm text-neutral-600">Enroll to start this course and track your progress.</p>
             <Button className="mt-4" disabled={isEnrolling} onClick={() => void handleEnroll()}>

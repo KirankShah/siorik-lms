@@ -26,6 +26,7 @@ import { CourseSlidesTab } from './pages/admin/CourseSlidesTab'
 import { DemoUsersPage } from './pages/admin/DemoUsersPage'
 import { GradingPage } from './pages/admin/GradingPage'
 import { LearnersPage } from './pages/admin/LearnersPage'
+import { LevelAssessmentPreviewPage } from './pages/admin/LevelAssessmentPreviewPage'
 import { LevelQuestionsImportPage } from './pages/admin/LevelQuestionsImportPage'
 import { QuestionBankPage } from './pages/admin/QuestionBankPage'
 import { RoleBasedTrainingPage } from './pages/admin/RoleBasedTrainingPage'
@@ -84,6 +85,7 @@ function App() {
             </Route>
 
             <Route path="/admin/question-bank" element={<QuestionBankPage />} />
+            <Route path="/admin/level-assessment-preview/:levelId" element={<LevelAssessmentPreviewPage />} />
 
             <Route path="/admin/courses/:slug" element={<CourseDashboardLayout />}>
               <Route index element={<Navigate to="slides" replace />} />
