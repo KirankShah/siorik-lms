@@ -54,6 +54,10 @@ class UserBadge(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='badges')
     badge = models.ForeignKey(Badge, on_delete=models.CASCADE, related_name='awarded_to')
     earned_at = models.DateTimeField(auto_now_add=True)
+    # Null until the learner acknowledges the dashboard celebration. Keeping
+    # this server-side makes the experience consistent across browsers and
+    # devices, and lets an interrupted visit show the celebration again.
+    celebration_seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('user', 'badge')

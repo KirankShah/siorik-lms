@@ -3,6 +3,7 @@ import { Award, BookOpen, CalendarClock, ClipboardList, Users } from 'lucide-rea
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { BadgesWidget } from '../components/BadgesWidget'
+import { AchievementCelebrationModal } from '../components/AchievementCelebrationModal'
 import { LeaderboardWidget } from '../components/LeaderboardWidget'
 import { LearnerWelcomeBanner } from '../components/LearnerWelcomeBanner'
 import { LearningPathSection } from '../components/LearningPathSection'
@@ -15,7 +16,7 @@ import { useAuth } from '../context/AuthContext'
 import { fetchAssignments, fetchMySubmissions } from '../lib/assignmentsApi'
 import { fetchCertificates } from '../lib/certificatesApi'
 import { fetchCourseDetail, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
-import { fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
+import { acknowledgeBadgeCelebration, fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
 import { fetchMyAssessmentLevel } from '../lib/levelAssessmentsApi'
 import { fetchQuizzes } from '../lib/quizApi'
 import { isAdminRole, isPlatformAdminRole } from '../lib/roles'
@@ -281,6 +282,17 @@ function LearnerDashboard({ user }: { user: User }) {
   const [myLevelAssessment, setMyLevelAssessment] = useState<MyAssessmentLevelStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const uncelebratedBadges = (myBadges ?? [])
+    .filter((userBadge) => userBadge.celebration_seen_at === null)
+    .sort((a, b) => new Date(a.earned_at).getTime() - new Date(b.earned_at).getTime())
+
+  async function acknowledgeCelebration(userBadgeId: number) {
+    const acknowledged = await acknowledgeBadgeCelebration(userBadgeId)
+    setMyBadges((current) =>
+      current?.map((userBadge) => (userBadge.id === acknowledged.id ? acknowledged : userBadge)) ?? null,
+    )
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -405,6 +417,16 @@ function LearnerDashboard({ user }: { user: User }) {
 
   return (
     <div className="space-y-6">
+      {uncelebratedBadges[0] && (
+        <AchievementCelebrationModal
+          key={uncelebratedBadges[0].id}
+          userBadge={uncelebratedBadges[0]}
+          learnerName={user.first_name}
+          remainingCount={uncelebratedBadges.length}
+          onAcknowledge={acknowledgeCelebration}
+        />
+      )}
+
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       <LearnerWelcomeBanner

@@ -14,3 +14,9 @@ export function fetchBadges(): Promise<Badge[]> {
 export function fetchMyBadges(): Promise<UserBadge[]> {
   return apiFetch<UserBadge[]>('/user-badges/')
 }
+
+export function acknowledgeBadgeCelebration(userBadgeId: number): Promise<UserBadge> {
+  return apiFetch<UserBadge>(`/user-badges/${userBadgeId}/acknowledge-celebration/`, {
+    method: 'POST',
+  })
+}

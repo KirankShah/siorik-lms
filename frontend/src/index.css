@@ -99,6 +99,22 @@ body {
   animation: path-node-checkmark 320ms ease-out 180ms both;
 }
 
+/* A restrained entrance for learner achievement celebrations. The badge is
+   the focal point, while the rest of the professional banking UI stays calm. */
+@keyframes achievement-celebration-in {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.achievement-celebration {
+  animation: achievement-celebration-in 420ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .achievement-celebration {
+    animation: none;
+  }
+}
+
 /* "Download as PDF" on a Content page — print (or "Save as PDF") only the
    element marked .print-target, hiding the rest of the app chrome. */
 @media print {

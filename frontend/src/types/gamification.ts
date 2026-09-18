@@ -26,4 +26,5 @@ export interface UserBadge {
   id: number
   badge: Badge
   earned_at: string
+  celebration_seen_at: string | null
 }
