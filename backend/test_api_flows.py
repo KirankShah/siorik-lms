@@ -2350,6 +2350,158 @@ class CourseCloneTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 403)
 
 
+def make_test_image_upload(filename='img.png', color='white'):
+    buffer = io.BytesIO()
+    Image.new('RGB', (20, 20), color=color).save(buffer, format='PNG')
+    return SimpleUploadedFile(filename, buffer.getvalue(), content_type='image/png')
+
+
+class CourseCloneFileIndependenceTests(BaseAPITestCase):
+    """
+    Every File/ImageField clone_course/copy_lesson touch (Course.cover_image,
+    Lesson.content_file, Element.file/video_file, SlideNarration.audio_file,
+    Question.image, CategorizeItem.item_image, ScenarioNode.prompt_image) must
+    come out of a clone as a genuinely independent storage object — never a
+    reference to the exact same underlying file the source row points at.
+    Passing a source FieldFile straight into .objects.create() only copies
+    its storage path/name, not its bytes, which is exactly the bug this
+    covers (see courses.services._deep_copy_file).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.platform_course.cover_image = make_test_image_upload('cover.png', color='red')
+        self.platform_course.save()
+
+        self.module = Module.objects.create(course=self.platform_course, title='Module 1', order=1)
+        self.lesson = Lesson.objects.create(
+            module=self.module, title='Lesson 1', order=1, estimated_minutes=5,
+            lesson_type='DOCUMENT',
+            content_file=SimpleUploadedFile('lesson.pdf', b'%PDF-1.4\nlesson content', content_type='application/pdf'),
+        )
+
+        self.content_slide = Slide.objects.create(lesson=self.lesson, order=1, slide_type=Slide.SlideType.CONTENT)
+        self.element = Element.objects.create(
+            slide=self.content_slide, order=1, element_type=Element.ElementType.VIDEO_AUDIO,
+            video_file=SimpleUploadedFile('episode.mp4', b'fake video bytes', content_type='video/mp4'),
+            file=SimpleUploadedFile('handout.pdf', b'%PDF-1.4\nhandout', content_type='application/pdf'),
+        )
+        self.narration = SlideNarration.objects.create(
+            slide=self.content_slide, language='en', script_text='Hello there.',
+            audio_file=SimpleUploadedFile('narration.mp3', b'fake audio bytes', content_type='audio/mpeg'),
+        )
+
+        self.quiz_slide = Slide.objects.create(lesson=self.lesson, order=2, slide_type=Slide.SlideType.QUIZ)
+        quiz = Quiz.objects.create(slide=self.quiz_slide, title='Quiz', pass_percentage=60)
+        self.question = Question.objects.create(
+            quiz=quiz, question_text='Categorize this', order=1, question_type=Question.QuestionType.CATEGORIZE,
+            image=make_test_image_upload('question.png', color='blue'),
+        )
+        bucket = CategoryBucket.objects.create(question=self.question, label='Bucket A', order=1)
+        self.categorize_item = CategorizeItem.objects.create(
+            question=self.question, item_text='Item 1', correct_bucket=bucket, order=1,
+            item_image=make_test_image_upload('item.png', color='green'),
+        )
+
+        self.scenario_slide = Slide.objects.create(lesson=self.lesson, order=3, slide_type=Slide.SlideType.SCENARIO)
+        self.scenario_node = ScenarioNode.objects.create(
+            slide=self.scenario_slide, node_key='start', is_start=True,
+            prompt_image=make_test_image_upload('node.png', color='yellow'),
+        )
+
+    def _clone(self):
+        self.auth_as(self.platform_admin)
+        response = self.client.post(f'/api/courses/{self.platform_course.slug}/clone/', {'organization': self.org.id})
+        self.assertEqual(response.status_code, 201, response.data)
+        return Course.objects.get(slug=response.data['slug'])
+
+    def test_every_file_field_is_deep_copied_not_shared(self):
+        cloned = self._clone()
+        cloned_lesson = Lesson.objects.get(module__course=cloned)
+        cloned_content_slide = Slide.objects.get(lesson=cloned_lesson, order=1)
+        cloned_element = cloned_content_slide.elements.get()
+        cloned_narration = SlideNarration.objects.get(slide=cloned_content_slide)
+        cloned_question = Question.objects.get(quiz__slide__lesson=cloned_lesson)
+        cloned_item = cloned_question.categorize_items.get()
+        cloned_node = ScenarioNode.objects.get(slide__lesson=cloned_lesson, node_key='start')
+
+        pairs = [
+            ('cover_image', self.platform_course.cover_image, cloned.cover_image),
+            ('content_file', self.lesson.content_file, cloned_lesson.content_file),
+            ('element.video_file', self.element.video_file, cloned_element.video_file),
+            ('element.file', self.element.file, cloned_element.file),
+            ('narration.audio_file', self.narration.audio_file, cloned_narration.audio_file),
+            ('question.image', self.question.image, cloned_question.image),
+            ('categorize_item.item_image', self.categorize_item.item_image, cloned_item.item_image),
+            ('scenario_node.prompt_image', self.scenario_node.prompt_image, cloned_node.prompt_image),
+        ]
+        for label, source_field, cloned_field in pairs:
+            with self.subTest(field=label):
+                self.assertTrue(cloned_field, f'{label} was not copied at all')
+                self.assertNotEqual(
+                    cloned_field.name, source_field.name,
+                    f'{label} clone shares the exact same storage path as the source — not independent',
+                )
+                source_field.open('rb')
+                cloned_field.open('rb')
+                try:
+                    self.assertEqual(
+                        cloned_field.read(), source_field.read(), f'{label} clone content does not match the source'
+                    )
+                finally:
+                    source_field.close()
+                    cloned_field.close()
+
+    def test_deleting_the_clones_file_does_not_touch_the_source(self):
+        cloned = self._clone()
+        cloned_lesson = Lesson.objects.get(module__course=cloned)
+        cloned_element = Slide.objects.get(lesson=cloned_lesson, order=1).elements.get()
+
+        cloned_element.video_file.delete(save=True)
+
+        self.element.refresh_from_db()
+        self.assertTrue(self.element.video_file)
+        self.element.video_file.open('rb')
+        try:
+            self.assertEqual(self.element.video_file.read(), b'fake video bytes')
+        finally:
+            self.element.video_file.close()
+
+    def test_deleting_the_sources_file_does_not_touch_the_clone(self):
+        cloned = self._clone()
+        cloned_lesson = Lesson.objects.get(module__course=cloned)
+        cloned_element = Slide.objects.get(lesson=cloned_lesson, order=1).elements.get()
+
+        self.element.video_file.delete(save=True)
+
+        cloned_element.refresh_from_db()
+        self.assertTrue(cloned_element.video_file)
+        cloned_element.video_file.open('rb')
+        try:
+            self.assertEqual(cloned_element.video_file.read(), b'fake video bytes')
+        finally:
+            cloned_element.video_file.close()
+
+    def test_copy_lesson_backfill_also_deep_copies_files(self):
+        from courses.services import copy_lesson
+
+        target_course = Course.objects.create(
+            title='Target', slug='clone-target', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION,
+        )
+        target_module = Module.objects.create(course=target_course, title='Module 1', order=1)
+
+        copied = copy_lesson(self.lesson, target_module)
+        copied_slide = Slide.objects.get(lesson=copied, order=1)
+        copied_element = copied_slide.elements.get()
+
+        self.assertNotEqual(copied_element.video_file.name, self.element.video_file.name)
+        copied_element.video_file.delete(save=True)
+
+        self.element.refresh_from_db()
+        self.assertTrue(self.element.video_file)
+
+
 class VideoStreamingTests(BaseAPITestCase):
     """
     Phase 36: an uploaded video Element is served through a short-lived,
