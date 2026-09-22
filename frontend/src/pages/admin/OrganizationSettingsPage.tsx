@@ -8,7 +8,7 @@ import { useAuth } from '../../context/AuthContext'
 import { ApiError } from '../../lib/apiClient'
 import { fetchOrganizationSettingsList, updateOrganizationSettings } from '../../lib/orgSettingsApi'
 import { isPlatformAdminRole } from '../../lib/roles'
-import type { OrganizationSettings, ReminderFrequency, TimingMode } from '../../types/orgSettings'
+import type { OrganizationSettings, ReminderFrequency } from '../../types/orgSettings'
 
 function extractFieldError(err: unknown): string | null {
   if (err instanceof ApiError && err.body && typeof err.body === 'object') {
@@ -21,8 +21,6 @@ function extractFieldError(err: unknown): string | null {
 
 interface Draft {
   questions_per_attempt: string
-  timing_mode: TimingMode
-  seconds_per_question: string
   total_exam_minutes: string
   pass_mark_percent: string
 }
@@ -30,8 +28,6 @@ interface Draft {
 function draftFromSettings(settings: OrganizationSettings): Draft {
   return {
     questions_per_attempt: String(settings.questions_per_attempt),
-    timing_mode: settings.timing_mode,
-    seconds_per_question: String(settings.seconds_per_question),
     total_exam_minutes: String(settings.total_exam_minutes),
     pass_mark_percent: String(settings.pass_mark_percent),
   }
@@ -53,6 +49,11 @@ function SettingsForm({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const questionCount = Number(draft.questions_per_attempt)
+  const totalMinutes = Number(draft.total_exam_minutes)
+  const calculatedSeconds = questionCount > 0 && totalMinutes > 0
+    ? Math.floor((totalMinutes * 60) / questionCount)
+    : 0
 
   useEffect(() => {
     setDraft(draftFromSettings(settings))
@@ -67,8 +68,6 @@ function SettingsForm({
     try {
       const updated = await updateOrganizationSettings(settings.id, {
         questions_per_attempt: Number(draft.questions_per_attempt),
-        timing_mode: draft.timing_mode,
-        seconds_per_question: Number(draft.seconds_per_question),
         total_exam_minutes: Number(draft.total_exam_minutes),
         pass_mark_percent: Number(draft.pass_mark_percent),
       })
@@ -109,39 +108,27 @@ function SettingsForm({
           value={draft.questions_per_attempt}
           onChange={(e) => setDraft({ ...draft, questions_per_attempt: e.target.value })}
         />
+        <Input
+          id="total-exam-minutes"
+          label="Total exam duration (minutes)"
+          type="number"
+          min={5}
+          value={draft.total_exam_minutes}
+          onChange={(e) => setDraft({ ...draft, total_exam_minutes: e.target.value })}
+        />
         <div>
-          <label htmlFor="timing-mode" className="block text-sm font-medium text-neutral-700">
-            Level Assessment timing
-          </label>
-          <select
-            id="timing-mode"
-            value={draft.timing_mode}
-            onChange={(e) => setDraft({ ...draft, timing_mode: e.target.value as TimingMode })}
-            className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm shadow-sm"
-          >
-            <option value="PER_QUESTION">Per question — countdown resets on each question</option>
-            <option value="FIXED_TOTAL">Fixed total — one countdown for the whole exam</option>
-          </select>
-        </div>
-        {draft.timing_mode === 'PER_QUESTION' ? (
           <Input
             id="seconds-per-question"
-            label="Seconds per question (countdown timer)"
+            label="Seconds per question (calculated automatically)"
             type="number"
-            min={5}
-            value={draft.seconds_per_question}
-            onChange={(e) => setDraft({ ...draft, seconds_per_question: e.target.value })}
+            value={calculatedSeconds || ''}
+            readOnly
+            className="bg-neutral-50 text-neutral-600"
           />
-        ) : (
-          <Input
-            id="total-exam-minutes"
-            label="Total exam time (minutes)"
-            type="number"
-            min={5}
-            value={draft.total_exam_minutes}
-            onChange={(e) => setDraft({ ...draft, total_exam_minutes: e.target.value })}
-          />
-        )}
+          <p className="mt-1 text-xs text-neutral-500">
+            Total duration in seconds ÷ number of questions, rounded down. Each question has its own countdown.
+          </p>
+        </div>
         <Input
           id="pass-mark-percent"
           label="Pass mark (%) — Level Assessments and course certificates"

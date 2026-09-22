@@ -37,8 +37,6 @@ export type OrganizationSettingsInput = Partial<
   Pick<
     OrganizationSettings,
     | 'questions_per_attempt'
-    | 'timing_mode'
-    | 'seconds_per_question'
     | 'total_exam_minutes'
     | 'pass_mark_percent'
     | 'max_level_assessment_attempts'

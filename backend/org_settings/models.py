@@ -45,14 +45,14 @@ class OrganizationSettings(models.Model):
     # levelassessments.services.start_level_assessment_attempt.
     questions_per_attempt = models.PositiveIntegerField(default=15, validators=[MinValueValidator(1)])
     timing_mode = models.CharField(max_length=20, choices=TimingMode.choices, default=TimingMode.PER_QUESTION)
-    # Used only when timing_mode=PER_QUESTION — the sequential level-assessment
-    # flow's per-question countdown; a question locks at zero marks once this
-    # many seconds elapse unanswered.
+    # Derived from total_exam_minutes / questions_per_attempt by the org-admin
+    # settings API. It remains stored because live attempts need one stable,
+    # integer countdown value and older clients still read this field.
     seconds_per_question = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
-    # Used only when timing_mode=FIXED_TOTAL — one countdown for the entire
-    # attempt; the exam auto-submits (unanswered questions scored zero) the
-    # instant it reaches zero, wherever the learner currently is in the exam.
-    total_exam_minutes = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
+    # Org admins choose the total intended duration. The per-question timer is
+    # calculated as floor(total seconds / question count), so 30 minutes for
+    # 30 questions produces exactly 60 seconds per question.
+    total_exam_minutes = models.PositiveIntegerField(default=15, validators=[MinValueValidator(5)])
     # Matches AssessmentLevel.pass_threshold's old default — also now the
     # course-completion certificate threshold (Course.certificate_pass_threshold
     # used to hold this per-course; every course in an organization now shares

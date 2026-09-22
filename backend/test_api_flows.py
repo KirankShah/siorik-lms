@@ -5151,24 +5151,40 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         self.assertEqual(response.data[0]['questions_per_attempt'], 15)
         self.assertEqual(response.data[0]['timing_mode'], 'PER_QUESTION')
         self.assertEqual(response.data[0]['seconds_per_question'], 60)
-        self.assertEqual(response.data[0]['total_exam_minutes'], 60)
+        self.assertEqual(response.data[0]['total_exam_minutes'], 15)
         self.assertEqual(response.data[0]['pass_mark_percent'], 70)
 
-    def test_org_admin_can_switch_to_fixed_total_timing_mode(self):
+    def test_org_admin_duration_derives_seconds_per_question(self):
         settings_obj = OrganizationSettings.objects.get(organization=self.org)
         self.auth_as(self.org_admin)
         response = self.client.patch(
             f'/api/organization-settings/{settings_obj.id}/',
-            {'timing_mode': 'FIXED_TOTAL', 'total_exam_minutes': 45},
+            {
+                'questions_per_attempt': 30,
+                'total_exam_minutes': 30,
+                # Both are read-only: callers cannot create contradictory
+                # timing settings by supplying their own values.
+                'timing_mode': 'FIXED_TOTAL',
+                'seconds_per_question': 999,
+            },
             format='json',
         )
         self.assertEqual(response.status_code, 200, response.data)
         settings_obj.refresh_from_db()
-        self.assertEqual(settings_obj.timing_mode, 'FIXED_TOTAL')
-        self.assertEqual(settings_obj.total_exam_minutes, 45)
-        # seconds_per_question is left untouched — switching modes doesn't
-        # silently reset the setting for the other one.
+        self.assertEqual(settings_obj.timing_mode, 'PER_QUESTION')
+        self.assertEqual(settings_obj.total_exam_minutes, 30)
         self.assertEqual(settings_obj.seconds_per_question, 60)
+
+    def test_duration_must_allow_at_least_five_seconds_per_question(self):
+        settings_obj = OrganizationSettings.objects.get(organization=self.org)
+        self.auth_as(self.org_admin)
+        response = self.client.patch(
+            f'/api/organization-settings/{settings_obj.id}/',
+            {'questions_per_attempt': 100, 'total_exam_minutes': 5},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('total_exam_minutes', response.data)
 
     def test_max_attempts_default_to_unlimited_and_are_independently_settable(self):
         settings_obj = OrganizationSettings.objects.get(organization=self.org)
@@ -5199,7 +5215,7 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         self.auth_as(self.org_admin)
         response = self.client.patch(
             f'/api/organization-settings/{settings_obj.id}/',
-            {'questions_per_attempt': 10, 'seconds_per_question': 30, 'pass_mark_percent': 80},
+            {'questions_per_attempt': 10, 'total_exam_minutes': 5, 'pass_mark_percent': 80},
             format='json',
         )
         self.assertEqual(response.status_code, 200, response.data)
@@ -6339,6 +6355,24 @@ class LevelAssessmentResumeTests(BaseAPITestCase):
         self.assertEqual(response.data['current_question_index'], 1)
         # Freshly reset — nowhere near the 15s that would remain without a reset.
         self.assertGreaterEqual(response.data['remaining_seconds'], 59)
+
+    def test_timeout_advance_succeeds_when_server_already_moved_to_requested_question(self):
+        """The timeout UI and server clock can expire at the same time."""
+        OrganizationSettings.objects.filter(organization=self.org).update(
+            timing_mode=OrganizationSettings.TimingMode.PER_QUESTION, seconds_per_question=60,
+        )
+        attempt = self.start_attempt()
+        LevelAssessmentAttempt.objects.filter(id=attempt.id).update(
+            timer_segment_started_at=timezone.now() - timedelta(seconds=61),
+        )
+
+        response = self.client.post(
+            f'/api/level-attempts/{attempt.id}/advance/', {'current_question_index': 1}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['current_question_index'], 1)
+        self.assertIsNone(response.data['submitted_at'])
 
     def test_advance_does_not_reset_the_timer_under_fixed_total_timing(self):
         OrganizationSettings.objects.filter(organization=self.org).update(

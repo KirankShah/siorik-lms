@@ -21,8 +21,36 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
             'never_logged_in_reminder_enabled', 'never_logged_in_reminder_frequency', 'never_logged_in_last_sent_at',
         ]
         read_only_fields = [
-            'id', 'organization', 'logged_in_inactive_last_sent_at', 'never_logged_in_last_sent_at',
+            'id', 'organization', 'timing_mode', 'seconds_per_question',
+            'logged_in_inactive_last_sent_at', 'never_logged_in_last_sent_at',
         ]
+
+    def validate(self, attrs):
+        """Keep the assessment duration and per-question countdown in sync.
+
+        Org admins configure a question count and total duration; the server,
+        rather than the browser, owns the calculation so API callers cannot
+        save contradictory timing values. Existing unrelated PATCH requests
+        also preserve a consistent pair of values.
+        """
+        attrs = super().validate(attrs)
+        if self.instance is None:
+            return attrs
+
+        question_count = attrs.get('questions_per_attempt', self.instance.questions_per_attempt)
+        total_minutes = attrs.get('total_exam_minutes', self.instance.total_exam_minutes)
+        seconds_per_question = (total_minutes * 60) // question_count
+        if seconds_per_question < 5:
+            raise serializers.ValidationError({
+                'total_exam_minutes': (
+                    'The total duration must allow at least 5 seconds per question. '
+                    'Increase the duration or reduce the number of questions.'
+                ),
+            })
+
+        attrs['timing_mode'] = OrganizationSettings.TimingMode.PER_QUESTION
+        attrs['seconds_per_question'] = seconds_per_question
+        return attrs
 
     def validate_questions_per_attempt(self, value):
         """

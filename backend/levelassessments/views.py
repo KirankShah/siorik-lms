@@ -263,6 +263,7 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
         """
         attempt = self.get_object()
         was_already_submitted = attempt.submitted_at is not None
+        index_before_catch_up = attempt.current_question_index
         attempt = resume_level_assessment_attempt(attempt)
         if attempt.submitted_at is not None and not was_already_submitted:
             return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
@@ -272,8 +273,16 @@ class LevelAssessmentAttemptViewSet(mixins.RetrieveModelMixin, viewsets.GenericV
         serializer = LevelAssessmentAdvanceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        requested_index = serializer.validated_data['current_question_index']
+        if attempt.current_question_index > index_before_catch_up and requested_index <= attempt.current_question_index:
+            # The server clock expired the question while this request was in
+            # flight and resume_level_assessment_attempt already performed the
+            # requested transition (or caught up even further). Treat that as
+            # success instead of trying to advance the same index twice.
+            return Response(LevelAssessmentAttemptSerializer(attempt, context={'request': request}).data)
+
         try:
-            advance_level_assessment_attempt(attempt, new_index=serializer.validated_data['current_question_index'])
+            advance_level_assessment_attempt(attempt, new_index=requested_index)
         except LevelAssessmentError as exc:
             return Response({'detail': str(exc)}, status=400)
 
