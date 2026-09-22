@@ -200,6 +200,7 @@ class LevelAssessmentAnswerSerializer(serializers.ModelSerializer):
     # attempt the learner has already submitted — mirrors
     # assessments.QuizAnswerSerializer's exact reasoning.
     correct_choice_ids = serializers.SerializerMethodField()
+    is_unanswered = serializers.SerializerMethodField()
     explanation = serializers.CharField(source='question.explanation', read_only=True)
     feedback_correct = serializers.CharField(source='question.feedback_correct', read_only=True)
     feedback_incorrect = serializers.CharField(source='question.feedback_incorrect', read_only=True)
@@ -211,6 +212,7 @@ class LevelAssessmentAnswerSerializer(serializers.ModelSerializer):
             'question',
             'selected_choices',
             'is_correct',
+            'is_unanswered',
             'correct_choice_ids',
             'explanation',
             'feedback_correct',
@@ -219,6 +221,17 @@ class LevelAssessmentAnswerSerializer(serializers.ModelSerializer):
 
     def get_correct_choice_ids(self, obj):
         return list(obj.question.choices.filter(is_correct=True).values_list('id', flat=True))
+
+    def get_is_unanswered(self, obj):
+        """An empty selection is a timed-out/unreached question, not a wrong answer.
+
+        The sequential UI does not allow learners to skip an unanswered
+        question manually, so the only graded empty selections are questions
+        whose per-question timer expired or which remained when the overall
+        exam timer submitted the attempt. They still earn zero marks because
+        is_correct remains false.
+        """
+        return not obj.selected_choices.exists()
 
 
 class LevelAssessmentAttemptSerializer(serializers.ModelSerializer):

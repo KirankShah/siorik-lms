@@ -6452,9 +6452,11 @@ class LevelAssessmentResumeTests(BaseAPITestCase):
 
         answers_by_question = {a['question']: a for a in response.data['answers']}
         self.assertTrue(answers_by_question[first_question_id]['is_correct'])
+        self.assertFalse(answers_by_question[first_question_id]['is_unanswered'])
         for question_id in attempt.questions_drawn[1:]:
             self.assertEqual(answers_by_question[question_id]['selected_choices'], [])
             self.assertFalse(answers_by_question[question_id]['is_correct'])
+            self.assertTrue(answers_by_question[question_id]['is_unanswered'])
 
         # A second fetch of an already-submitted attempt is a pure read —
         # no re-grading, no error.

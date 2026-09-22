@@ -342,6 +342,30 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
         submitted_at: '2026-01-01T00:05:00Z',
         passed: true,
         score_percent: '50.00',
+        answers: [
+          {
+            id: 100,
+            question: 1,
+            selected_choices: [],
+            is_correct: false,
+            is_unanswered: true,
+            correct_choice_ids: [10],
+            explanation: 'Choice A is the correct answer.',
+            feedback_correct: 'Well done.',
+            feedback_incorrect: 'Review the answer and try again.',
+          },
+          {
+            id: 101,
+            question: 2,
+            selected_choices: [20],
+            is_correct: true,
+            is_unanswered: false,
+            correct_choice_ids: [20],
+            explanation: 'Choice C is the correct answer.',
+            feedback_correct: 'Correct feedback.',
+            feedback_incorrect: 'Incorrect feedback.',
+          },
+        ],
       }
       vi.mocked(levelAssessmentsApi.submitLevelAssessmentAttempt).mockResolvedValue(submitted)
 
@@ -376,6 +400,17 @@ describe('LevelAssessmentPage PER_QUESTION sequential flow', () => {
         { question: 1, selected_choices: [] },
         { question: 2, selected_choices: [20] },
       ])
+
+      // The timed-out empty answer remains worth zero, but the final review
+      // distinguishes it from a genuinely answered-but-wrong question.
+      expect(await screen.findByText('Unanswered')).toBeInTheDocument()
+      expect(screen.getByText('No answer was submitted before time ran out. No marks were awarded.')).toBeInTheDocument()
+      expect(screen.getByText('Correct')).toBeInTheDocument()
+      expect(screen.queryByText('Incorrect')).not.toBeInTheDocument()
+      // Explanations/correct answers remain useful, but wrong-answer-specific
+      // feedback must not blame a learner who never submitted an answer.
+      expect(screen.getByText('Choice A is the correct answer.')).toBeInTheDocument()
+      expect(screen.queryByText('Review the answer and try again.')).not.toBeInTheDocument()
     },
     (SECONDS_PER_QUESTION + 8) * 1000,
   )

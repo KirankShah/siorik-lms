@@ -50,6 +50,9 @@ export interface LevelAssessmentAnswer {
   question: number
   selected_choices: number[]
   is_correct: boolean
+  // True when no choice was submitted (for example, because time expired).
+  // It still earns zero marks, but is displayed separately from Incorrect.
+  is_unanswered: boolean
   // Revealed only once this answer has been submitted and graded.
   correct_choice_ids: number[]
   explanation: string

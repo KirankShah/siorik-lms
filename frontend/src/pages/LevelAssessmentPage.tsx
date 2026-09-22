@@ -546,6 +546,13 @@ export function LevelAssessmentPage() {
               }
 
               const answer = attempt.answers.find((a) => a.question === question.id)
+              const isUnanswered = answer?.is_unanswered ?? (answer?.selected_choices.length === 0)
+              const statusLabel = answer?.is_correct ? 'Correct' : isUnanswered ? 'Unanswered' : 'Incorrect'
+              const statusClass = answer?.is_correct
+                ? 'text-emerald-600'
+                : isUnanswered
+                  ? 'text-amber-600'
+                  : 'text-red-600'
               return (
                 <div key={question.id} className="rounded-lg border border-neutral-200 p-4">
                   <div className="flex items-start justify-between gap-4">
@@ -553,8 +560,8 @@ export function LevelAssessmentPage() {
                       className="min-w-0 flex-1 text-sm font-medium text-neutral-900 [overflow-wrap:anywhere]"
                       dangerouslySetInnerHTML={{ __html: question.question_text }}
                     />
-                    <span className={`shrink-0 text-xs font-medium ${answer?.is_correct ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {answer?.is_correct ? 'Correct' : 'Incorrect'}
+                    <span className={`shrink-0 text-xs font-medium ${statusClass}`}>
+                      {statusLabel}
                     </span>
                   </div>
 
@@ -564,9 +571,15 @@ export function LevelAssessmentPage() {
                     correctIds={answer?.correct_choice_ids ?? []}
                   />
 
+                  {isUnanswered && (
+                    <p className="mt-3 text-sm text-amber-700">
+                      No answer was submitted before time ran out. No marks were awarded.
+                    </p>
+                  )}
+
                   <QuestionFeedback
                     explanation={answer?.explanation}
-                    isCorrect={answer?.is_correct}
+                    isCorrect={isUnanswered ? undefined : answer?.is_correct}
                     feedbackCorrect={answer?.feedback_correct}
                     feedbackIncorrect={answer?.feedback_incorrect}
                   />
