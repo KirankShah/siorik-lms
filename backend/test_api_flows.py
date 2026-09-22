@@ -4558,6 +4558,66 @@ class LevelAssessmentAttemptServiceTests(TestCase):
         self.assertNotEqual(first.id, second.id)
         self.assertEqual(LevelAssessmentAttempt.objects.filter(user=self.user, assessment_level=self.level).count(), 2)
 
+    def test_retries_do_not_repeat_questions_until_the_pool_cycle_is_exhausted(self):
+        # Nine unique questions at three per attempt support three completely
+        # disjoint attempts. The fourth starts a new cycle instead of failing.
+        for i in range(5):
+            question = LevelQuestion.objects.create(
+                question_set=self.set_a,
+                question_text=f'Additional unique question {i}',
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            )
+            LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+            LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+
+        cycle_draws = []
+        for _ in range(3):
+            attempt = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+            cycle_draws.append(set(attempt.questions_drawn))
+            attempt.submitted_at = timezone.now()
+            attempt.save(update_fields=['submitted_at'])
+
+        self.assertTrue(cycle_draws[0].isdisjoint(cycle_draws[1]))
+        self.assertTrue(cycle_draws[0].isdisjoint(cycle_draws[2]))
+        self.assertTrue(cycle_draws[1].isdisjoint(cycle_draws[2]))
+        self.assertEqual(len(set().union(*cycle_draws)), 9)
+
+        fourth = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+        self.assertEqual(len(fourth.questions_drawn), 3)
+        self.assertTrue(set(fourth.questions_drawn).issubset(set().union(*cycle_draws)))
+
+    def test_no_repeat_cycle_uses_normalized_text_not_only_database_ids(self):
+        # Six unique visible questions support two disjoint attempts. A
+        # duplicate row with different markup/case must not sneak the first
+        # attempt's wording into the second under a different database id.
+        for i in range(2):
+            question = LevelQuestion.objects.create(
+                question_set=self.set_a,
+                question_text=f'Additional normalized question {i}',
+                question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+            )
+            LevelChoice.objects.create(question=question, choice_text='Correct', is_correct=True)
+            LevelChoice.objects.create(question=question, choice_text='Wrong', is_correct=False)
+        duplicate = LevelQuestion.objects.create(
+            question_set=self.set_b,
+            question_text='<p> QUESTION SET 1-0!!! </p>',
+            question_type=LevelQuestion.QuestionType.SINGLE_CHOICE,
+        )
+        LevelChoice.objects.create(question=duplicate, choice_text='Correct', is_correct=True)
+        LevelChoice.objects.create(question=duplicate, choice_text='Wrong', is_correct=False)
+
+        first = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+        first.submitted_at = timezone.now()
+        first.save(update_fields=['submitted_at'])
+        second = start_level_assessment_attempt(user=self.user, assessment_level=self.level)
+
+        texts_by_id = dict(LevelQuestion.objects.filter(
+            id__in=first.questions_drawn + second.questions_drawn
+        ).values_list('id', 'question_text'))
+        first_keys = {normalize_question_text(texts_by_id[question_id]) for question_id in first.questions_drawn}
+        second_keys = {normalize_question_text(texts_by_id[question_id]) for question_id in second.questions_drawn}
+        self.assertTrue(first_keys.isdisjoint(second_keys))
+
     def test_rejects_when_pool_smaller_than_questions_per_attempt(self):
         OrganizationSettings.objects.filter(organization=self.org).update(questions_per_attempt=999)
 

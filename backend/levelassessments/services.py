@@ -150,15 +150,45 @@ def level_assessment_attempts_remaining(user, assessment_level):
     return max(0, max_attempts - submitted_attempt_count(user, assessment_level))
 
 
-def draw_question_ids_for_level(assessment_level):
+def _seen_draw_keys_in_current_cycle(*, user, assessment_level, draw_key_by_question_id, pool_draw_keys, draw_size):
+    """Reconstruct the learner's current no-repeat cycle from attempt history.
+
+    A cycle continues while the pool still contains enough unseen questions
+    for a complete attempt. When fewer than ``draw_size`` remain, the next
+    attempt starts a fresh cycle. Deriving this from ``questions_drawn`` keeps
+    the behavior compatible with all historical attempts without adding
+    mutable per-user cycle state or a data migration.
+    """
+    seen_draw_keys = set()
+    prior_draws = LevelAssessmentAttempt.objects.filter(
+        user=user,
+        assessment_level=assessment_level,
+        submitted_at__isnull=False,
+    ).order_by('started_at', 'id').values_list('questions_drawn', flat=True)
+
+    for question_ids in prior_draws:
+        if len(pool_draw_keys - seen_draw_keys) < draw_size:
+            seen_draw_keys.clear()
+        seen_draw_keys.update(
+            draw_key_by_question_id[question_id]
+            for question_id in question_ids
+            if question_id in draw_key_by_question_id
+        )
+
+    if len(pool_draw_keys - seen_draw_keys) < draw_size:
+        seen_draw_keys.clear()
+    return seen_draw_keys
+
+
+def draw_question_ids_for_level(assessment_level, *, user=None):
     """
     Draws a fresh random sample of `assessment_level.organization.settings.
     questions_per_attempt` unique question ids from the full pool across ALL
-    of that level's QuestionSets combined — the exact same draw
-    start_level_assessment_attempt persists onto a real attempt, factored out
-    so preview_level_assessment can simulate one without ever touching
-    LevelAssessmentAttempt. See start_level_assessment_attempt's own
-    docstring for the normalized-text-grouping rationale.
+    of that level's QuestionSets combined. For a learner draw (``user`` is
+    supplied), excludes every normalized question they have seen in their
+    current cycle. Once fewer than a full attempt remain unseen, the cycle is
+    reset and the complete pool becomes eligible again. Admin preview omits
+    ``user`` and remains a stateless sample of the full pool.
 
     Raises LevelAssessmentError if the pool doesn't have enough unique
     questions to draw from.
@@ -168,11 +198,13 @@ def draw_question_ids_for_level(assessment_level):
         .values_list('id', 'question_text')
     )
     ids_by_normalized_text = {}
+    draw_key_by_question_id = {}
     for question_id, question_text in pool_rows:
         # Empty text is invalid through every supported write path, but keep
         # a per-row fallback so legacy bad data cannot collapse unrelated rows.
         draw_key = normalize_question_text(question_text) or f'__question_{question_id}'
         ids_by_normalized_text.setdefault(draw_key, []).append(question_id)
+        draw_key_by_question_id[question_id] = draw_key
 
     questions_per_attempt = assessment_level.organization.settings.questions_per_attempt
     unique_question_count = len(ids_by_normalized_text)
@@ -182,7 +214,22 @@ def draw_question_ids_for_level(assessment_level):
             f'to draw {questions_per_attempt} for an attempt.'
         )
 
-    selected_groups = random.sample(list(ids_by_normalized_text.values()), questions_per_attempt)
+    excluded_draw_keys = set()
+    if user is not None:
+        excluded_draw_keys = _seen_draw_keys_in_current_cycle(
+            user=user,
+            assessment_level=assessment_level,
+            draw_key_by_question_id=draw_key_by_question_id,
+            pool_draw_keys=set(ids_by_normalized_text),
+            draw_size=questions_per_attempt,
+        )
+
+    eligible_groups = [
+        question_ids
+        for draw_key, question_ids in ids_by_normalized_text.items()
+        if draw_key not in excluded_draw_keys
+    ]
+    selected_groups = random.sample(eligible_groups, questions_per_attempt)
     return [random.choice(group) for group in selected_groups]
 
 
@@ -207,9 +254,9 @@ def start_level_assessment_attempt(*, user, assessment_level):
     """
     Starts a new LevelAssessmentAttempt for `user` under `assessment_level`.
 
-    Draws a fresh random sample of `assessment_level.organization.settings.
-    questions_per_attempt` unique question texts from the full pool across ALL
-    of that level's QuestionSets combined. Rows whose learner-visible wording
+    Draws a random sample of `assessment_level.organization.settings.
+    questions_per_attempt` unique question texts from the learner's current
+    no-repeat cycle across ALL of that level's QuestionSets combined. Rows whose learner-visible wording
     differs only by markup, case, punctuation, whitespace, or Unicode form are
     treated as one question; one stored row is selected randomly from that
     group. QuestionSet is an authoring label only, so Set boundaries never
@@ -220,7 +267,9 @@ def start_level_assessment_attempt(*, user, assessment_level):
     Only one attempt may be in progress (submitted_at is null) per
     user+assessment_level at a time; raises LevelAssessmentError if one
     already is. A prior completed/failed attempt never blocks a retake by
-    itself — each retake draws its own fresh random sample — but
+    itself — each retake draws a new sample excluding questions already seen
+    in the current cycle, with a fresh cycle beginning only when fewer than a
+    full attempt remain unseen — but
     OrganizationSettings.max_level_assessment_attempts (null = unlimited) is
     a hard cap on the total number of attempts (first + every retake); once
     reached, starting another is refused with a clear reason instead of
@@ -238,7 +287,7 @@ def start_level_assessment_attempt(*, user, assessment_level):
             'assessment level.'
         )
 
-    questions_drawn = draw_question_ids_for_level(assessment_level)
+    questions_drawn = draw_question_ids_for_level(assessment_level, user=user)
 
     try:
         with transaction.atomic():
