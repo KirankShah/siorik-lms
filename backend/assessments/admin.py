@@ -49,7 +49,6 @@ class QuizAdmin(admin.ModelAdmin):
     list_display = (
         'title',
         'slide',
-        'pass_percentage',
         'time_limit_minutes',
         'max_attempts',
         'randomize_questions',

@@ -15,6 +15,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from courses.models import Enrollment
 from gamification.services import update_gamification_for_user
+from org_settings.models import pass_mark_percent_for_user
 
 from .models import Certificate, CertificateTemplate
 
@@ -25,10 +26,6 @@ logger = logging.getLogger(__name__)
 # decorative gold border in the default template.
 TEXT_SAFE_MARGIN_PERCENT = 8
 MIN_AUTO_SHRINK_FONT_SIZE = 16
-# Fallback only for the (normally unreachable) case of a certificate check
-# for a user with no organization — every real organization always has an
-# OrganizationSettings row (see org_settings.signals).
-DEFAULT_PASS_MARK_PERCENT = 70
 TEXT_ALIGN_ANCHORS = {
     CertificateTemplate.TextAlign.LEFT: 'lm',
     CertificateTemplate.TextAlign.CENTER: 'mm',
@@ -54,12 +51,10 @@ def certificate_ineligibility_reason(user, course):
       org_settings.OrganizationSettings.pass_mark_percent — the same
       org-wide value every course now shares (previously a per-course
       Course.certificate_pass_threshold field). This is a course-wide
-      average, not a requirement that every individual quiz independently
-      score at or above its own Quiz.pass_percentage — that field remains a
-      per-quiz pass/fail indicator shown to the learner during the course,
-      but doesn't itself gate the certificate. A quiz the learner has never
-      attempted still blocks issuance (there's no score to average in),
-      distinct from one they attempted and failed.
+      average. Individual quiz attempts use this same organization-wide mark,
+      while certificate eligibility applies it to the overall quiz average.
+      A quiz the learner has never attempted still blocks issuance (there's
+      no score to average in), distinct from one they attempted and failed.
     """
     enrollment = Enrollment.objects.filter(user=user, course=course).first()
     if enrollment is None or enrollment.status != Enrollment.Status.COMPLETED:
@@ -75,9 +70,7 @@ def certificate_ineligibility_reason(user, course):
 
     if best_scores:
         average_score = sum(best_scores) / len(best_scores)
-        pass_mark_percent = (
-            user.organization.settings.pass_mark_percent if user.organization_id else DEFAULT_PASS_MARK_PERCENT
-        )
+        pass_mark_percent = pass_mark_percent_for_user(user)
         if average_score < pass_mark_percent:
             return (
                 f'Average score {average_score:.1f}% is below the course pass threshold of '

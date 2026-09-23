@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from accounts.models import User
 from accounts.serializers import UserSerializer
+from org_settings.models import DEFAULT_PASS_MARK_PERCENT, pass_mark_percent_for_user
 
 from .models import (
     CategorizeItem,
@@ -18,6 +19,24 @@ from .models import (
 )
 
 PRIVILEGED_ROLES = (User.Role.INSTRUCTOR, User.Role.ORG_ADMIN, User.Role.PLATFORM_ADMIN)
+
+
+class OrganizationPassMarkMixin:
+    # Keep the established API name for client compatibility, but make it a
+    # read-only projection of OrganizationSettings rather than quiz data.
+    def get_pass_percentage(self, obj):
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated and request.user.organization_id:
+            return pass_mark_percent_for_user(request.user)
+
+        # A platform administrator has no organization of their own. For an
+        # organization-owned course, show that course owner's setting; a
+        # platform course can serve organizations with different settings,
+        # so the system default is the only meaningful authoring value.
+        course_organization = obj.slide.lesson.module.course.organization
+        if course_organization is not None:
+            return course_organization.settings.pass_mark_percent
+        return DEFAULT_PASS_MARK_PERCENT
 
 
 class CategoryBucketSerializer(serializers.ModelSerializer):
@@ -184,15 +203,18 @@ class QuestionSerializer(serializers.ModelSerializer):
         return data
 
 
-class QuizSummarySerializer(serializers.ModelSerializer):
+class QuizSummarySerializer(OrganizationPassMarkMixin, serializers.ModelSerializer):
     """Lightweight quiz representation for nesting under a slide, without questions."""
+
+    pass_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = ['id', 'title', 'pass_percentage', 'time_limit_minutes', 'max_attempts']
 
 
-class QuizSerializer(serializers.ModelSerializer):
+class QuizSerializer(OrganizationPassMarkMixin, serializers.ModelSerializer):
+    pass_percentage = serializers.SerializerMethodField()
     questions = QuestionSerializer(many=True, read_only=True)
 
     class Meta:
@@ -215,7 +237,9 @@ class QuizSerializer(serializers.ModelSerializer):
         return data
 
 
-class QuizWriteSerializer(serializers.ModelSerializer):
+class QuizWriteSerializer(OrganizationPassMarkMixin, serializers.ModelSerializer):
+    pass_percentage = serializers.SerializerMethodField()
+
     class Meta:
         model = Quiz
         fields = [

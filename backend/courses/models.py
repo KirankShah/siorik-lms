@@ -73,11 +73,9 @@ class Course(models.Model):
     # The course-wide average score (across each quiz's best attempt)
     # required before a certificate can issue is no longer a per-course field
     # — every course now shares its enrolled learner's own organization's
-    # org_settings.OrganizationSettings.pass_mark_percent. NOT a requirement
-    # that every individual quiz independently score above this threshold; a
-    # quiz's own Quiz.pass_percentage is a separate per-quiz pass/fail
-    # indicator that doesn't itself gate the certificate. See
-    # certificates.services.certificate_ineligibility_reason.
+    # org_settings.OrganizationSettings.pass_mark_percent. Quiz attempts use
+    # that same value, while certificate eligibility uses it against the
+    # course-wide average. See certificates.services.
     certificate_expiry_months = models.PositiveIntegerField(
         null=True,
         blank=True,

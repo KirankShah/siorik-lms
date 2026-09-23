@@ -52,7 +52,6 @@ export function submitQuizAttempt(quizId: number, answers: QuizAnswerInput[]): P
 export interface QuizInput {
   slide: number
   title: string
-  pass_percentage: number
   time_limit_minutes: number | null
   max_attempts: number | null
   randomize_questions: boolean

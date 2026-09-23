@@ -4,6 +4,14 @@ from django.db import models
 from accounts.models import Organization
 
 PERCENT_VALIDATORS = [MinValueValidator(0), MaxValueValidator(100)]
+DEFAULT_PASS_MARK_PERCENT = 70
+
+
+def pass_mark_percent_for_user(user):
+    """Return the organization-wide pass mark that applies to ``user``."""
+    if user.organization_id:
+        return user.organization.settings.pass_mark_percent
+    return DEFAULT_PASS_MARK_PERCENT
 
 
 class OrganizationSettings(models.Model):
@@ -57,7 +65,7 @@ class OrganizationSettings(models.Model):
     # course-completion certificate threshold (Course.certificate_pass_threshold
     # used to hold this per-course; every course in an organization now shares
     # this single value, read from the enrolled learner's own organization).
-    pass_mark_percent = models.PositiveIntegerField(default=70, validators=PERCENT_VALIDATORS)
+    pass_mark_percent = models.PositiveIntegerField(default=DEFAULT_PASS_MARK_PERCENT, validators=PERCENT_VALIDATORS)
 
     # Null means unlimited (the original, still-default behavior) — a
     # positive number is a hard cap. max_level_assessment_attempts counts

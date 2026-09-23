@@ -36,7 +36,6 @@ export function QuizAuthoringPanel({ slideId, defaultTitle }: QuizAuthoringPanel
       await createQuiz({
         slide: slideId,
         title: defaultTitle,
-        pass_percentage: 70,
         time_limit_minutes: null,
         max_attempts: null,
         randomize_questions: false,
@@ -66,7 +65,6 @@ export function QuizAuthoringPanel({ slideId, defaultTitle }: QuizAuthoringPanel
 
 function QuizEditor({ quiz, onChanged }: { quiz: QuizDetail; onChanged: () => void }) {
   const [title, setTitle] = useState(quiz.title)
-  const [passPercentage, setPassPercentage] = useState(quiz.pass_percentage)
   const [timeLimitMinutes, setTimeLimitMinutes] = useState<number | ''>(quiz.time_limit_minutes ?? '')
   const [maxAttempts, setMaxAttempts] = useState<number | ''>(quiz.max_attempts ?? '')
   const [randomizeQuestions, setRandomizeQuestions] = useState(quiz.randomize_questions)
@@ -84,7 +82,6 @@ function QuizEditor({ quiz, onChanged }: { quiz: QuizDetail; onChanged: () => vo
     try {
       await updateQuiz(quiz.id, {
         title,
-        pass_percentage: passPercentage,
         time_limit_minutes: timeLimitMinutes === '' ? null : Number(timeLimitMinutes),
         max_attempts: maxAttempts === '' ? null : Number(maxAttempts),
         randomize_questions: randomizeQuestions,
@@ -121,16 +118,10 @@ function QuizEditor({ quiz, onChanged }: { quiz: QuizDetail; onChanged: () => vo
       <form onSubmit={handleSaveSettings} className="space-y-3">
         <h3 className="text-sm font-semibold text-neutral-900">Quiz settings</h3>
         <Input id={`quiz-title-${quiz.id}`} label="Title" required value={title} onChange={(e) => setTitle(e.target.value)} />
-        <div className="grid grid-cols-3 gap-4">
-          <Input
-            id={`quiz-pass-${quiz.id}`}
-            label="Pass %"
-            type="number"
-            min={0}
-            max={100}
-            value={passPercentage}
-            onChange={(e) => setPassPercentage(Number(e.target.value))}
-          />
+        <p className="text-sm text-neutral-500">
+          Pass mark: {quiz.pass_percentage}% (managed in Organization settings)
+        </p>
+        <div className="grid grid-cols-2 gap-4">
           <Input
             id={`quiz-time-${quiz.id}`}
             label="Time limit (min)"

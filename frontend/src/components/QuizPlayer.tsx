@@ -395,9 +395,11 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
           }`}
         >
           <p className="text-lg font-semibold">{result.passed ? 'You passed!' : 'You did not pass'}</p>
-          <p className="text-sm">
-            Score: {result.score_percent}% (pass mark: {quiz.pass_percentage}%)
-          </p>
+          {!result.passed && (
+            <p className="text-sm">
+              Score: {result.score_percent}% (pass mark: {quiz.pass_percentage}%)
+            </p>
+          )}
         </div>
 
         <div className="mt-6 space-y-4">

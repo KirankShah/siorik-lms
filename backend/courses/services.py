@@ -55,7 +55,6 @@ def _clone_quiz_slide(source_slide, cloned_slide):
     cloned_quiz = Quiz.objects.create(
         slide=cloned_slide,
         title=quiz.title,
-        pass_percentage=quiz.pass_percentage,
         time_limit_minutes=quiz.time_limit_minutes,
         max_attempts=quiz.max_attempts,
         randomize_questions=quiz.randomize_questions,

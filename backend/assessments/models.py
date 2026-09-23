@@ -51,17 +51,6 @@ class AbstractOption(models.Model):
 class Quiz(models.Model):
     slide = models.ForeignKey(Slide, on_delete=models.CASCADE, related_name='quizzes')
     title = models.CharField(max_length=255)
-    # Per-quiz pass/fail indicator only (drives QuizAttempt.passed and what's
-    # shown to the learner right after submitting) — deliberately its own
-    # fixed default, NOT sourced from org_settings.OrganizationSettings.
-    # Certificate eligibility is governed separately, by the course-wide
-    # average against the learner's own organization's pass_mark_percent —
-    # see certificates.services.certificate_ineligibility_reason. A learner
-    # can fail an individual quiz here and still earn the certificate.
-    pass_percentage = models.PositiveIntegerField(
-        default=70,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-    )
     time_limit_minutes = models.PositiveIntegerField(null=True, blank=True)
     max_attempts = models.PositiveIntegerField(
         null=True,
@@ -240,7 +229,9 @@ class QuizAttempt(models.Model):
         unique_together = ('user', 'quiz', 'attempt_number')
 
     def calculate_score_percent(self):
-        """Compute score_percent/passed from this attempt's QuizAnswers and persist them."""
+        """Compute the score and apply the learner's organization-wide pass mark."""
+        from org_settings.models import pass_mark_percent_for_user
+
         total_points = self.quiz.questions.aggregate(total=Sum('points'))['total'] or 0
 
         if total_points == 0:
@@ -251,7 +242,7 @@ class QuizAttempt(models.Model):
             )['total'] or 0
             self.score_percent = round((earned_points / total_points) * 100, 2)
 
-        self.passed = self.score_percent >= self.quiz.pass_percentage
+        self.passed = self.score_percent >= pass_mark_percent_for_user(self.user)
         self.submitted_at = self.submitted_at or timezone.now()
         self.save(update_fields=['score_percent', 'passed', 'submitted_at'])
         return self.score_percent

@@ -97,7 +97,7 @@ async function submitQuiz(result: QuizAttemptResult) {
   fireEvent.click(screen.getByLabelText('Placement'))
   fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
 
-  await waitFor(() => expect(screen.getByText(/pass mark/)).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText(result.passed ? 'You passed!' : 'You did not pass')).toBeInTheDocument())
 }
 
 describe('QuizPlayer results feedback text wrapping', () => {
@@ -172,7 +172,7 @@ describe('QuizPlayer results feedback text wrapping', () => {
     await waitFor(() => expect(screen.getByText('Submit')).toBeInTheDocument())
     fireEvent.click(screen.getByLabelText('Placement'))
     fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
-    await waitFor(() => expect(screen.getByText(/pass mark/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('You passed!')).toBeInTheDocument())
 
     const questionEl = screen.getByText(LONG_UNBROKEN_QUESTION, { selector: 'div' })
     expect(questionEl.className).toMatch(/overflow-wrap:anywhere/)
@@ -187,6 +187,9 @@ describe('QuizPlayer results screen has no inline retake/certificate actions', (
   it('does not render Retake Quiz or Download Certificate when the attempt passed', async () => {
     await submitQuiz(buildResult({ }))
 
+    expect(screen.getByText('You passed!')).toBeInTheDocument()
+    expect(screen.queryByText(/Score:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/pass mark:/i)).not.toBeInTheDocument()
     expect(screen.queryByText('Retake Quiz')).not.toBeInTheDocument()
     expect(screen.queryByText('Download Certificate')).not.toBeInTheDocument()
   })

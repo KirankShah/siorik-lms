@@ -202,7 +202,7 @@ class BaseAPITestCase(APITestCase):
         self.quiz_slide = Slide.objects.create(
             lesson=self.lesson1, order=99, title='Final Exam', slide_type=Slide.SlideType.QUIZ,
         )
-        self.quiz = Quiz.objects.create(slide=self.quiz_slide, title='Final Exam', pass_percentage=50, max_attempts=2)
+        self.quiz = Quiz.objects.create(slide=self.quiz_slide, title='Final Exam', max_attempts=2)
         self.q1 = Question.objects.create(quiz=self.quiz, question_text='2+2=?', order=1, points=1)
         self.q1_wrong = Choice.objects.create(question=self.q1, choice_text='3', is_correct=False)
         self.q1_right = Choice.objects.create(question=self.q1, choice_text='4', is_correct=True)
@@ -978,7 +978,7 @@ class PathAccessEnforcementTests(BaseAPITestCase):
         lesson = Lesson.objects.get(module__course=self.officer_course)
         self.locked_content_slide = Slide.objects.get(lesson=lesson)
         self.locked_quiz_slide = Slide.objects.create(lesson=lesson, order=2, slide_type=Slide.SlideType.QUIZ)
-        Quiz.objects.create(slide=self.locked_quiz_slide, title='Locked Quiz', pass_percentage=50)
+        Quiz.objects.create(slide=self.locked_quiz_slide, title='Locked Quiz')
 
     def _make_course(self, title, slug, path_order, minimum_assessment_level=None):
         course = Course.objects.create(
@@ -1439,7 +1439,7 @@ class EnrollmentRetakeTests(BaseAPITestCase):
         other_module = Module.objects.create(course=self.platform_course, title='M', order=1)
         other_lesson = Lesson.objects.create(module=other_module, title='L', order=1)
         other_quiz_slide = Slide.objects.create(lesson=other_lesson, order=1, title='Q', slide_type=Slide.SlideType.QUIZ)
-        self.other_quiz = Quiz.objects.create(slide=other_quiz_slide, title='Q', pass_percentage=50)
+        self.other_quiz = Quiz.objects.create(slide=other_quiz_slide, title='Q')
         QuizAttempt.objects.create(user=self.learner, quiz=self.other_quiz, attempt_number=1, passed=True, score_percent=100)
 
     def test_retake_resets_enrollment_and_deletes_all_progress_and_attempts(self):
@@ -1563,7 +1563,22 @@ class QuizFlowTests(BaseAPITestCase):
         }
         response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
         self.assertEqual(response.data['score_percent'], '50.00')
-        self.assertTrue(response.data['passed'])  # pass_percentage is 50
+        self.assertFalse(response.data['passed'])  # organization pass mark is 70
+
+    def test_quiz_pass_status_uses_changed_organization_pass_mark(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(pass_mark_percent=50)
+        self.auth_as(self.learner)
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_wrong.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+            ],
+        }
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+
+        self.assertEqual(response.data['score_percent'], '50.00')
+        self.assertTrue(response.data['passed'])
 
     def test_max_attempts_enforced(self):
         self.auth_as(self.learner)
@@ -1909,15 +1924,10 @@ class CertificateIssueEndpointTests(BaseAPITestCase):
 class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
     """
     Phase 34: certificate eligibility is governed by the course-wide AVERAGE
-    score across all of the course's quizzes (each quiz's own best attempt),
-    not a requirement that every individual quiz independently score above
-    its own Quiz.pass_percentage. self.quiz (pass_percentage=50) already
-    exists on lesson1 from BaseAPITestCase; a second quiz (pass_percentage=
-    70) is added on lesson2 here so the average can diverge from any single
-    quiz's individual pass/fail outcome. self.learner's organization
-    (self.org)'s OrganizationSettings.pass_mark_percent is the default (70)
-    — see OrganizationSettingsCertificateThresholdTests below for coverage
-    of a *changed* pass_mark_percent actually moving this outcome.
+    score across all of the course's quizzes (each quiz's own best attempt).
+    Quiz pass/fail and this course-wide average both use the learner's
+    OrganizationSettings.pass_mark_percent (70 here), while the average can
+    still diverge from an individual attempt's outcome.
     """
 
     def setUp(self):
@@ -1925,7 +1935,7 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
         self.quiz2_slide = Slide.objects.create(
             lesson=self.lesson2, order=99, title='Second Exam', slide_type=Slide.SlideType.QUIZ,
         )
-        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam', pass_percentage=70)
+        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam')
         self.enrollment = Enrollment.objects.create(
             user=self.learner, course=self.published_org_course, status=Enrollment.Status.COMPLETED,
         )
@@ -1933,8 +1943,7 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
     def test_certificate_issues_when_average_meets_threshold_despite_one_quiz_individually_failed(self):
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=False, score_percent=40)
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=True, score_percent=100)
-        # Average = (40 + 100) / 2 = 70, meets the 70% threshold — even though
-        # self.quiz was individually failed against its own pass_percentage=50.
+        # Average = (40 + 100) / 2 = 70, meeting the organization threshold.
         # (Endpoint-level issuance is exercised in CertificateIssueEndpointTests
         # now that a single certificate requires the learner's WHOLE Learning
         # Path, not just this one course — orthogonal to the average-vs-
@@ -1945,8 +1954,7 @@ class CourseAverageCertificateEligibilityTests(BaseAPITestCase):
     def test_certificate_denied_when_average_below_threshold_despite_one_quiz_individually_passed(self):
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz, attempt_number=1, passed=True, score_percent=100)
         QuizAttempt.objects.create(user=self.learner, quiz=self.quiz2, attempt_number=1, passed=False, score_percent=20)
-        # Average = (100 + 20) / 2 = 60, below the 70% threshold — even though
-        # self.quiz was individually passed against its own pass_percentage=50.
+        # Average = (100 + 20) / 2 = 60, below the organization threshold.
 
         reason = certificate_ineligibility_reason(self.learner, self.published_org_course)
         self.assertIsNotNone(reason)
@@ -2202,7 +2210,7 @@ class CourseCloneTests(BaseAPITestCase):
         )
 
         self.quiz_slide2 = Slide.objects.create(lesson=self.lesson, order=2, slide_type=Slide.SlideType.QUIZ)
-        quiz = Quiz.objects.create(slide=self.quiz_slide2, title='Quiz', pass_percentage=60)
+        quiz = Quiz.objects.create(slide=self.quiz_slide2, title='Quiz')
         question = Question.objects.create(
             quiz=quiz, question_text='Categorize this', order=1, question_type=Question.QuestionType.CATEGORIZE,
         )
@@ -2392,7 +2400,7 @@ class CourseCloneFileIndependenceTests(BaseAPITestCase):
         )
 
         self.quiz_slide = Slide.objects.create(lesson=self.lesson, order=2, slide_type=Slide.SlideType.QUIZ)
-        quiz = Quiz.objects.create(slide=self.quiz_slide, title='Quiz', pass_percentage=60)
+        quiz = Quiz.objects.create(slide=self.quiz_slide, title='Quiz')
         self.question = Question.objects.create(
             quiz=quiz, question_text='Categorize this', order=1, question_type=Question.QuestionType.CATEGORIZE,
             image=make_test_image_upload('question.png', color='blue'),
@@ -2736,6 +2744,7 @@ class QuizBuilderTests(BaseAPITestCase):
             'slide': new_quiz_slide.id, 'title': 'New Quiz', 'pass_percentage': 60,
         })
         self.assertEqual(quiz_response.status_code, 201)
+        self.assertEqual(quiz_response.data['pass_percentage'], 70)
 
         question_response = self.client.post('/api/questions/', {
             'quiz': quiz_response.data['id'], 'question_text': 'Q1?',
@@ -2947,7 +2956,7 @@ class AdminAnalyticsTests(BaseAPITestCase):
         self.quiz2_slide = Slide.objects.create(
             lesson=self.lesson2, order=99, title='Second Exam', slide_type=Slide.SlideType.QUIZ,
         )
-        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam', pass_percentage=70)
+        self.quiz2 = Quiz.objects.create(slide=self.quiz2_slide, title='Second Exam')
 
         self.enrollment = Enrollment.objects.create(
             user=self.learner, course=self.published_org_course,
@@ -3047,7 +3056,7 @@ class AdminAnalyticsTests(BaseAPITestCase):
         failing_quiz_slide = Slide.objects.create(
             lesson=failing_lesson, order=1, title='Only Exam', slide_type=Slide.SlideType.QUIZ,
         )
-        failing_quiz = Quiz.objects.create(slide=failing_quiz_slide, title='Only Exam', pass_percentage=50)
+        failing_quiz = Quiz.objects.create(slide=failing_quiz_slide, title='Only Exam')
         QuizAttempt.objects.create(
             user=self.other_org_learner, quiz=failing_quiz, attempt_number=1, passed=True, score_percent=60,
         )
@@ -3111,7 +3120,7 @@ class AdminAnalyticsTests(BaseAPITestCase):
         self.assertIn("'=HYPERLINK(\"http://evil.test\") X", names)
 
 
-def make_quiz_course(*, title, slug, organization, path_order, minimum_assessment_level=None, pass_percentage=70):
+def make_quiz_course(*, title, slug, organization, path_order, minimum_assessment_level=None):
     """A published, path_order'd course with a single one-question quiz —
     enough to drive both completion and a quiz-average score for the Staff
     Training Report tests below. Returns (course, quiz)."""
@@ -3123,7 +3132,7 @@ def make_quiz_course(*, title, slug, organization, path_order, minimum_assessmen
     module = Module.objects.create(course=course, title='Module 1', order=1)
     lesson = Lesson.objects.create(module=module, title='Lesson 1', order=1, estimated_minutes=5)
     slide = Slide.objects.create(lesson=lesson, order=1, title='Quiz', slide_type=Slide.SlideType.QUIZ)
-    quiz = Quiz.objects.create(slide=slide, title=f'{title} Quiz', pass_percentage=pass_percentage, max_attempts=5)
+    quiz = Quiz.objects.create(slide=slide, title=f'{title} Quiz', max_attempts=5)
     question = Question.objects.create(quiz=quiz, question_text='Q?', order=1, points=1)
     Choice.objects.create(question=question, choice_text='Correct', is_correct=True)
     Choice.objects.create(question=question, choice_text='Wrong', is_correct=False)
@@ -3140,7 +3149,9 @@ def complete_course(user, course, *, completed_at):
 def submit_quiz_attempt(user, quiz, *, attempt_number, score_percent, submitted_at):
     QuizAttempt.objects.create(
         user=user, quiz=quiz, attempt_number=attempt_number,
-        submitted_at=submitted_at, score_percent=score_percent, passed=score_percent >= quiz.pass_percentage,
+        submitted_at=submitted_at,
+        score_percent=score_percent,
+        passed=score_percent >= user.organization.settings.pass_mark_percent,
     )
 
 
@@ -4279,7 +4290,7 @@ class DemoLessonAccessTests(BaseAPITestCase):
 
     def test_demo_user_cannot_fetch_quiz_of_locked_lesson(self):
         locked_slide = Slide.objects.create(lesson=self.lesson2, order=2, slide_type=Slide.SlideType.QUIZ)
-        locked_quiz = Quiz.objects.create(slide=locked_slide, title='Locked quiz', pass_percentage=50)
+        locked_quiz = Quiz.objects.create(slide=locked_slide, title='Locked quiz')
         self.auth_as(self.demo_learner)
         response = self.client.get(f'/api/quizzes/{locked_quiz.id}/')
         self.assertEqual(response.status_code, 404)
