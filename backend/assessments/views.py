@@ -128,6 +128,17 @@ class QuizViewSet(
                     correct_sequence = list(question.choices.order_by('order', 'id').values_list('id', flat=True))
                     submitted_sequence = [choice.id for choice in selected_choices]
                     is_correct = submitted_sequence == correct_sequence
+                elif question.question_type == Question.QuestionType.MATCHING:
+                    # Every Choice row is one required left/right pair. The
+                    # frontend submits a pair's Choice id only when the item
+                    # was placed on its matching target, so a fully correct
+                    # answer is exactly the complete set of pair ids. Do not
+                    # consult Choice.is_correct here: MATCHING has no
+                    # per-option correct toggle, and legacy/imported pairs may
+                    # legitimately have that unrelated flag unset.
+                    required_pair_ids = set(question.choices.values_list('id', flat=True))
+                    submitted_pair_ids = {choice.id for choice in selected_choices}
+                    is_correct = bool(required_pair_ids) and submitted_pair_ids == required_pair_ids
                 elif question.question_type == Question.QuestionType.CATEGORIZE:
                     # Neither a set nor a sequence — each item has exactly one
                     # correct bucket, so this compares the full item->bucket
@@ -190,8 +201,7 @@ class QuizViewSet(
                     # every other question type: SINGLE_CHOICE/TRUE_FALSE
                     # just happen to have a one-element correct set, while
                     # MULTIPLE_ANSWER's correct set can have several, and
-                    # MATCHING's frontend only includes a choice id once it's
-                    # confirmed that pair was placed correctly. Either way,
+                    # Either way,
                     # the learner must select every correct option and no
                     # incorrect one to be marked correct — no partial credit
                     # by default. (Partial-credit scoring would be a

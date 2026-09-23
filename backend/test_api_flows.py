@@ -1605,6 +1605,71 @@ class QuizFlowTests(BaseAPITestCase):
         response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
         self.assertEqual(response.status_code, 400)
 
+    def test_matching_grading_uses_complete_pairs_not_legacy_correct_flags(self):
+        matching = Question.objects.create(
+            quiz=self.quiz,
+            question_text='Match each consequence',
+            question_type=Question.QuestionType.MATCHING,
+            order=3,
+            points=1,
+        )
+        # Reproduce the production data shape: one pair has the legacy flag
+        # unset even though every MATCHING row is inherently a valid pair.
+        pair_a = Choice.objects.create(
+            question=matching, choice_text='Increased scrutiny',
+            match_text='More careful checks', is_correct=False, order=1,
+        )
+        pair_b = Choice.objects.create(
+            question=matching, choice_text='Reputational damage',
+            match_text='International image takes a hit', is_correct=True, order=2,
+        )
+        self.auth_as(self.learner)
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+                {'question': matching.id, 'selected_choices': [pair_a.id, pair_b.id]},
+            ],
+        }
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        answer = next(item for item in response.data['answers'] if item['question'] == matching.id)
+        self.assertTrue(answer['is_correct'])
+        self.assertEqual(response.data['score_percent'], '100.00')
+
+    def test_matching_grading_rejects_an_incomplete_pairing(self):
+        matching = Question.objects.create(
+            quiz=self.quiz,
+            question_text='Match each consequence',
+            question_type=Question.QuestionType.MATCHING,
+            order=3,
+            points=1,
+        )
+        pair_a = Choice.objects.create(
+            question=matching, choice_text='Increased scrutiny',
+            match_text='More careful checks', is_correct=True, order=1,
+        )
+        Choice.objects.create(
+            question=matching, choice_text='Reputational damage',
+            match_text='International image takes a hit', is_correct=True, order=2,
+        )
+        self.auth_as(self.learner)
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+                {'question': matching.id, 'selected_choices': [pair_a.id]},
+            ],
+        }
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        answer = next(item for item in response.data['answers'] if item['question'] == matching.id)
+        self.assertFalse(answer['is_correct'])
+
 
 class MultipleAnswerScoringTests(BaseAPITestCase):
     """MULTIPLE_ANSWER questions score all-or-nothing: every correct option

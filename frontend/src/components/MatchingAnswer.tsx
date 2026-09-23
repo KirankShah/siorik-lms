@@ -35,7 +35,10 @@ interface MatchingAnswerProps {
 const BANK_ID = 'match-bank'
 
 function DraggableChip({ item, placed }: { item: MatchItem; placed: boolean }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id })
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `match-item-${item.id}`,
+    data: { itemId: item.id },
+  })
   const style = { transform: transform ? CSS.Translate.toString(transform) : undefined, opacity: isDragging ? 0 : 1 }
 
   return (
@@ -45,7 +48,7 @@ function DraggableChip({ item, placed }: { item: MatchItem; placed: boolean }) {
       {...attributes}
       {...listeners}
       style={style}
-      className={`w-full cursor-grab touch-none rounded-md border px-3 py-2 text-left text-sm shadow-sm transition ${
+      className={`min-w-0 max-w-full cursor-grab touch-none whitespace-normal rounded-md border px-3 py-2 text-left text-sm shadow-sm transition [overflow-wrap:anywhere] ${
         placed ? 'border-brand-navy/30 bg-white text-neutral-900' : 'border-neutral-200 bg-white text-neutral-900 hover:border-brand-navy/40'
       }`}
     >
@@ -55,12 +58,15 @@ function DraggableChip({ item, placed }: { item: MatchItem; placed: boolean }) {
 }
 
 function DropTarget({ target, placedItem }: { target: MatchTargetOption; placedItem: MatchItem | undefined }) {
-  const { setNodeRef, isOver } = useDroppable({ id: target.id })
+  const { setNodeRef, isOver } = useDroppable({
+    id: `match-target-${target.id}`,
+    data: { targetId: target.id },
+  })
 
   return (
     <div
       ref={setNodeRef}
-      className={`flex min-h-[2.75rem] items-center gap-2 rounded-md border-2 border-dashed px-3 py-2 text-sm transition ${
+      className={`grid min-h-[2.75rem] min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border-2 border-dashed px-3 py-2 text-sm transition ${
         isOver
           ? 'border-brand-navy bg-brand-navy/10'
           : placedItem
@@ -68,12 +74,12 @@ function DropTarget({ target, placedItem }: { target: MatchTargetOption; placedI
             : 'border-neutral-300 bg-white'
       }`}
     >
-      <span className="shrink-0 text-xs font-medium text-neutral-500">{target.text}</span>
-      <span className="shrink-0 text-neutral-300">→</span>
+      <span className="min-w-0 whitespace-normal text-xs font-medium text-neutral-500 [overflow-wrap:anywhere]">{target.text}</span>
+      <span className="text-neutral-300">→</span>
       {placedItem ? (
         <DraggableChip item={placedItem} placed />
       ) : (
-        <span className="text-xs italic text-neutral-400">Drop a match here</span>
+        <span className="min-w-0 text-xs italic text-neutral-400 [overflow-wrap:anywhere]">Drop a match here</span>
       )}
     </div>
   )
@@ -102,29 +108,31 @@ export function MatchingAnswer({ items, targets, assignments, onChange }: Matchi
   const activeItem = items.find((item) => item.id === activeId) ?? null
 
   function handleDragStart(event: DragStartEvent) {
-    setActiveId(typeof event.active.id === 'number' ? event.active.id : null)
+    const itemId = event.active.data.current?.itemId
+    setActiveId(typeof itemId === 'number' ? itemId : null)
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setActiveId(null)
     const { active, over } = event
-    if (!over || typeof active.id !== 'number') return
-    const draggedId = active.id
+    const draggedId = active.data.current?.itemId
+    if (!over || typeof draggedId !== 'number') return
 
     const next = { ...assignments }
     for (const key of Object.keys(next)) {
       if (next[Number(key)] === draggedId) delete next[Number(key)]
     }
-    if (over.id !== BANK_ID && typeof over.id === 'number') {
-      next[over.id] = draggedId
+    const targetId = over.data.current?.targetId
+    if (over.id !== BANK_ID && typeof targetId === 'number') {
+      next[targetId] = draggedId
     }
     onChange(next)
   }
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <div>
+      <div className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2">
+        <div className="min-w-0">
           <p className="mb-2 text-xs font-medium text-neutral-500">Items</p>
           <BankDroppable>
             {bankItems.length === 0 ? (
@@ -136,9 +144,9 @@ export function MatchingAnswer({ items, targets, assignments, onChange }: Matchi
             )}
           </BankDroppable>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="mb-2 text-xs font-medium text-neutral-500">Match to</p>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             {targets.map((target) => (
               <DropTarget
                 key={target.id}
@@ -151,7 +159,7 @@ export function MatchingAnswer({ items, targets, assignments, onChange }: Matchi
       </div>
       <DragOverlay>
         {activeItem ? (
-          <div className="rounded-md border border-brand-navy bg-white px-3 py-2 text-sm shadow-lg">{activeItem.text}</div>
+          <div className="max-w-[min(24rem,80vw)] whitespace-normal rounded-md border border-brand-navy bg-white px-3 py-2 text-sm shadow-lg [overflow-wrap:anywhere]">{activeItem.text}</div>
         ) : null}
       </DragOverlay>
     </DndContext>
