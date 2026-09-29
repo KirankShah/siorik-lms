@@ -138,3 +138,10 @@ export function deactivateStaffMember(userId: number): Promise<User> {
 export function reactivateStaffMember(userId: number): Promise<User> {
   return apiFetch<User>(`/staff/${userId}/reactivate/`, { method: 'POST' })
 }
+
+export function setStaffReminderExemption(userId: number, reminderExempt: boolean): Promise<User> {
+  return apiFetch<User>(`/staff/${userId}/reminder-exemption/`, {
+    method: 'POST',
+    body: { reminder_exempt: reminderExempt },
+  })
+}

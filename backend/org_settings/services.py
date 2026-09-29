@@ -8,6 +8,7 @@ from django.utils import timezone
 from accounts.models import User
 from accounts.services import _send_invite_email, generate_temp_password
 from courses.models import Enrollment
+from courses.learning_path import learning_path_course_ids
 from levelassessments.models import LevelAssessmentAttempt
 
 from .models import OrganizationSettings
@@ -209,6 +210,70 @@ def send_never_logged_in_reminder_email(user):
     _send_invite_email(to_email=user.email, subject=subject, text_body=text_body, html_body=html_body)
 
 
+def path_overdue_staff(org_settings, now=None):
+    """Active learners whose assigned path remains incomplete after the
+    configured number of calendar months, and whose personal repeat interval
+    is due. Staff enrollment creates the learner account, so User.date_joined
+    is the stable organization-enrollment date even when the learner has not
+    opened (and therefore has no Enrollment row for) their first course yet."""
+    now = now or timezone.now()
+    threshold = now - relativedelta(months=org_settings.path_overdue_months_after_enrollment)
+    repeat_interval = timedelta(days=org_settings.path_overdue_repeat_days)
+
+    for user in _staff_queryset(org_settings.organization).iterator():
+        path_course_ids = learning_path_course_ids(user)
+        if not path_course_ids:
+            continue
+        if user.date_joined >= threshold:
+            continue
+        path_enrollments = Enrollment.objects.filter(user=user, course_id__in=path_course_ids)
+        completed_course_ids = set(
+            path_enrollments.filter(status=Enrollment.Status.COMPLETED).values_list('course_id', flat=True)
+        )
+        if all(course_id in completed_course_ids for course_id in path_course_ids):
+            continue
+        if (
+            user.path_overdue_reminder_last_sent_at is not None
+            and now < user.path_overdue_reminder_last_sent_at + repeat_interval
+        ):
+            continue
+        yield user
+
+
+def send_path_overdue_reminder_email(user):
+    display_name = user.get_full_name() or user.email
+    login_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login"
+    subject = f'{display_name}, Your learning path is overdue'
+    text_body = (
+        f'Dear {display_name},\n\n'
+        "Your assigned learning path is overdue and still incomplete. Please return to Siorik LMS to continue "
+        f'your training.\n\nContinue your training: {login_url}\n\n'
+        'If you have any questions, please contact your training administrator.\n\n'
+        'Best regards,\nSiorik Consultancy Pvt. Ltd.'
+    )
+    html_body = f'''
+<div style="font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto;">
+  <p>Dear {display_name},</p>
+  <p>Your assigned learning path is overdue and still incomplete. Please return to Siorik LMS to continue your training.</p>
+  <p><a href="{login_url}" style="display: inline-block; padding: 12px 28px; background-color: {_BRAND_NAVY}; color: {_BRAND_GOLD}; text-decoration: none; font-weight: bold; border-radius: 6px;">Continue Your Training &rarr;</a></p>
+  <p>If you have any questions, please contact your training administrator.</p>
+  <p>Best regards,<br>Siorik Consultancy Pvt. Ltd.</p>
+</div>
+'''
+    _send_invite_email(to_email=user.email, subject=subject, text_body=text_body, html_body=html_body)
+
+
+def _send_unless_exempt(user, reminder_type, send_email):
+    if user.reminder_exempt:
+        logger.info(
+            'Reminder skipped due to exemption: organization=%s reminder_type=%s user=%s',
+            user.organization.name, reminder_type, user.email,
+        )
+        return False
+    send_email(user)
+    return True
+
+
 def send_due_inactivity_reminders():
     """
     The whole job the send_inactivity_reminders management command runs:
@@ -228,17 +293,19 @@ def send_due_inactivity_reminders():
             org_settings.logged_in_inactive_last_sent_at, org_settings.logged_in_inactive_reminder_frequency
         ):
             recipients = list(logged_in_inactive_staff(organization))
-            for user in recipients:
-                send_logged_in_inactive_reminder_email(user)
+            sent_count = sum(
+                _send_unless_exempt(user, 'logged_in_inactive', send_logged_in_inactive_reminder_email)
+                for user in recipients
+            )
             org_settings.logged_in_inactive_last_sent_at = now
             org_settings.save(update_fields=['logged_in_inactive_last_sent_at'])
             summary = {
                 'organization': organization.name, 'reminder_type': 'logged_in_inactive',
-                'recipient_count': len(recipients), 'sent_at': now,
+                'recipient_count': sent_count, 'sent_at': now,
             }
             logger.info(
                 'Inactivity reminder sent: organization=%s reminder_type=%s recipients=%d at=%s',
-                organization.name, 'logged_in_inactive', len(recipients), now.isoformat(),
+                organization.name, 'logged_in_inactive', sent_count, now.isoformat(),
             )
             summaries.append(summary)
 
@@ -246,17 +313,37 @@ def send_due_inactivity_reminders():
             org_settings.never_logged_in_last_sent_at, org_settings.never_logged_in_reminder_frequency
         ):
             recipients = list(never_logged_in_staff(organization))
-            for user in recipients:
-                send_never_logged_in_reminder_email(user)
+            sent_count = sum(
+                _send_unless_exempt(user, 'never_logged_in', send_never_logged_in_reminder_email)
+                for user in recipients
+            )
             org_settings.never_logged_in_last_sent_at = now
             org_settings.save(update_fields=['never_logged_in_last_sent_at'])
             summary = {
                 'organization': organization.name, 'reminder_type': 'never_logged_in',
-                'recipient_count': len(recipients), 'sent_at': now,
+                'recipient_count': sent_count, 'sent_at': now,
             }
             logger.info(
                 'Inactivity reminder sent: organization=%s reminder_type=%s recipients=%d at=%s',
-                organization.name, 'never_logged_in', len(recipients), now.isoformat(),
+                organization.name, 'never_logged_in', sent_count, now.isoformat(),
+            )
+            summaries.append(summary)
+
+        if org_settings.path_overdue_reminder_enabled:
+            recipients = list(path_overdue_staff(org_settings, now))
+            sent_count = 0
+            for user in recipients:
+                if _send_unless_exempt(user, 'path_overdue', send_path_overdue_reminder_email):
+                    user.path_overdue_reminder_last_sent_at = now
+                    user.save(update_fields=['path_overdue_reminder_last_sent_at'])
+                    sent_count += 1
+            summary = {
+                'organization': organization.name, 'reminder_type': 'path_overdue',
+                'recipient_count': sent_count, 'sent_at': now,
+            }
+            logger.info(
+                'Inactivity reminder sent: organization=%s reminder_type=%s recipients=%d at=%s',
+                organization.name, 'path_overdue', sent_count, now.isoformat(),
             )
             summaries.append(summary)
 

@@ -25,12 +25,22 @@ export interface OrganizationSettings {
   // what each counts.
   max_level_assessment_attempts: number | null
   max_course_retake_attempts: number | null
+  // Platform-admin-only fields are omitted entirely from org-admin responses.
+  max_active_learners?: number | null
+  subscription_start_date?: string | null
+  subscription_duration_days?: number | null
+  org_admin_grace_period_days?: number
+  subscription_expiry_date?: string | null
+  org_admin_grace_expiry_date?: string | null
   logged_in_inactive_reminder_enabled: boolean
   logged_in_inactive_reminder_frequency: ReminderFrequency
   logged_in_inactive_last_sent_at: string | null
   never_logged_in_reminder_enabled: boolean
   never_logged_in_reminder_frequency: ReminderFrequency
   never_logged_in_last_sent_at: string | null
+  path_overdue_reminder_enabled: boolean
+  path_overdue_months_after_enrollment: number
+  path_overdue_repeat_days: number
 }
 
 export type OrganizationSettingsInput = Partial<
@@ -45,5 +55,12 @@ export type OrganizationSettingsInput = Partial<
     | 'logged_in_inactive_reminder_frequency'
     | 'never_logged_in_reminder_enabled'
     | 'never_logged_in_reminder_frequency'
+    | 'path_overdue_reminder_enabled'
+    | 'path_overdue_months_after_enrollment'
+    | 'path_overdue_repeat_days'
+    | 'max_active_learners'
+    | 'subscription_start_date'
+    | 'subscription_duration_days'
+    | 'org_admin_grace_period_days'
   >
 >

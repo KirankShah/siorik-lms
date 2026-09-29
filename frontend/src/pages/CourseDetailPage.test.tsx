@@ -44,6 +44,9 @@ function makeUser(role: User['role']): User {
     is_demo: false,
     must_reset_password: false,
     preferred_narration_language: 'en',
+    reminder_exempt: false,
+    subscription_expiry_date: null,
+    subscription_access_locked: false,
   }
 }
 

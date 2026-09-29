@@ -315,6 +315,9 @@ interface ReminderDraft {
   logged_in_inactive_reminder_frequency: ReminderFrequency
   never_logged_in_reminder_enabled: boolean
   never_logged_in_reminder_frequency: ReminderFrequency
+  path_overdue_reminder_enabled: boolean
+  path_overdue_months_after_enrollment: number
+  path_overdue_repeat_days: number
 }
 
 function reminderDraftFromSettings(settings: OrganizationSettings): ReminderDraft {
@@ -323,6 +326,9 @@ function reminderDraftFromSettings(settings: OrganizationSettings): ReminderDraf
     logged_in_inactive_reminder_frequency: settings.logged_in_inactive_reminder_frequency,
     never_logged_in_reminder_enabled: settings.never_logged_in_reminder_enabled,
     never_logged_in_reminder_frequency: settings.never_logged_in_reminder_frequency,
+    path_overdue_reminder_enabled: settings.path_overdue_reminder_enabled,
+    path_overdue_months_after_enrollment: settings.path_overdue_months_after_enrollment,
+    path_overdue_repeat_days: settings.path_overdue_repeat_days,
   }
 }
 
@@ -461,8 +467,189 @@ function ReminderSettingsForm({
           </p>
         </div>
 
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-900">
+            <input
+              type="checkbox"
+              checked={draft.path_overdue_reminder_enabled}
+              onChange={(e) => setDraft({ ...draft, path_overdue_reminder_enabled: e.target.checked })}
+            />
+            Overall learning path overdue
+          </label>
+          <p className="mt-1 text-xs text-neutral-500">
+            Reminds learners whose full assigned path is still incomplete after the configured enrollment age.
+            Repeats per learner until their path is complete.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Input
+              id="path-overdue-months"
+              label="Months after enrollment"
+              type="number"
+              min={1}
+              disabled={!draft.path_overdue_reminder_enabled}
+              value={draft.path_overdue_months_after_enrollment}
+              onChange={(e) => setDraft({ ...draft, path_overdue_months_after_enrollment: Number(e.target.value) })}
+            />
+            <Input
+              id="path-overdue-repeat-days"
+              label="Repeat every (days)"
+              type="number"
+              min={1}
+              disabled={!draft.path_overdue_reminder_enabled}
+              value={draft.path_overdue_repeat_days}
+              onChange={(e) => setDraft({ ...draft, path_overdue_repeat_days: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+
         <Button onClick={() => void handleSave()} disabled={isSaving}>
           {isSaving ? 'Saving…' : 'Save reminder settings'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+interface PlatformControlDraft {
+  seatsLimited: boolean
+  maxActiveLearners: string
+  subscriptionEnabled: boolean
+  subscriptionStartDate: string
+  subscriptionDurationDays: string
+  orgAdminGracePeriodDays: string
+}
+
+function platformControlDraftFromSettings(settings: OrganizationSettings): PlatformControlDraft {
+  return {
+    seatsLimited: settings.max_active_learners != null,
+    maxActiveLearners: String(settings.max_active_learners ?? 1),
+    subscriptionEnabled: settings.subscription_start_date != null && settings.subscription_duration_days != null,
+    subscriptionStartDate: settings.subscription_start_date ?? '',
+    subscriptionDurationDays: String(settings.subscription_duration_days ?? 30),
+    orgAdminGracePeriodDays: String(settings.org_admin_grace_period_days ?? 0),
+  }
+}
+
+function PlatformOrganizationControls({
+  settings,
+  onSaved,
+}: {
+  settings: OrganizationSettings
+  onSaved: (updated: OrganizationSettings) => void
+}) {
+  const [draft, setDraft] = useState<PlatformControlDraft>(platformControlDraftFromSettings(settings))
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    setDraft(platformControlDraftFromSettings(settings))
+    setError(null)
+    setSuccess(false)
+  }, [settings])
+
+  async function handleSave() {
+    setIsSaving(true)
+    setError(null)
+    setSuccess(false)
+    try {
+      const updated = await updateOrganizationSettings(settings.id, {
+        max_active_learners: draft.seatsLimited ? Number(draft.maxActiveLearners) : null,
+        subscription_start_date: draft.subscriptionEnabled ? draft.subscriptionStartDate : null,
+        subscription_duration_days: draft.subscriptionEnabled ? Number(draft.subscriptionDurationDays) : null,
+        org_admin_grace_period_days: draft.subscriptionEnabled ? Number(draft.orgAdminGracePeriodDays) : 0,
+      })
+      onSaved(updated)
+      setSuccess(true)
+    } catch (err) {
+      setError(extractFieldError(err) ?? 'Could not save platform controls.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <Card className="mt-6 max-w-xl border-brand-gold/50">
+      <h2 className="text-sm font-semibold text-neutral-900">Platform Access Controls</h2>
+      <p className="mt-1 text-sm text-neutral-500">Only platform administrators can view or change these controls.</p>
+      {error && <Banner variant="warning" className="mt-4">{error}</Banner>}
+      {success && !error && <Banner variant="success" className="mt-4">Saved.</Banner>}
+
+      <div className="mt-4 space-y-5">
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-900">
+            <input
+              type="checkbox"
+              checked={draft.seatsLimited}
+              onChange={(e) => setDraft({ ...draft, seatsLimited: e.target.checked })}
+            />
+            Limit active learner seats
+          </label>
+          {draft.seatsLimited && (
+            <div className="mt-3 max-w-xs">
+              <Input
+                id="max-active-learners"
+                label="Maximum active learners"
+                type="number"
+                min={1}
+                value={draft.maxActiveLearners}
+                onChange={(e) => setDraft({ ...draft, maxActiveLearners: e.target.value })}
+              />
+            </div>
+          )}
+          <p className="mt-2 text-xs text-neutral-500">Org admins and instructors do not consume learner seats.</p>
+        </div>
+
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-900">
+            <input
+              type="checkbox"
+              checked={draft.subscriptionEnabled}
+              onChange={(e) => setDraft({ ...draft, subscriptionEnabled: e.target.checked })}
+            />
+            Configure subscription period
+          </label>
+          {draft.subscriptionEnabled && (
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Input
+                id="subscription-start-date"
+                label="Subscription start date"
+                type="date"
+                required
+                value={draft.subscriptionStartDate}
+                onChange={(e) => setDraft({ ...draft, subscriptionStartDate: e.target.value })}
+              />
+              <Input
+                id="subscription-duration-days"
+                label="Duration (days)"
+                type="number"
+                min={1}
+                value={draft.subscriptionDurationDays}
+                onChange={(e) => setDraft({ ...draft, subscriptionDurationDays: e.target.value })}
+              />
+              <Input
+                id="org-admin-grace-days"
+                label="Org admin grace days past expiry"
+                type="number"
+                min={0}
+                value={draft.orgAdminGracePeriodDays}
+                onChange={(e) => setDraft({ ...draft, orgAdminGracePeriodDays: e.target.value })}
+              />
+            </div>
+          )}
+          {settings.subscription_expiry_date && (
+            <p className="mt-3 text-xs text-neutral-500">
+              Real expiry: {settings.subscription_expiry_date}. Org admin grace ends: {settings.org_admin_grace_expiry_date}.
+              Learners never receive grace access.
+            </p>
+          )}
+        </div>
+
+        <Button
+          onClick={() => void handleSave()}
+          disabled={isSaving || (draft.subscriptionEnabled && !draft.subscriptionStartDate)}
+        >
+          {isSaving ? 'Saving…' : 'Save platform controls'}
         </Button>
       </div>
     </Card>
@@ -556,6 +743,7 @@ export function OrganizationSettingsPage() {
 
       {selected && <SettingsForm settings={selected} onSaved={applyUpdate} />}
       {selected && <MaxAttemptsSettingsForm settings={selected} onSaved={applyUpdate} />}
+      {selected && isPlatformAdmin && <PlatformOrganizationControls settings={selected} onSaved={applyUpdate} />}
       {selected && <ReminderSettingsForm settings={selected} onSaved={applyUpdate} />}
     </div>
   )

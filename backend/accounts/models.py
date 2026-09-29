@@ -107,6 +107,10 @@ class User(AbstractUser):
     # The last date current_streak_days was updated. Null until the
     # learner's first tracked activity.
     last_active_date = models.DateField(null=True, blank=True)
+    # Suppresses reminder emails only. Reporting and training-status queries
+    # deliberately do not consult this flag.
+    reminder_exempt = models.BooleanField(default=False)
+    path_overdue_reminder_last_sent_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

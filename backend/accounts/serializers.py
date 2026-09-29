@@ -42,6 +42,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     organization = OrganizationSerializer(read_only=True)
+    subscription_expiry_date = serializers.SerializerMethodField()
+    subscription_access_locked = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -62,8 +64,21 @@ class UserSerializer(serializers.ModelSerializer):
             'is_demo',
             'must_reset_password',
             'preferred_narration_language',
+            'reminder_exempt',
+            'subscription_expiry_date',
+            'subscription_access_locked',
         ]
         read_only_fields = fields
+
+    def get_subscription_expiry_date(self, user):
+        if user.organization_id is None:
+            return None
+        return user.organization.settings.subscription_expiry_date
+
+    def get_subscription_access_locked(self, user):
+        if user.organization_id is None:
+            return False
+        return user.organization.settings.is_access_locked_for(user)
 
 
 class UserPreferenceSerializer(serializers.ModelSerializer):

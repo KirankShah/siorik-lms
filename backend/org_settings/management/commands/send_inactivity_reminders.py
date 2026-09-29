@@ -5,13 +5,14 @@ from org_settings.services import send_due_inactivity_reminders
 REMINDER_TYPE_LABEL = {
     'logged_in_inactive': 'logged-in-but-inactive',
     'never_logged_in': 'never-logged-in',
+    'path_overdue': 'overall-path-overdue',
 }
 
 
 class Command(BaseCommand):
     """
-    Sends the two configurable inactivity reminder emails — "logged in but
-    never engaged" and "never logged in at all" — for every organization
+    Sends all configurable reminder emails — "logged in but never engaged",
+    "never logged in at all", and "overall path overdue" — for every organization
     that has them enabled (org_settings.OrganizationSettings) and is due per
     its own configured frequency. See org_settings.services for the full
     eligibility/due-check/email logic; this command is just the entry point.
@@ -29,7 +30,7 @@ class Command(BaseCommand):
     re-sent.
     """
 
-    help = 'Sends configured inactivity reminder emails (logged-in-inactive, never-logged-in) to due organizations.'
+    help = 'Sends configured learner reminder emails to due organizations.'
 
     def handle(self, *args, **options):
         summaries = send_due_inactivity_reminders()

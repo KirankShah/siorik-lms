@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.db import transaction
 
-from .models import User
+from .models import Organization, User
 
 TEMP_PASSWORD_LENGTH = 14
 _TEMP_PASSWORD_ALPHABET = string.ascii_letters + string.digits + '!@#$%^&*'
@@ -18,6 +18,28 @@ class UserProvisioningError(Exception):
     """Raised for any per-row failure provisioning a demo user or org admin account
     (duplicate email, invalid input, or the invite email failing to send). Callers
     report `str(exc)` back to the admin rather than letting it propagate as a 500."""
+
+
+def ensure_learner_seat_available(organization):
+    """Lock the organization and check its live active-learner population.
+
+    Every create/reactivate path uses this inside a transaction, so concurrent
+    requests cannot both consume the final available seat.
+    """
+    locked_organization = Organization.objects.select_for_update().get(pk=organization.pk)
+    cap = locked_organization.settings.max_active_learners
+    if cap is None:
+        return
+    active_count = User.objects.filter(
+        organization=locked_organization,
+        role=User.Role.LEARNER,
+        is_active=True,
+    ).count()
+    if active_count >= cap:
+        raise UserProvisioningError(
+            f'This organization has reached its active learner limit of {cap}. '
+            'Deactivate an existing learner to free a slot for a new one.'
+        )
 
 
 def generate_temp_password() -> str:
@@ -228,6 +250,7 @@ def provision_demo_user(
     Raises UserProvisioningError with a human-readable reason on any
     failure (duplicate email, invalid input, email send failure).
     """
+    ensure_learner_seat_available(organization)
     user, temp_password = _create_pending_user(
         name=name, email=email, organization=organization, role=User.Role.LEARNER, is_demo=True,
         designation=designation, phone_number=phone_number,
@@ -383,6 +406,7 @@ def provision_staff_learner(
     what later drives which role-based assessment they're shown, via
     levelassessments.services.assigned_assessment_level_for_user.
     """
+    ensure_learner_seat_available(organization)
     user, temp_password = _create_pending_user(
         name=name, email=email, organization=organization, role=User.Role.LEARNER, is_demo=False,
         designation=designation, phone_number=phone_number,

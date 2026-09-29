@@ -9,6 +9,13 @@ from .models import OrganizationSettings
 
 class OrganizationSettingsSerializer(serializers.ModelSerializer):
     organization = OrganizationSerializer(read_only=True)
+    subscription_expiry_date = serializers.DateField(read_only=True)
+    org_admin_grace_expiry_date = serializers.DateField(read_only=True)
+
+    PLATFORM_ONLY_FIELDS = {
+        'max_active_learners', 'subscription_start_date', 'subscription_duration_days',
+        'org_admin_grace_period_days', 'subscription_expiry_date', 'org_admin_grace_expiry_date',
+    }
 
     class Meta:
         model = OrganizationSettings
@@ -16,14 +23,27 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
             'id', 'organization', 'questions_per_attempt', 'timing_mode', 'seconds_per_question',
             'total_exam_minutes', 'pass_mark_percent',
             'max_level_assessment_attempts', 'max_course_retake_attempts',
+            'max_active_learners', 'subscription_start_date', 'subscription_duration_days',
+            'org_admin_grace_period_days', 'subscription_expiry_date', 'org_admin_grace_expiry_date',
             'logged_in_inactive_reminder_enabled', 'logged_in_inactive_reminder_frequency',
             'logged_in_inactive_last_sent_at',
             'never_logged_in_reminder_enabled', 'never_logged_in_reminder_frequency', 'never_logged_in_last_sent_at',
+            'path_overdue_reminder_enabled', 'path_overdue_months_after_enrollment',
+            'path_overdue_repeat_days',
         ]
         read_only_fields = [
             'id', 'organization', 'timing_mode', 'seconds_per_question',
             'logged_in_inactive_last_sent_at', 'never_logged_in_last_sent_at',
+            'subscription_expiry_date', 'org_admin_grace_expiry_date',
         ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request')
+        if request is None or request.user.role != request.user.Role.PLATFORM_ADMIN:
+            for field_name in self.PLATFORM_ONLY_FIELDS:
+                fields.pop(field_name, None)
+        return fields
 
     def validate(self, attrs):
         """Keep the assessment duration and per-question countdown in sync.
@@ -36,6 +56,13 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         if self.instance is None:
             return attrs
+
+        start = attrs.get('subscription_start_date', self.instance.subscription_start_date)
+        duration = attrs.get('subscription_duration_days', self.instance.subscription_duration_days)
+        if (start is None) != (duration is None):
+            raise serializers.ValidationError({
+                'subscription_duration_days': 'Subscription start date and duration must either both be set or both be blank.'
+            })
 
         question_count = attrs.get('questions_per_attempt', self.instance.questions_per_attempt)
         total_minutes = attrs.get('total_exam_minutes', self.instance.total_exam_minutes)

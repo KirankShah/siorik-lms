@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from accounts.models import Organization
 
@@ -78,6 +81,16 @@ class OrganizationSettings(models.Model):
     max_level_assessment_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
     max_course_retake_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
 
+    # Platform-managed commercial controls. A null seat cap means unlimited.
+    # A subscription is considered configured only when both start and
+    # duration are present; its real expiry is start + duration days.
+    max_active_learners = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+    subscription_start_date = models.DateField(null=True, blank=True)
+    subscription_duration_days = models.PositiveIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1)]
+    )
+    org_admin_grace_period_days = models.PositiveIntegerField(default=0)
+
     # Reminder for staff who HAVE logged in at least once but have zero
     # completed courses and zero level-assessment attempts — see
     # org_settings.services.logged_in_inactive_staff.
@@ -98,6 +111,44 @@ class OrganizationSettings(models.Model):
         max_length=20, choices=ReminderFrequency.choices, default=ReminderFrequency.WEEKLY,
     )
     never_logged_in_last_sent_at = models.DateTimeField(null=True, blank=True)
+
+    # Unlike the two organization-batch reminders above, path-overdue
+    # reminders repeat on a per-learner schedule (the timestamp lives on
+    # accounts.User), so these are only the shared eligibility settings.
+    path_overdue_reminder_enabled = models.BooleanField(default=False)
+    path_overdue_months_after_enrollment = models.PositiveIntegerField(
+        default=2, validators=[MinValueValidator(1)]
+    )
+    path_overdue_repeat_days = models.PositiveIntegerField(default=7, validators=[MinValueValidator(1)])
+
+    @property
+    def subscription_expiry_date(self):
+        if self.subscription_start_date is None or self.subscription_duration_days is None:
+            return None
+        return self.subscription_start_date + timedelta(days=self.subscription_duration_days)
+
+    @property
+    def org_admin_grace_expiry_date(self):
+        expiry = self.subscription_expiry_date
+        if expiry is None:
+            return None
+        return expiry + timedelta(days=self.org_admin_grace_period_days)
+
+    def is_subscription_expired(self, on_date=None):
+        expiry = self.subscription_expiry_date
+        return expiry is not None and (on_date or timezone.localdate()) >= expiry
+
+    def is_access_locked_for(self, user, on_date=None):
+        """Subscription lock for tenant roles; platform admins are never affected."""
+        if user.role == user.Role.PLATFORM_ADMIN or user.role not in (user.Role.ORG_ADMIN, user.Role.LEARNER):
+            return False
+        today = on_date or timezone.localdate()
+        if not self.is_subscription_expired(today):
+            return False
+        if user.role == user.Role.ORG_ADMIN:
+            grace_expiry = self.org_admin_grace_expiry_date
+            return grace_expiry is None or today >= grace_expiry
+        return True
 
     def __str__(self):
         return f'{self.organization.name} settings'

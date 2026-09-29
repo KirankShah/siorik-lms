@@ -4,6 +4,7 @@ import logging
 
 from django.contrib.auth.models import update_last_login
 from django.contrib.auth.tokens import default_token_generator
+from django.db import transaction
 from django.db.models import Q, Value
 from django.db.models.functions import Concat
 from django.utils.encoding import force_bytes
@@ -37,6 +38,7 @@ from .serializers import (
 )
 from .services import (
     UserProvisioningError,
+    ensure_learner_seat_available,
     provision_demo_user,
     provision_org_admin,
     provision_staff_learner,
@@ -403,7 +405,7 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
         queryset = (
             User.objects.filter(role=User.Role.LEARNER, is_demo=False)
-            .select_related('organization')
+            .select_related('organization', 'organization__settings')
             .order_by('first_name', 'last_name', 'email')
         )
 
@@ -486,9 +488,25 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         returning staff member. Idempotent, mirroring deactivate above."""
         staff = self.get_object()
         if not staff.is_active:
-            staff.is_active = True
-            staff.save(update_fields=['is_active'])
-            log_action(request.user, AuditLog.Action.STAFF_REACTIVATED, staff)
+            try:
+                with transaction.atomic():
+                    ensure_learner_seat_available(staff.organization)
+                    staff.is_active = True
+                    staff.save(update_fields=['is_active'])
+                    log_action(request.user, AuditLog.Action.STAFF_REACTIVATED, staff)
+            except UserProvisioningError as exc:
+                raise ValidationError({'detail': str(exc)})
+        return Response(UserSerializer(staff).data)
+
+    @action(detail=True, methods=['post'], url_path='reminder-exemption')
+    def reminder_exemption(self, request, pk=None):
+        """Toggle reminder suppression without affecting any training data."""
+        staff = self.get_object()
+        value = request.data.get('reminder_exempt')
+        if not isinstance(value, bool):
+            raise ValidationError({'reminder_exempt': 'This field must be true or false.'})
+        staff.reminder_exempt = value
+        staff.save(update_fields=['reminder_exempt'])
         return Response(UserSerializer(staff).data)
 
     @action(detail=False, methods=['post'])

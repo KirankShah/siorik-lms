@@ -27,6 +27,9 @@ export interface User {
   is_demo: boolean
   must_reset_password: boolean
   preferred_narration_language: NarrationLanguage
+  reminder_exempt: boolean
+  subscription_expiry_date: string | null
+  subscription_access_locked: boolean
 }
 
 export interface AuthTokens {

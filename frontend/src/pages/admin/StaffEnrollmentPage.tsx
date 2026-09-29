@@ -12,6 +12,7 @@ import {
   fetchOrganizations,
   fetchStaffList,
   reactivateStaffMember,
+  setStaffReminderExemption,
 } from '../../lib/accountsApi'
 import type { PaginatedResult, StaffEnrollResult } from '../../lib/accountsApi'
 import { ApiError } from '../../lib/apiClient'
@@ -188,8 +189,25 @@ export function StaffEnrollmentPage() {
     try {
       await reactivateStaffMember(staff.id)
       loadStaff()
+    } catch (err) {
+      const body = err instanceof ApiError ? (err.body as { detail?: string } | null) : null
+      setListError(body?.detail ?? 'Could not reactivate this staff member.')
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  async function handleReminderExemption(staff: User, reminderExempt: boolean) {
+    setBusyStaffId(staff.id)
+    setListError(null)
+    try {
+      const updated = await setStaffReminderExemption(staff.id, reminderExempt)
+      setStaffPage((current) => current ? {
+        ...current,
+        results: current.results.map((row) => row.id === updated.id ? updated : row),
+      } : current)
     } catch {
-      setListError('Could not reactivate this staff member.')
+      setListError('Could not update this learner\'s reminder exemption.')
     } finally {
       setBusyStaffId(null)
     }
@@ -457,6 +475,7 @@ export function StaffEnrollmentPage() {
                 <th className="py-2 pr-3">Branch/Department</th>
                 <th className="py-2 pr-3">Assessment Level</th>
                 <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Automated reminders</th>
                 <th className="py-2" />
               </tr>
             </thead>
@@ -473,6 +492,17 @@ export function StaffEnrollmentPage() {
                   </td>
                   <td className="py-2 pr-3">
                     <Badge variant={staff.is_active ? 'navy' : 'neutral'}>{staff.is_active ? 'Active' : 'Deactivated'}</Badge>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <label className="flex items-center gap-2 text-xs text-neutral-700">
+                      <input
+                        type="checkbox"
+                        checked={staff.reminder_exempt}
+                        disabled={busyStaffId === staff.id}
+                        onChange={(event) => void handleReminderExemption(staff, event.target.checked)}
+                      />
+                      Exempt from automated reminders
+                    </label>
                   </td>
                   <td className="py-2 text-right">
                     {staff.is_active ? (
@@ -499,7 +529,7 @@ export function StaffEnrollmentPage() {
               ))}
               {staffPage && staffRows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-6 text-center text-neutral-400">
+                  <td colSpan={9} className="py-6 text-center text-neutral-400">
                     No {statusFilter} staff found.
                   </td>
                 </tr>
