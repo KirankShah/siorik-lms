@@ -80,6 +80,12 @@ from .serializers import (
     SlideTemplateSerializer,
 )
 from .validators import MAX_LESSON_FILE_SIZE_BYTES
+from .video_uploads import (
+    VideoUploadError,
+    complete_video_upload,
+    save_video_chunk,
+    start_video_upload,
+)
 
 # Order values are bumped into this range as a first pass during a reorder,
 # so that reassigning final 1..N values never collides with an order another
@@ -900,6 +906,56 @@ class MediaUploadView(APIView):
             },
             status=201,
         )
+
+
+class VideoUploadStartView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def post(self, request):
+        try:
+            result = start_video_upload(
+                user_id=request.user.id,
+                filename=request.data.get('filename'),
+                size=request.data.get('size'),
+                content_type=request.data.get('content_type', ''),
+            )
+        except VideoUploadError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(result, status=201)
+
+
+class VideoUploadChunkView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        upload = request.FILES.get('file')
+        if upload is None:
+            return Response({'detail': 'A video chunk is required.'}, status=400)
+        try:
+            result = save_video_chunk(
+                token=request.data.get('upload_id', ''),
+                user_id=request.user.id,
+                index=request.data.get('index'),
+                upload=upload,
+            )
+        except VideoUploadError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(result)
+
+
+class VideoUploadCompleteView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def post(self, request):
+        try:
+            result = complete_video_upload(
+                token=request.data.get('upload_id', ''),
+                user_id=request.user.id,
+            )
+        except VideoUploadError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(result, status=201)
 
 
 class EnrollmentViewSet(RoleScopedQuerysetMixin, viewsets.ModelViewSet):

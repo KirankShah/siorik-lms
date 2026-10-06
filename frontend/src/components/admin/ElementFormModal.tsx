@@ -9,6 +9,8 @@ import { resolveVideoEmbed } from '../../lib/blocknote/videoProviders'
 import { isLowContrast } from '../../lib/colorContrast'
 import { fetchCharacters, fetchScenes } from '../../lib/dialogueApi'
 import { createElement, updateElement } from '../../lib/slidesApi'
+import { uploadVideoFile } from '../../lib/mediaApi'
+import { ApiError } from '../../lib/apiClient'
 import type { ElementInput } from '../../lib/slidesApi'
 import type { Character, Scene } from '../../types/dialogue'
 import type { DialogueLine, ElementAlign, ElementType, SlideElement, SlideTemplate } from '../../types/slides'
@@ -53,6 +55,7 @@ export function ElementFormModal({
   const [videoUrl, setVideoUrl] = useState(element?.video_url ?? '')
   const [file, setFile] = useState<File | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [colorWarning, setColorWarning] = useState<string | null>(null)
 
@@ -125,8 +128,22 @@ export function ElementFormModal({
       if (elementType === 'VIDEO_AUDIO') {
         if (videoMode === 'url') {
           payload.video_url = videoUrl
-        } else if (file) {
-          payload.video_file = file
+        } else {
+          // Always clear a previous YouTube/Vimeo/Loom source when switching
+          // to an uploaded file, otherwise playback keeps preferring the old
+          // (possibly organization-blocked) URL.
+          payload.video_url = ''
+          const isVideoFile = file
+            ? file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name)
+            : false
+          if (file && isVideoFile) {
+            setUploadProgress(0)
+            payload.video_upload_token = await uploadVideoFile(file, setUploadProgress)
+          } else if (file) {
+            payload.video_file = file
+          } else if (!element?.video_file) {
+            throw new Error('Choose a video file to upload.')
+          }
         }
       }
       if (elementType === 'BREAKOUT_IMAGE') {
@@ -153,10 +170,19 @@ export function ElementFormModal({
         await createElement(payload)
       }
       onSaved()
-    } catch {
-      setError('Could not save this element.')
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const body = err.body as { detail?: string; video_upload_token?: string[] | string } | null
+        const tokenError = Array.isArray(body?.video_upload_token)
+          ? body.video_upload_token[0]
+          : body?.video_upload_token
+        setError(tokenError ?? body?.detail ?? 'Could not upload and save this video.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not upload and save this video.')
+      }
     } finally {
       setIsSaving(false)
+      setUploadProgress(null)
     }
   }
 
@@ -284,10 +310,27 @@ export function ElementFormModal({
                 )}
                 <input
                   type="file"
-                  accept="video/*,audio/*"
+                  accept="video/mp4,video/quicktime,video/webm,video/x-m4v,audio/*"
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                   className="mt-1 text-sm"
                 />
+                <p className="mt-1 text-xs text-neutral-500">
+                  MP4, MOV, WEBM, or M4V videos up to 500MB. Large videos upload in reliable chunks.
+                </p>
+                {uploadProgress !== null && (
+                  <div className="mt-3" aria-live="polite">
+                    <div className="mb-1 flex justify-between text-xs text-neutral-600">
+                      <span>{uploadProgress < 100 ? 'Uploading video…' : 'Finalizing video…'}</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-neutral-200">
+                      <div
+                        className="h-full rounded-full bg-brand-navy transition-[width]"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>

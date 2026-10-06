@@ -22,6 +22,7 @@ from .models import (
 )
 from .permissions import is_lesson_locked_for_demo_user, visible_courses_for_user
 from .video_streaming import build_video_stream_token
+from .video_uploads import VideoUploadError, resolve_video_upload_reference
 
 
 class SlideTemplateSerializer(serializers.ModelSerializer):
@@ -305,6 +306,8 @@ class SlideSerializer(serializers.ModelSerializer):
 
 
 class ElementSerializer(serializers.ModelSerializer):
+    video_upload_token = serializers.CharField(write_only=True, required=False)
+
     class Meta:
         model = Element
         fields = [
@@ -316,6 +319,7 @@ class ElementSerializer(serializers.ModelSerializer):
             'file',
             'video_url',
             'video_file',
+            'video_upload_token',
             'embed_url',
             'caption',
             'align',
@@ -365,14 +369,36 @@ class ElementSerializer(serializers.ModelSerializer):
 
     # Element.save()/delete() write a SlideRevision snapshot on every change —
     # thread the requesting user through so it's attributed correctly.
+    def _prepare_video_source(self, validated_data):
+        token = validated_data.pop('video_upload_token', None)
+        if token:
+            request = self.context.get('request')
+            if request is None:
+                raise serializers.ValidationError({'video_upload_token': 'An authenticated request is required.'})
+            try:
+                validated_data['video_file'] = resolve_video_upload_reference(token, request.user.id)
+            except VideoUploadError as exc:
+                raise serializers.ValidationError({'video_upload_token': str(exc)}) from exc
+
+        # A video element has exactly one active source. This is especially
+        # important when replacing a blocked YouTube URL with an uploaded
+        # file: leaving the URL in place makes the player keep choosing it.
+        if validated_data.get('video_file'):
+            validated_data['video_url'] = ''
+        elif validated_data.get('video_url'):
+            validated_data['video_file'] = None
+        return validated_data
+
     def create(self, validated_data):
         edited_by = validated_data.pop('edited_by', None)
+        validated_data = self._prepare_video_source(validated_data)
         instance = Element(**validated_data)
         instance.save(edited_by=edited_by)
         return instance
 
     def update(self, instance, validated_data):
         edited_by = validated_data.pop('edited_by', None)
+        validated_data = self._prepare_video_source(validated_data)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save(edited_by=edited_by)

@@ -61,6 +61,7 @@ export interface ElementInput {
   align?: ElementAlign
   file?: File | null
   video_file?: File | null
+  video_upload_token?: string
   dialogue_scene?: number | null
   dialogue_character_left?: number | null
   dialogue_character_right?: number | null

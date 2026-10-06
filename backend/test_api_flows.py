@@ -6,6 +6,7 @@ Run with:
 """
 import csv
 import io
+import tempfile
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -2655,6 +2656,101 @@ class VideoStreamingTests(BaseAPITestCase):
         DemoLessonAccess.objects.create(course=self.published_org_course, lesson=self.lesson1)
         granted_response = self.client.get(self._stream_url(self.video_element, demo_learner))
         self.assertEqual(granted_response.status_code, 200)
+
+
+class ChunkedVideoUploadTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.media_dir = tempfile.TemporaryDirectory()
+        self.media_override = self.settings(MEDIA_ROOT=self.media_dir.name)
+        self.media_override.enable()
+        highest_order = (
+            Slide.objects.filter(lesson=self.lesson1).order_by('-order').values_list('order', flat=True).first() or 0
+        )
+        self.video_slide = Slide.objects.create(
+            lesson=self.lesson1, order=highest_order + 1, title='Uploaded Video', slide_type=Slide.SlideType.CONTENT,
+        )
+
+    def tearDown(self):
+        self.media_override.disable()
+        self.media_dir.cleanup()
+        super().tearDown()
+
+    def _start(self, user, *, size=10, filename='training.mp4'):
+        self.auth_as(user)
+        return self.client.post('/api/media/video-upload/start/', {
+            'filename': filename,
+            'size': size,
+            'content_type': 'video/mp4',
+        }, format='json')
+
+    @patch('courses.video_uploads.VIDEO_UPLOAD_CHUNK_SIZE_BYTES', 4)
+    def test_org_admin_replaces_blocked_youtube_url_with_chunked_uploaded_video(self):
+        element = Element.objects.create(
+            slide=self.video_slide,
+            order=1,
+            element_type=Element.ElementType.VIDEO_AUDIO,
+            video_url='https://www.youtube.com/watch?v=blocked',
+        )
+        video = b'0123456789'
+        started = self._start(self.org_admin, size=len(video))
+        self.assertEqual(started.status_code, 201, started.data)
+        self.assertEqual(started.data['chunk_count'], 3)
+
+        for index, chunk in enumerate((video[:4], video[4:8], video[8:])):
+            response = self.client.post('/api/media/video-upload/chunk/', {
+                'upload_id': started.data['upload_id'],
+                'index': index,
+                'file': SimpleUploadedFile(f'part-{index}', chunk, content_type='application/octet-stream'),
+            }, format='multipart')
+            self.assertEqual(response.status_code, 200, response.data)
+
+        completed = self.client.post('/api/media/video-upload/complete/', {
+            'upload_id': started.data['upload_id'],
+        }, format='json')
+        self.assertEqual(completed.status_code, 201, completed.data)
+
+        updated = self.client.patch(f'/api/elements/{element.id}/', {
+            'video_upload_token': completed.data['video_upload_token'],
+        }, format='json')
+        self.assertEqual(updated.status_code, 200, updated.data)
+        element.refresh_from_db()
+        self.assertEqual(element.video_url, '')
+        self.assertTrue(element.video_file)
+        element.video_file.open('rb')
+        try:
+            self.assertEqual(element.video_file.read(), video)
+        finally:
+            element.video_file.close()
+
+    @patch('courses.video_uploads.VIDEO_UPLOAD_CHUNK_SIZE_BYTES', 4)
+    def test_complete_rejects_missing_chunk(self):
+        started = self._start(self.org_admin, size=8)
+        self.client.post('/api/media/video-upload/chunk/', {
+            'upload_id': started.data['upload_id'],
+            'index': 0,
+            'file': SimpleUploadedFile('part-0', b'0123'),
+        }, format='multipart')
+
+        completed = self.client.post('/api/media/video-upload/complete/', {
+            'upload_id': started.data['upload_id'],
+        }, format='json')
+        self.assertEqual(completed.status_code, 400)
+        self.assertIn('missing', completed.data['detail'].lower())
+
+    def test_platform_admin_can_start_video_upload_but_learner_cannot(self):
+        platform_response = self._start(self.platform_admin)
+        self.assertEqual(platform_response.status_code, 201, platform_response.data)
+
+        learner_response = self._start(self.learner)
+        self.assertEqual(learner_response.status_code, 403)
+
+    def test_start_rejects_non_video_and_oversized_video(self):
+        bad_extension = self._start(self.org_admin, filename='training.exe')
+        self.assertEqual(bad_extension.status_code, 400)
+
+        oversized = self._start(self.org_admin, size=(500 * 1024 * 1024) + 1)
+        self.assertEqual(oversized.status_code, 400)
 
 
 class ModuleLessonBuilderTests(BaseAPITestCase):

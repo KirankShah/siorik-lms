@@ -15,6 +15,9 @@ from .views import (
     LevelCourseAssignmentListView,
     LevelCourseAssignmentReorderView,
     MediaUploadView,
+    VideoUploadChunkView,
+    VideoUploadCompleteView,
+    VideoUploadStartView,
     ModuleViewSet,
     SlideTemplateViewSet,
     SlideViewSet,
@@ -48,5 +51,8 @@ urlpatterns = router.urls + [
     path('reports/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
     path('reports/staff-training/', StaffTrainingReportView.as_view(), name='staff-training-report'),
     path('media/upload/', MediaUploadView.as_view(), name='media-upload'),
+    path('media/video-upload/start/', VideoUploadStartView.as_view(), name='video-upload-start'),
+    path('media/video-upload/chunk/', VideoUploadChunkView.as_view(), name='video-upload-chunk'),
+    path('media/video-upload/complete/', VideoUploadCompleteView.as_view(), name='video-upload-complete'),
     path('elements/<int:pk>/video/', stream_element_video, name='element-video-stream'),
 ]
