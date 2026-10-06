@@ -398,7 +398,8 @@ export function StaffEnrollmentPage() {
               {bulkResult.replaced > 0 && (
                 <p className="text-sm text-amber-700">
                   Replaced {bulkResult.replaced} existing staff account{bulkResult.replaced === 1 ? '' : 's'} with fresh
-                  accounts.
+                  accounts. The system verified that the old records were removed and every replacement has a queued
+                  invitation.
                 </p>
               )}
 

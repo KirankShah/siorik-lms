@@ -5827,6 +5827,7 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data['replaced'], 1)
+        self.assertEqual(response.data['replacement_verified'], 1)
         fresh_user = User.objects.get(email=self.learner.email)
         self.assertNotEqual(fresh_user.id, old_user_id)
         self.assertEqual(fresh_user.first_name, 'Fresh')
@@ -5839,6 +5840,43 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertEqual(result['status'], 'complete')
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.learner.email])
+
+    def test_replacement_safety_check_restores_old_account_if_invitation_is_missing(self):
+        old_user_id = self.learner.id
+        old_enrollment = Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        upload = make_staff_upload([{
+            'name': 'Fresh Learner',
+            'email': self.learner.email,
+            'level': 'Officer Level',
+        }])
+
+        self.auth_as(self.org_admin)
+        with patch('accounts.views.StaffInvitation.objects.bulk_create', return_value=[]):
+            response = self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('stopped safely', response.data['detail'].lower())
+        self.assertIn('safety check', response.data['failed'][0]['reason'].lower())
+        restored_user = User.objects.get(email=self.learner.email)
+        self.assertEqual(restored_user.id, old_user_id)
+        self.assertTrue(Enrollment.objects.filter(pk=old_enrollment.pk, user_id=old_user_id).exists())
+        self.assertFalse(StaffInvitationJob.objects.exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
+
+    def test_repeated_header_inside_data_rejects_the_whole_batch(self):
+        upload = make_staff_upload([
+            {'name': 'Valid Staff', 'email': 'valid@acme.test', 'level': 'Officer Level'},
+            {'name': 'Full Name', 'email': 'Email Address', 'level': 'Assessment Level'},
+        ])
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(User.objects.filter(email='valid@acme.test').exists())
+        self.assertFalse(StaffInvitationJob.objects.exists())
+        self.assertIn('valid email', response.data['failed'][0]['reason'].lower())
 
     def test_privileged_account_is_never_deleted_by_staff_upload(self):
         upload = make_staff_upload([{

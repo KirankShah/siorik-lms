@@ -60,6 +60,10 @@ class StaffBulkAbort(Exception):
         super().__init__('Staff bulk upload validation failed.')
 
 
+class StaffBulkSafetyError(Exception):
+    """Abort and roll back when the completed batch fails its safety invariants."""
+
+
 class ThrottledTokenObtainPairView(TokenObtainPairView):
     """
     Login is rate-limited and audit-logged on success — brute-force defense.
@@ -667,8 +671,59 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 StaffInvitation.objects.bulk_create([
                     StaffInvitation(job=invitation_job, user=user) for user in pending_users
                 ])
+
+                # Treat account replacement and invitation creation as one
+                # indivisible operation.  A successful response is only
+                # allowed after every spreadsheet email resolves to exactly
+                # the newly-created learner, every old account id is gone,
+                # and every new account has one durable pending invitation.
+                # Any failed invariant raises inside this transaction, which
+                # restores the old accounts and all of their training history.
+                new_by_email = {user.email.lower(): user for user in pending_users}
+                expected_email_keys = set(email_keys)
+                replacement_verified = 0
+                safety_ok = (
+                    len(pending_users) == len(resolved_rows)
+                    and set(new_by_email) == expected_email_keys
+                    and not User.objects.filter(pk__in=replacement_ids).exists()
+                    and all(
+                        user.role == User.Role.LEARNER
+                        and user.organization_id is not None
+                        and not user.has_usable_password()
+                        for user in pending_users
+                    )
+                )
+                for email_key, old_user in locked_existing.items():
+                    new_user = new_by_email.get(email_key)
+                    if new_user is None or new_user.pk == old_user.pk:
+                        safety_ok = False
+                        break
+                    replacement_verified += 1
+                for row in resolved_rows:
+                    new_user = new_by_email.get(row['email'].strip().lower())
+                    if new_user is None or new_user.organization_id != row['organization'].id:
+                        safety_ok = False
+                        break
+                queued_user_ids = set(
+                    StaffInvitation.objects.filter(
+                        job=invitation_job, status=StaffInvitation.Status.PENDING
+                    ).values_list('user_id', flat=True)
+                )
+                safety_ok = safety_ok and queued_user_ids == {user.pk for user in pending_users}
+                if not safety_ok or replacement_verified != replaced:
+                    raise StaffBulkSafetyError
         except StaffBulkAbort as exc:
             return fail_batch(exc.failures)
+        except StaffBulkSafetyError:
+            logger.error('Staff bulk safety verification failed for user %s', request.user.pk)
+            return fail_batch([{
+                'row': None,
+                'email': '',
+                'reason': (
+                    'The replacement safety check did not pass. Existing accounts and training history were restored, '
+                    'and no staff invitations were queued.'
+                ),
+            }], 'Bulk upload stopped safely. No staff accounts were changed.')
         except UserProvisioningError as exc:
             return fail_batch([{'row': None, 'email': '', 'reason': str(exc)}])
         except Exception:
@@ -683,6 +738,7 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             'created': created,
             'failed': [],
             'replaced': replaced,
+            'replacement_verified': replacement_verified,
             'queued': len(created),
             'invitation_job': invitation_job.pk,
         })

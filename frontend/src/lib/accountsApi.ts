@@ -74,6 +74,7 @@ export interface StaffEnrollResult {
   created: StaffEnrollCreated[]
   failed: StaffEnrollFailure[]
   replaced: number
+  replacement_verified?: number
   queued?: number
   invitation_job?: number
 }
