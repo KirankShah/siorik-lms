@@ -5789,7 +5789,7 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertTrue(response.data['assigned'])
         self.assertEqual(response.data['assessment_level']['name'], User.AssessmentLevel.MANAGEMENT)
 
-    def test_invalid_level_and_missing_fields_are_reported_not_dropped(self):
+    def test_invalid_row_rejects_the_whole_batch_and_notifies_only_the_admin(self):
         upload = make_staff_upload([
             {'name': 'Good Row', 'email': 'good@acme.test', 'level': 'Officer'},
             {'name': 'Bad Level', 'email': 'bad@acme.test', 'level': 'Wizard'},
@@ -5797,10 +5797,73 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         ])
         self.auth_as(self.org_admin)
         response = self.client.post(self.URL, {'file': upload}, format='multipart')
-        self.assertEqual(len(response.data['created']), 1)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['created'], [])
         reasons = {f['email']: f['reason'] for f in response.data['failed']}
         self.assertIn('bad@acme.test', reasons)
         self.assertIn('noname@acme.test', reasons)
+        self.assertFalse(User.objects.filter(email='good@acme.test').exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
+        self.assertIn('bulk upload failed', mail.outbox[0].subject.lower())
+
+    def test_existing_staff_is_deleted_with_history_and_recreated_from_scratch(self):
+        old_user_id = self.learner.id
+        Enrollment.objects.create(user=self.learner, course=self.published_org_course)
+        upload = make_staff_upload([{
+            'name': 'Fresh Learner',
+            'email': self.learner.email,
+            'level': 'Middle Management Level',
+            'phone': '9801234567',
+        }])
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['replaced'], 1)
+        fresh_user = User.objects.get(email=self.learner.email)
+        self.assertNotEqual(fresh_user.id, old_user_id)
+        self.assertEqual(fresh_user.first_name, 'Fresh')
+        self.assertEqual(fresh_user.last_name, 'Learner')
+        self.assertTrue(fresh_user.must_reset_password)
+        self.assertEqual(fresh_user.assessment_level, User.AssessmentLevel.MANAGEMENT)
+        self.assertFalse(Enrollment.objects.filter(user_id=old_user_id).exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.learner.email])
+
+    def test_privileged_account_is_never_deleted_by_staff_upload(self):
+        upload = make_staff_upload([{
+            'name': 'Do Not Replace',
+            'email': self.org_admin.email,
+            'level': 'Officer',
+        }])
+        original_id = self.org_admin.id
+
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(pk=original_id, role=User.Role.ORG_ADMIN).exists())
+        self.assertIn('administrator or instructor', response.data['failed'][0]['reason'])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
+
+    def test_invite_failure_rolls_back_every_account_and_sends_one_admin_notice(self):
+        upload = make_staff_upload([
+            {'name': 'First Staff', 'email': 'first@acme.test', 'level': 'Officer'},
+            {'name': 'Second Staff', 'email': 'second@acme.test', 'level': 'Officer'},
+        ])
+        self.auth_as(self.org_admin)
+
+        with patch('accounts.views.send_staff_learner_invite_email', side_effect=Exception('smtp down')):
+            response = self.client.post(self.URL, {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.filter(email__in=['first@acme.test', 'second@acme.test']).exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
+        self.assertIn('bulk upload failed', mail.outbox[0].subject.lower())
 
     def test_org_admin_cannot_enroll_into_another_organization(self):
         upload = make_staff_upload(
@@ -5868,7 +5931,7 @@ class StaffManagementApiTests(BaseAPITestCase):
         }
         return self.client.post(self.URL, payload, format='json')
 
-    def test_individual_create_behaves_identically_to_a_bulk_row(self):
+    def test_individual_create_still_enrolls_a_new_hire_and_sends_the_invite(self):
         self.auth_as(self.org_admin)
         response = self.make_staff('sunita@acme.test', name='Sunita Karki')
         self.assertEqual(response.status_code, 201, response.data)

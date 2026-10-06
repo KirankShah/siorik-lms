@@ -73,21 +73,23 @@ export interface StaffEnrollFailure {
 export interface StaffEnrollResult {
   created: StaffEnrollCreated[]
   failed: StaffEnrollFailure[]
+  replaced: number
 }
 
-// ORG_ADMIN/PLATFORM_ADMIN — bulk-creates real (non-demo) LEARNER accounts from
-// the staff-enrollment spreadsheet (.xlsx or .csv). Each row's Assessment Level
-// is stored on the account and drives which role-based assessment they see.
+// ORG_ADMIN/PLATFORM_ADMIN — atomically replaces matching same-organization
+// learner accounts and creates the full spreadsheet batch. Existing training
+// history is deleted for replaced learners so every uploaded staff member starts
+// a new journey. Any row failure rejects the whole batch.
 export function bulkEnrollStaff(file: File): Promise<StaffEnrollResult> {
   const formData = new FormData()
   formData.append('file', file)
   return apiFetch<StaffEnrollResult>('/staff/bulk/', { method: 'POST', body: formData })
 }
 
-// Individual counterpart to bulkEnrollStaff — same fields as one row of the
-// spreadsheet, minus Organization (implicit: the caller's own org for
-// ORG_ADMIN, explicit here only for PLATFORM_ADMIN, who administers more
-// than one). Funnels through the exact same account-creation logic server-side.
+// Non-destructive individual enrollment for a newly hired staff member. Unlike
+// bulkEnrollStaff, this rejects an existing email instead of deleting and
+// recreating that account. Organization is implicit for ORG_ADMIN and explicit
+// only for PLATFORM_ADMIN, who administers more than one organization.
 export interface StaffCreateInput {
   name: string
   email: string

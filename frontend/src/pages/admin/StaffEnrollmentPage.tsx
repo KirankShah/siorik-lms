@@ -143,6 +143,13 @@ export function StaffEnrollmentPage() {
 
   async function handleBulkSubmit() {
     if (!file) return
+    if (
+      !window.confirm(
+        'Uploading this file will permanently delete and recreate any matching staff accounts in this organization, including all of their training history and certificates. Continue?'
+      )
+    ) {
+      return
+    }
     setIsBulkSubmitting(true)
     setBulkError(null)
     setBulkResult(null)
@@ -152,7 +159,10 @@ export function StaffEnrollmentPage() {
       loadStaff()
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
-        const body = err.body as { detail?: string } | null
+        const body = err.body as (Partial<StaffEnrollResult> & { detail?: string }) | null
+        if (body?.failed) {
+          setBulkResult({ created: [], failed: body.failed, replaced: 0 })
+        }
         setBulkError(body?.detail ?? 'The file could not be read.')
       } else {
         setBulkError('Could not process the file. Please try again.')
@@ -334,8 +344,12 @@ export function StaffEnrollmentPage() {
               <h2 className="text-sm font-semibold text-neutral-900">Bulk upload</h2>
               <p className="mt-1 text-sm text-neutral-500">
                 Upload the staff enrollment spreadsheet (<code className="rounded bg-neutral-100 px-1 py-0.5">.xlsx</code>{' '}
-                or <code className="rounded bg-neutral-100 px-1 py-0.5">.csv</code>). Rows that fail validation are
-                reported below; the rest still go through.
+                or <code className="rounded bg-neutral-100 px-1 py-0.5">.csv</code>). The batch is all-or-nothing. If
+                any row fails, no accounts are changed and no staff invitations are sent.
+              </p>
+              <p className="mt-2 text-sm text-amber-700">
+                Existing staff with matching emails in this organization are permanently deleted and recreated. Their
+                previous training history and certificates are removed.
               </p>
             </div>
 
@@ -375,6 +389,12 @@ export function StaffEnrollmentPage() {
               <p className="text-sm text-emerald-700">
                 Enrolled {bulkResult.created.length} staff member{bulkResult.created.length === 1 ? '' : 's'}.
               </p>
+              {bulkResult.replaced > 0 && (
+                <p className="text-sm text-amber-700">
+                  Replaced {bulkResult.replaced} existing staff account{bulkResult.replaced === 1 ? '' : 's'} with fresh
+                  accounts.
+                </p>
+              )}
 
               {bulkResult.failed.length > 0 && (
                 <div>

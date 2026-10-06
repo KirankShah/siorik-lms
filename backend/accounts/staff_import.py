@@ -128,7 +128,7 @@ def _iter_sheet_rows(upload, filename):
 def parse_staff_rows(upload, filename):
     """
     Returns (rows, failures):
-      rows     -- list of dicts {name, email, organization_name, corporate_title,
+      rows     -- list of dicts {row, name, email, organization_name, corporate_title,
                   functional_title, branch_department, phone_number,
                   assessment_level} for every valid staff row.
       failures -- list of {row, email, reason} for every rejected row.
@@ -196,6 +196,7 @@ def parse_staff_rows(upload, filename):
             continue
 
         rows.append({
+            'row': offset,
             'name': name,
             'email': email,
             'organization_name': org_name,

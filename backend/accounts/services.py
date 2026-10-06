@@ -4,6 +4,7 @@ import string
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.db import transaction
+from django.utils.html import escape
 
 from .models import Organization, User
 
@@ -386,7 +387,7 @@ def send_staff_learner_invite_email(user, temp_password):
 
 
 @transaction.atomic
-def provision_staff_learner(
+def create_staff_learner_account(
     *,
     name,
     email,
@@ -399,19 +400,43 @@ def provision_staff_learner(
     assessment_level=None,
 ):
     """
-    Creates a real (is_demo=False) LEARNER account for `organization` staff —
-    same atomic account+invite mechanics as provision_demo_user, but a full
-    learner with normal course access (not a prospective-client demo), and a
-    staff-worded invite. `assessment_level` (one of User.AssessmentLevel) is
-    what later drives which role-based assessment they're shown, via
-    levelassessments.services.assigned_assessment_level_for_user.
+    Creates a real staff LEARNER and returns ``(user, temporary_password)``
+    without sending email. Bulk enrollment uses this split phase so every row
+    can be created successfully before the first invitation is attempted.
     """
     ensure_learner_seat_available(organization)
-    user, temp_password = _create_pending_user(
+    return _create_pending_user(
         name=name, email=email, organization=organization, role=User.Role.LEARNER, is_demo=False,
         designation=designation, phone_number=phone_number,
         corporate_title=corporate_title, functional_title=functional_title,
         branch_department=branch_department, assessment_level=assessment_level,
+    )
+
+
+@transaction.atomic
+def provision_staff_learner(
+    *,
+    name,
+    email,
+    organization,
+    designation='',
+    phone_number='',
+    corporate_title='',
+    functional_title='',
+    branch_department='',
+    assessment_level=None,
+):
+    """Create one real staff learner and send their temporary-password invite."""
+    user, temp_password = create_staff_learner_account(
+        name=name,
+        email=email,
+        organization=organization,
+        designation=designation,
+        phone_number=phone_number,
+        corporate_title=corporate_title,
+        functional_title=functional_title,
+        branch_department=branch_department,
+        assessment_level=assessment_level,
     )
 
     try:
@@ -420,3 +445,31 @@ def provision_staff_learner(
         raise UserProvisioningError(f'Account created but the invite email failed to send: {exc}') from exc
 
     return user
+
+
+def send_staff_bulk_failure_email(*, admin, organization_names, filename, failures):
+    """Send one batch-level failure notice to the administrator who uploaded it."""
+    organizations = ', '.join(sorted(set(organization_names))) or 'Unknown organization'
+    organizations = organizations.replace('\r', ' ').replace('\n', ' ')
+    subject = f'Staff bulk upload failed — {organizations}'
+    details = '\n'.join(
+        f'- Row {failure.get("row") or "—"}: {failure.get("email") or "—"} — {failure["reason"]}'
+        for failure in failures[:25]
+    )
+    remaining = len(failures) - 25
+    if remaining > 0:
+        details += f'\n- …and {remaining} more failure(s).'
+    text_body = (
+        f'The staff bulk upload for {organizations} failed.\n\n'
+        f'File: {filename or "Unknown file"}\n'
+        f'No staff accounts were changed and no staff invitation emails were sent.\n\n'
+        f'Failure details:\n{details}\n\n'
+        f'Please correct the file or account issue and upload the complete batch again.'
+    )
+    html_body = escape(text_body).replace('\n', '<br>')
+    _send_invite_email(
+        to_email=admin.email,
+        subject=subject,
+        text_body=text_body,
+        html_body=f'<div style="font-family: Arial, Helvetica, sans-serif;">{html_body}</div>',
+    )

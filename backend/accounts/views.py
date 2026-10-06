@@ -6,7 +6,7 @@ from django.contrib.auth.models import update_last_login
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.db.models import Q, Value
-from django.db.models.functions import Concat
+from django.db.models.functions import Concat, Lower
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import mixins, status, viewsets
@@ -38,16 +38,27 @@ from .serializers import (
 )
 from .services import (
     UserProvisioningError,
+    create_staff_learner_account,
     ensure_learner_seat_available,
     provision_demo_user,
     provision_org_admin,
     provision_staff_learner,
     send_password_reset_email,
+    send_staff_bulk_failure_email,
+    send_staff_learner_invite_email,
 )
 from .staff_import import StaffImportError, parse_staff_rows
 from .staff_import import resolve_assessment_level as _resolve_staff_level
 
 logger = logging.getLogger(__name__)
+
+
+class StaffBulkAbort(Exception):
+    """Abort an entire staff batch while retaining row-level failure details."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        super().__init__('Staff bulk upload validation failed.')
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
@@ -377,10 +388,12 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     ORG_ADMIN/PLATFORM_ADMIN management of real staff (is_demo=False LEARNER
     accounts): individual add (create), bulk spreadsheet upload (bulk), a
     searchable/paginated roster (list), and deactivate/reactivate. Individual
-    add and bulk upload both funnel through accounts.services.provision_staff_learner
-    — one person added individually behaves exactly like one row from a bulk
-    upload (same temp password, invite email, forced-reset flow, and implicit
-    Learning Path placement via assessment_level — see courses.learning_path).
+    Individual add uses accounts.services.provision_staff_learner and remains a
+    non-destructive create-only path for newly hired staff. Bulk upload shares
+    the same account fields and invitation flow, but separately implements its
+    explicitly destructive replacement policy. Both paths create a temporary
+    password, send an invite, force the first-login reset, and place the learner
+    in the Learning Path through assessment_level — see courses.learning_path.
 
     Org scoping (list/create/deactivate/reactivate alike): an ORG_ADMIN only
     ever sees/acts on their own organization's staff; a PLATFORM_ADMIN sees
@@ -512,52 +525,162 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def bulk(self, request):
         upload = request.FILES.get('file')
+        parsed_rows = []
+
+        def fail_batch(failures, detail='Bulk upload failed. No staff accounts were changed.'):
+            organization_names = [
+                row.get('organization_name', '') for row in parsed_rows if row.get('organization_name')
+            ]
+            if not organization_names and request.user.organization:
+                organization_names = [request.user.organization.name]
+            try:
+                send_staff_bulk_failure_email(
+                    admin=request.user,
+                    organization_names=organization_names,
+                    filename=getattr(upload, 'name', ''),
+                    failures=failures,
+                )
+            except Exception:
+                logger.exception('Could not send staff bulk-upload failure notice to user %s', request.user.pk)
+            return Response(
+                {'detail': detail, 'created': [], 'failed': failures, 'replaced': 0},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if not upload:
-            return Response({'detail': 'A .xlsx or .csv file is required (field name "file").'}, status=400)
+            return fail_batch([{
+                'row': None,
+                'email': '',
+                'reason': 'A .xlsx or .csv file is required (field name "file").',
+            }])
 
         try:
-            rows, failed = parse_staff_rows(upload, upload.name)
+            parsed_rows, failed = parse_staff_rows(upload, upload.name)
         except StaffImportError as exc:
-            return Response({'detail': str(exc)}, status=400)
+            return fail_batch([{'row': None, 'email': '', 'reason': str(exc)}], str(exc))
+
+        if failed:
+            return fail_batch(failed)
+        if not parsed_rows:
+            return fail_batch([{'row': None, 'email': '', 'reason': 'The file contains no staff rows.'}])
 
         is_platform_admin = request.user.role == User.Role.PLATFORM_ADMIN
         own_org = request.user.organization
-
-        created = []
-        for row in rows:
-            organization = _resolve_organization(row['organization_name'])
+        organization_cache = {}
+        resolved_rows = []
+        failures = []
+        for row in parsed_rows:
+            organization_key = row['organization_name'].strip().lower()
+            if organization_key not in organization_cache:
+                organization_cache[organization_key] = _resolve_organization(row['organization_name'])
+            organization = organization_cache[organization_key]
             if organization is None:
-                failed.append({
-                    'row': None, 'email': row['email'],
+                failures.append({
+                    'row': row['row'], 'email': row['email'],
                     'reason': f'Organization "{row["organization_name"]}" was not found.',
                 })
                 continue
             if not is_platform_admin and organization.id != (own_org.id if own_org else None):
-                failed.append({
-                    'row': None, 'email': row['email'],
+                failures.append({
+                    'row': row['row'], 'email': row['email'],
                     'reason': f'Row names organization "{organization.name}", but you can only enrol staff into your own.',
                 })
                 continue
+            resolved_rows.append({**row, 'organization': organization})
 
-            try:
-                user = provision_staff_learner(
-                    name=row['name'],
-                    email=row['email'],
-                    organization=organization,
-                    phone_number=row['phone_number'],
-                    corporate_title=row['corporate_title'],
-                    functional_title=row['functional_title'],
-                    branch_department=row['branch_department'],
-                    assessment_level=row['assessment_level'],
-                )
-            except UserProvisioningError as exc:
-                failed.append({'row': None, 'email': row['email'], 'reason': str(exc)})
-                continue
+        if failures:
+            return fail_batch(failures)
 
-            log_action(request.user, AuditLog.Action.STAFF_ENROLLED, user)
-            created.append({'email': user.email, 'assessment_level': user.get_assessment_level_display()})
+        email_keys = [row['email'].strip().lower() for row in resolved_rows]
 
-        return Response({'created': created, 'failed': failed})
+        def replacement_failures(existing_by_email):
+            problems = []
+            for row in resolved_rows:
+                existing = existing_by_email.get(row['email'].strip().lower())
+                if existing is None:
+                    continue
+                if existing.role != User.Role.LEARNER:
+                    problems.append({
+                        'row': row['row'],
+                        'email': row['email'],
+                        'reason': 'This email belongs to an administrator or instructor and cannot be replaced by a staff upload.',
+                    })
+                elif existing.organization_id != row['organization'].id:
+                    problems.append({
+                        'row': row['row'],
+                        'email': row['email'],
+                        'reason': 'This email belongs to a learner in a different organization and cannot be replaced.',
+                    })
+            return problems
+
+        existing_by_email = {
+            user.email.lower(): user
+            for user in User.objects.annotate(email_key=Lower('email')).filter(email_key__in=email_keys)
+        }
+        failures = replacement_failures(existing_by_email)
+        if failures:
+            return fail_batch(failures)
+
+        created = []
+        replaced = 0
+        try:
+            with transaction.atomic():
+                locked_existing = {
+                    user.email.lower(): user
+                    for user in User.objects.select_for_update().annotate(email_key=Lower('email')).filter(
+                        email_key__in=email_keys
+                    )
+                }
+                failures = replacement_failures(locked_existing)
+                if failures:
+                    raise StaffBulkAbort(failures)
+
+                replacement_ids = [user.pk for user in locked_existing.values()]
+                replaced = len(replacement_ids)
+                if replacement_ids:
+                    User.objects.filter(pk__in=replacement_ids).delete()
+
+                pending_invites = []
+                for row in resolved_rows:
+                    user, temp_password = create_staff_learner_account(
+                        name=row['name'],
+                        email=row['email'],
+                        organization=row['organization'],
+                        phone_number=row['phone_number'],
+                        corporate_title=row['corporate_title'],
+                        functional_title=row['functional_title'],
+                        branch_department=row['branch_department'],
+                        assessment_level=row['assessment_level'],
+                    )
+                    pending_invites.append((user, temp_password))
+                    created.append({'email': user.email, 'assessment_level': user.get_assessment_level_display()})
+
+                # Delay invitations until the complete batch has passed account
+                # creation. Immediate email errors still roll back the database.
+                for user, temp_password in pending_invites:
+                    try:
+                        send_staff_learner_invite_email(user, temp_password)
+                    except Exception as exc:
+                        logger.exception('Staff invitation failed during bulk upload for user %s', user.pk)
+                        raise UserProvisioningError(
+                            f'Could not send the invitation for {user.email}. No accounts were changed.'
+                        ) from exc
+
+                for user, _ in pending_invites:
+                    log_action(request.user, AuditLog.Action.STAFF_ENROLLED, user)
+        except StaffBulkAbort as exc:
+            return fail_batch(exc.failures)
+        except UserProvisioningError as exc:
+            return fail_batch([{'row': None, 'email': '', 'reason': str(exc)}])
+        except Exception:
+            logger.exception('Unexpected staff bulk-upload failure for user %s', request.user.pk)
+            return fail_batch([{
+                'row': None,
+                'email': '',
+                'reason': 'An unexpected server error stopped the batch.',
+            }])
+
+        return Response({'created': created, 'failed': [], 'replaced': replaced})
 
 
 class SetPasswordView(APIView):
