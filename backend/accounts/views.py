@@ -25,7 +25,7 @@ from audit.models import AuditLog
 from audit.services import log_action
 from core.permissions import IsAdminRole, IsOrgAdminRole, IsPlatformAdminRole
 
-from .models import Organization, User
+from .models import Organization, StaffInvitation, StaffInvitationJob, User
 from .serializers import (
     DemoUserCreateSerializer,
     OrganizationSerializer,
@@ -45,7 +45,6 @@ from .services import (
     provision_staff_learner,
     send_password_reset_email,
     send_staff_bulk_failure_email,
-    send_staff_learner_invite_email,
 )
 from .staff_import import StaffImportError, parse_staff_rows
 from .staff_import import resolve_assessment_level as _resolve_staff_level
@@ -640,9 +639,9 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 if replacement_ids:
                     User.objects.filter(pk__in=replacement_ids).delete()
 
-                pending_invites = []
+                pending_users = []
                 for row in resolved_rows:
-                    user, temp_password = create_staff_learner_account(
+                    user, _ = create_staff_learner_account(
                         name=row['name'],
                         email=row['email'],
                         organization=row['organization'],
@@ -652,22 +651,22 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                         branch_department=row['branch_department'],
                         assessment_level=row['assessment_level'],
                     )
-                    pending_invites.append((user, temp_password))
+                    # Bulk invitations are generated only when their hourly
+                    # queue item is processed, so no plaintext password needs
+                    # to be retained while the item waits.
+                    user.set_unusable_password()
+                    user.save(update_fields=['password'])
+                    pending_users.append(user)
                     created.append({'email': user.email, 'assessment_level': user.get_assessment_level_display()})
 
-                # Delay invitations until the complete batch has passed account
-                # creation. Immediate email errors still roll back the database.
-                for user, temp_password in pending_invites:
-                    try:
-                        send_staff_learner_invite_email(user, temp_password)
-                    except Exception as exc:
-                        logger.exception('Staff invitation failed during bulk upload for user %s', user.pk)
-                        raise UserProvisioningError(
-                            f'Could not send the invitation for {user.email}. No accounts were changed.'
-                        ) from exc
-
-                for user, _ in pending_invites:
-                    log_action(request.user, AuditLog.Action.STAFF_ENROLLED, user)
+                invitation_job = StaffInvitationJob.objects.create(
+                    requested_by=request.user,
+                    filename=getattr(upload, 'name', '')[:255],
+                    total_count=len(pending_users),
+                )
+                StaffInvitation.objects.bulk_create([
+                    StaffInvitation(job=invitation_job, user=user) for user in pending_users
+                ])
         except StaffBulkAbort as exc:
             return fail_batch(exc.failures)
         except UserProvisioningError as exc:
@@ -680,7 +679,13 @@ class StaffEnrollmentViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 'reason': 'An unexpected server error stopped the batch.',
             }])
 
-        return Response({'created': created, 'failed': [], 'replaced': replaced})
+        return Response({
+            'created': created,
+            'failed': [],
+            'replaced': replaced,
+            'queued': len(created),
+            'invitation_job': invitation_job.pk,
+        })
 
 
 class SetPasswordView(APIView):

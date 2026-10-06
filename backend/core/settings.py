@@ -123,6 +123,14 @@ _email_use_tls_env = os.environ.get('EMAIL_USE_TLS')
 EMAIL_USE_TLS = (_email_use_tls_env == 'True') if _email_use_tls_env is not None else not EMAIL_USE_SSL
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'webmaster@localhost')
 
+# The production host permits 100 remote deliveries per domain per hour.
+# Reserving ten slots prevents staff invitations from starving password resets,
+# admin notices, and other transactional messages.
+STAFF_INVITATION_BATCH_SIZE = int(os.environ.get('STAFF_INVITATION_BATCH_SIZE', '90'))
+STAFF_INVITATION_BATCH_INTERVAL_SECONDS = int(
+    os.environ.get('STAFF_INVITATION_BATCH_INTERVAL_SECONDS', '3600')
+)
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',

@@ -119,3 +119,44 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class StaffInvitationJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = 'QUEUED', 'Queued'
+        PROCESSING = 'PROCESSING', 'Processing'
+        COMPLETE = 'COMPLETE', 'Complete'
+        FAILED = 'FAILED', 'Failed'
+
+    requested_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff_invitation_jobs'
+    )
+    filename = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    total_count = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    last_batch_started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+
+class StaffInvitation(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        SENT = 'SENT', 'Sent'
+        FAILED = 'FAILED', 'Failed'
+
+    job = models.ForeignKey(StaffInvitationJob, on_delete=models.CASCADE, related_name='invitations')
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='staff_invitation')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']

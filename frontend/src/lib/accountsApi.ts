@@ -74,6 +74,8 @@ export interface StaffEnrollResult {
   created: StaffEnrollCreated[]
   failed: StaffEnrollFailure[]
   replaced: number
+  queued?: number
+  invitation_job?: number
 }
 
 // ORG_ADMIN/PLATFORM_ADMIN — atomically replaces matching same-organization

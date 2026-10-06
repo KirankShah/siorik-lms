@@ -13,6 +13,9 @@ here rather than pushed back on the uploader.
 import csv
 import io
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
+
 from openpyxl import load_workbook
 
 from .models import User
@@ -175,6 +178,11 @@ def parse_staff_rows(upload, filename):
             continue
 
         email_key = email.lower()
+        try:
+            validate_email(email_key)
+        except ValidationError:
+            failures.append({'row': offset, 'email': email, 'reason': 'Enter a valid email address.'})
+            continue
         if email_key in seen_emails:
             failures.append({'row': offset, 'email': email, 'reason': 'Duplicate email within this file.'})
             continue

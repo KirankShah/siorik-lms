@@ -16,7 +16,7 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
@@ -25,7 +25,8 @@ from PIL import Image, ImageDraw
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import Organization, User
+from accounts.invitation_queue import process_next_staff_invitation_batch
+from accounts.models import Organization, StaffInvitation, StaffInvitationJob, User
 from accounts.services import UserProvisioningError, provision_demo_user
 from assessments.models import CategorizeItem, CategoryBucket, Choice, HotspotRegion, Question, Quiz, QuizAttempt, WordBankToken
 from assignments.models import Assignment, AssignmentSubmission
@@ -5753,6 +5754,7 @@ def make_staff_upload(rows, *, filename='staff.xlsx', title_row=True, org_name='
     )
 
 
+@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
 class StaffEnrollmentApiTests(BaseAPITestCase):
     URL = '/api/staff/bulk/'
 
@@ -5766,6 +5768,8 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(len(response.data['created']), 2)
         self.assertEqual(response.data['failed'], [])
+        self.assertEqual(response.data['queued'], 2)
+        self.assertEqual(len(mail.outbox), 0)
 
         sunita = User.objects.get(email='sunita@acme.test')
         self.assertEqual(sunita.role, User.Role.LEARNER)
@@ -5774,6 +5778,7 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertEqual(sunita.assessment_level, User.AssessmentLevel.ASSISTANT_SUPERVISOR)
         self.assertEqual(sunita.organization, self.org)
         self.assertEqual(sunita.phone_number, '9801234567')
+        self.assertFalse(sunita.has_usable_password())
 
     def test_assigned_assessment_level_resolves_for_an_enrolled_staff_member(self):
         configure_assessment_level(self.org, User.AssessmentLevel.MANAGEMENT, questions_per_attempt=1)
@@ -5829,6 +5834,9 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertTrue(fresh_user.must_reset_password)
         self.assertEqual(fresh_user.assessment_level, User.AssessmentLevel.MANAGEMENT)
         self.assertFalse(Enrollment.objects.filter(user_id=old_user_id).exists())
+        self.assertEqual(len(mail.outbox), 0)
+        result = process_next_staff_invitation_batch()
+        self.assertEqual(result['status'], 'complete')
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.learner.email])
 
@@ -5849,21 +5857,50 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
 
-    def test_invite_failure_rolls_back_every_account_and_sends_one_admin_notice(self):
+    def test_queued_invite_failure_stops_the_job_without_deleting_accounts(self):
         upload = make_staff_upload([
             {'name': 'First Staff', 'email': 'first@acme.test', 'level': 'Officer'},
             {'name': 'Second Staff', 'email': 'second@acme.test', 'level': 'Officer'},
         ])
         self.auth_as(self.org_admin)
 
-        with patch('accounts.views.send_staff_learner_invite_email', side_effect=Exception('smtp down')):
-            response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(User.objects.filter(email__in=['first@acme.test', 'second@acme.test']).count(), 2)
 
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(User.objects.filter(email__in=['first@acme.test', 'second@acme.test']).exists())
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, [self.org_admin.email])
-        self.assertIn('bulk upload failed', mail.outbox[0].subject.lower())
+        with patch('accounts.invitation_queue.send_staff_learner_invite_email', side_effect=Exception('smtp down')):
+            result = process_next_staff_invitation_batch()
+
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(StaffInvitationJob.objects.get().status, StaffInvitationJob.Status.FAILED)
+        self.assertEqual(StaffInvitation.objects.filter(status=StaffInvitation.Status.SENT).count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_invitation_queue_sends_90_then_waits_before_next_batch(self):
+        users = [
+            User.objects.create_user(
+                email=f'queued-{index}@acme.test', password=None, role=User.Role.LEARNER,
+                organization=self.org, is_active=True,
+            )
+            for index in range(95)
+        ]
+        job = StaffInvitationJob.objects.create(requested_by=self.org_admin, total_count=len(users))
+        StaffInvitation.objects.bulk_create([StaffInvitation(job=job, user=user) for user in users])
+
+        with patch('accounts.invitation_queue.send_staff_learner_invite_email') as send_email:
+            first = process_next_staff_invitation_batch(batch_size=90, minimum_interval=timedelta(hours=1))
+            waiting = process_next_staff_invitation_batch(batch_size=90, minimum_interval=timedelta(hours=1))
+            job.refresh_from_db()
+            job.last_batch_started_at = timezone.now() - timedelta(hours=2)
+            job.save(update_fields=['last_batch_started_at'])
+            second = process_next_staff_invitation_batch(batch_size=90, minimum_interval=timedelta(hours=1))
+
+        self.assertEqual(first['status'], 'batch_complete')
+        self.assertEqual(first['sent'], 90)
+        self.assertEqual(waiting['status'], 'waiting')
+        self.assertEqual(second['status'], 'complete')
+        self.assertEqual(second['sent'], 5)
+        self.assertEqual(send_email.call_count, 95)
 
     def test_org_admin_cannot_enroll_into_another_organization(self):
         upload = make_staff_upload(
@@ -5873,6 +5910,18 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         response = self.client.post(self.URL, {'file': upload}, format='multipart')
         self.assertEqual(len(response.data['created']), 0)
         self.assertFalse(User.objects.filter(email='x@other.test').exists())
+
+    def test_malformed_email_rejects_batch_before_accounts_or_invitations_are_created(self):
+        upload = make_staff_upload([
+            {'name': 'Valid Staff', 'email': 'valid@acme.test', 'level': 'Officer'},
+            {'name': 'Bad Email', 'email': 'bad@acme.test.', 'level': 'Officer'},
+        ])
+        self.auth_as(self.org_admin)
+        response = self.client.post(self.URL, {'file': upload}, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.filter(email='valid@acme.test').exists())
+        self.assertFalse(StaffInvitationJob.objects.exists())
+        self.assertIn('valid email', response.data['failed'][0]['reason'])
 
     def test_platform_admin_can_enroll_into_any_organization(self):
         upload = make_staff_upload(
@@ -5904,6 +5953,7 @@ class StaffEnrollmentApiTests(BaseAPITestCase):
         )
 
 
+@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
 class StaffManagementApiTests(BaseAPITestCase):
     """Individual staff enrollment, the searchable/paginated staff list, and
     deactivate/reactivate (accounts.views.StaffEnrollmentViewSet)."""

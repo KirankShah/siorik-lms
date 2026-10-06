@@ -229,9 +229,8 @@ export function StaffEnrollmentPage() {
     <div>
       <h1 className="text-lg font-semibold text-neutral-900">Staff Enrollment</h1>
       <p className="mt-1 text-sm text-neutral-500">
-        Add staff one at a time or upload a spreadsheet. Each person gets an email with a temporary password and is
-        placed at the assessment level selected — their role-based assessment then appears automatically on their
-        dashboard.
+        Add staff one at a time or upload a spreadsheet. Individual staff receive their invitation immediately; bulk
+        invitations are queued in hourly batches of up to 90. Each person is placed at the selected assessment level.
       </p>
 
       <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -345,7 +344,8 @@ export function StaffEnrollmentPage() {
               <p className="mt-1 text-sm text-neutral-500">
                 Upload the staff enrollment spreadsheet (<code className="rounded bg-neutral-100 px-1 py-0.5">.xlsx</code>{' '}
                 or <code className="rounded bg-neutral-100 px-1 py-0.5">.csv</code>). The batch is all-or-nothing. If
-                any row fails, no accounts are changed and no staff invitations are sent.
+                any row fails, no accounts are changed and no staff invitations are queued. Valid uploads create all
+                accounts immediately, then send invitations in batches of up to 90 per hour.
               </p>
               <p className="mt-2 text-sm text-amber-700">
                 Existing staff with matching emails in this organization are permanently deleted and recreated. Their
@@ -389,6 +389,12 @@ export function StaffEnrollmentPage() {
               <p className="text-sm text-emerald-700">
                 Enrolled {bulkResult.created.length} staff member{bulkResult.created.length === 1 ? '' : 's'}.
               </p>
+              {(bulkResult.queued ?? 0) > 0 && (
+                <p className="text-sm text-blue-700">
+                  Queued {bulkResult.queued} invitation{bulkResult.queued === 1 ? '' : 's'}. The system sends up to 90
+                  invitations per hour and continues with the next batch only after the previous batch succeeds.
+                </p>
+              )}
               {bulkResult.replaced > 0 && (
                 <p className="text-sm text-amber-700">
                   Replaced {bulkResult.replaced} existing staff account{bulkResult.replaced === 1 ? '' : 's'} with fresh
