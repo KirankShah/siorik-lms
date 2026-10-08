@@ -18,11 +18,11 @@ export function FillBlankTextAnswer({ questionText, values, onChange }: FillBlan
         renderBlank={(index) => (
           <input
             type="text"
-            maxLength={12}
             value={values[index] ?? ''}
             onChange={(e) => onChange(index, e.target.value)}
             placeholder="Your answer..."
-            className="mx-1 inline-block w-[12ch] rounded border border-yellow-500 bg-yellow-200 px-2 py-0.5 text-sm align-middle text-neutral-900 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            size={Math.min(Math.max((values[index] ?? '').length + 1, 12), 40)}
+            className="mx-1 inline-block min-w-[12ch] max-w-full rounded border border-yellow-500 bg-yellow-200 px-2 py-0.5 text-sm align-middle text-neutral-900 focus:outline-none focus:ring-2 focus:ring-yellow-500"
           />
         )}
       />
