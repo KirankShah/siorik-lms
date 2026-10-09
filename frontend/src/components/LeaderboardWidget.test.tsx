@@ -40,6 +40,6 @@ describe('LeaderboardWidget', () => {
   it('explains why an eligible ranking is not available yet', () => {
     render(<LeaderboardWidget entries={[]} />)
 
-    expect(screen.getByText(/Complete all assigned course quizzes and a Level Assessment/)).toBeInTheDocument()
+    expect(screen.getByText(/Complete a course quiz and a Level Assessment/)).toBeInTheDocument()
   })
 })

@@ -7492,9 +7492,17 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(entry.knowledge_score, Decimal('62'))
         self.assertEqual(entry.level_assessments_passed_count, 1)
 
-    def test_missing_required_quiz_keeps_learner_off_current_knowledge_board(self):
+    def test_unattempted_path_quiz_is_omitted_from_current_average(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
+        self.level_attempt(Decimal('80'), now)
+        entry = recalculate_leaderboard_entry(self.learner)
+
+        self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
+        self.assertEqual(entry.knowledge_score, Decimal('80'))
+
+    def test_no_course_quiz_attempt_keeps_learner_off_current_knowledge_board(self):
+        now = timezone.now()
         self.level_attempt(Decimal('80'), now)
         recalculate_leaderboard_entry(self.learner)
         self.auth_as(self.learner)

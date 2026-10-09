@@ -60,11 +60,12 @@ def _average(values):
 def _current_knowledge_metrics(user, path_course_ids):
     """Return the inputs and final score for the current-knowledge board.
 
-    Every quiz in the learner's effective path must have been attempted. For
-    each quiz we use the most recently submitted attempt, not the historical
-    best. The level component likewise uses the most recently submitted
-    attempt for the learner's currently assigned assessment level, whether it
-    passed or failed. This makes a reassessment an honest current snapshot.
+    For each attempted quiz in the learner's effective path we use the most
+    recently submitted attempt, not the historical best. Unattempted quizzes
+    are omitted from this current snapshot; certificate eligibility retains
+    its separate, stricter all-quizzes rule. The level component likewise uses
+    the most recently submitted attempt for the learner's currently assigned
+    assessment level, whether it passed or failed.
     """
     required_quiz_ids = list(
         Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids)
@@ -77,9 +78,8 @@ def _current_knowledge_metrics(user, path_course_ids):
             .order_by('-submitted_at', '-id')
             .first()
         )
-        if latest_attempt is None:
-            return None, None, None, None
-        latest_quiz_scores.append(latest_attempt.score_percent)
+        if latest_attempt is not None:
+            latest_quiz_scores.append(latest_attempt.score_percent)
 
     if not latest_quiz_scores or not user.assessment_level:
         return None, None, None, None

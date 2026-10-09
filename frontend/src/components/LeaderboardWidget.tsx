@@ -84,7 +84,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           <p className="p-6 text-sm text-neutral-500">Loading…</p>
         ) : entries.length === 0 ? (
           <p className="p-6 text-sm text-neutral-500">
-            Complete all assigned course quizzes and a Level Assessment to join the leaderboard.
+            Complete a course quiz and a Level Assessment to join the leaderboard.
           </p>
         ) : (
           <div className="overflow-x-auto">
