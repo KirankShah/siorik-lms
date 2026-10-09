@@ -1729,6 +1729,23 @@ class MultipleAnswerScoringTests(BaseAPITestCase):
     def _ma_answer(self, response):
         return next(a for a in response.data['answers'] if a['question'] == self.ma_question.id)
 
+    def assert_answer_key_hidden(self, response):
+        self.assertFalse(response.data['answers_revealed'])
+        answer = self._ma_answer(response)
+        self.assertFalse(answer['is_correct'])
+        self.assertEqual(answer['correct_choice_ids'], [])
+        self.assertEqual(answer['explanation'], '')
+        self.assertEqual(answer['feedback_correct'], '')
+        self.assertEqual(answer['feedback_incorrect'], '')
+
+    def assert_answer_key_revealed(self, response):
+        self.assertTrue(response.data['answers_revealed'])
+        answer = self._ma_answer(response)
+        self.assertEqual(set(answer['correct_choice_ids']), {self.red.id, self.blue.id})
+        self.assertEqual(answer['explanation'], 'Red, blue, and yellow are the primary colors.')
+        self.assertEqual(answer['feedback_correct'], 'Nice — you got every primary color.')
+        self.assertEqual(answer['feedback_incorrect'], 'Not quite — check which ones are true primaries.')
+
     def test_selecting_both_correct_options_scores_correct(self):
         response = self._submit([self.red.id, self.blue.id])
         self.assertEqual(response.status_code, 201)
@@ -1755,11 +1772,35 @@ class MultipleAnswerScoringTests(BaseAPITestCase):
 
     def test_result_reveals_correct_choice_ids_explanation_and_feedback(self):
         response = self._submit([self.red.id, self.blue.id])
-        answer = self._ma_answer(response)
-        self.assertEqual(set(answer['correct_choice_ids']), {self.red.id, self.blue.id})
-        self.assertEqual(answer['explanation'], 'Red, blue, and yellow are the primary colors.')
-        self.assertEqual(answer['feedback_correct'], 'Nice — you got every primary color.')
-        self.assertEqual(answer['feedback_incorrect'], 'Not quite — check which ones are true primaries.')
+        self.assert_answer_key_revealed(response)
+
+    def test_failed_attempt_hides_answer_key_until_per_quiz_limit_is_exhausted(self):
+        first = self._submit([self.green.id])
+        self.assert_answer_key_hidden(first)
+
+        final = self._submit([self.green.id])
+        self.assert_answer_key_revealed(final)
+
+    def test_organization_override_controls_when_answer_key_is_revealed(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_quiz_attempts=3)
+
+        first = self._submit([self.green.id])
+        second = self._submit([self.green.id])
+        self.assert_answer_key_hidden(first)
+        self.assert_answer_key_hidden(second)
+
+        final = self._submit([self.green.id])
+        self.assert_answer_key_revealed(final)
+
+    def test_failed_unlimited_attempt_never_reveals_answer_key(self):
+        self.quiz.max_attempts = None
+        self.quiz.save(update_fields=['max_attempts'])
+
+        first = self._submit([self.green.id])
+        second = self._submit([self.green.id])
+
+        self.assert_answer_key_hidden(first)
+        self.assert_answer_key_hidden(second)
 
     def test_quiz_detail_still_hides_answer_key_from_learner_before_submitting(self):
         # The reveal lives on the QuizAttempt/QuizAnswer response only — the

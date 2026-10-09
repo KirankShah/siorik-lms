@@ -60,6 +60,7 @@ function buildResult(overrides: Partial<QuizAttemptResult['answers'][number]> = 
     score_percent: '100.00',
     passed: true,
     attempt_number: 1,
+    answers_revealed: true,
     answers: [
       {
         id: 900,
@@ -203,5 +204,31 @@ describe('QuizPlayer results screen has no inline retake/certificate actions', (
 
     expect(screen.queryByText('Retake Quiz')).not.toBeInTheDocument()
     expect(screen.queryByText('Download Certificate')).not.toBeInTheDocument()
+  })
+})
+
+describe('QuizPlayer delayed answer disclosure', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+  })
+
+  it('shows correctness but not the answer key or explanation while another attempt remains', async () => {
+    const result = buildResult({
+      is_correct: false,
+      correct_choice_ids: [],
+      explanation: '',
+      feedback_correct: '',
+      feedback_incorrect: '',
+    })
+    result.passed = false
+    result.score_percent = '0.00'
+    result.answers_revealed = false
+
+    await submitQuiz(result)
+
+    expect(screen.getByText('Incorrect')).toBeInTheDocument()
+    expect(screen.getByText(/Correct answers and explanations will be shown/)).toBeInTheDocument()
+    expect(screen.queryByText('(correct answer)')).not.toBeInTheDocument()
+    expect(screen.queryByText(LONG_UNBROKEN_EXPLANATION)).not.toBeInTheDocument()
   })
 })

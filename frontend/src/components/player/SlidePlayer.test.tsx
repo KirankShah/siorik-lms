@@ -128,6 +128,7 @@ describe('Next-button gating on QUIZ and SCENARIO slides', () => {
       score_percent: '0.00',
       passed: false,
       attempt_number: 1,
+      answers_revealed: false,
       answers: [],
     })
 

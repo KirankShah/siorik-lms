@@ -402,6 +402,13 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
           )}
         </div>
 
+        {!result.answers_revealed && (
+          <p className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+            You can see which responses were correct or incorrect. Correct answers and explanations will be shown
+            after you pass or use your final attempt.
+          </p>
+        )}
+
         <div className="mt-6 space-y-4">
           {quiz.questions.map((question) => {
             const answer = result.answers.find((a) => a.question === question.id)
@@ -422,30 +429,57 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                   </span>
                 </div>
                 {question.question_type === 'ORDERING' ? (
-                  <ol className="mt-2 space-y-1">
-                    {getOrderingValue(question).map((id, i) => {
-                      const item = question.choices.find((c) => c.id === id)
-                      return (
-                        <li key={id} className="flex items-center gap-2 text-sm text-neutral-700">
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-medium text-neutral-500">
-                            {i + 1}
-                          </span>
-                          {item?.choice_text}
-                        </li>
-                      )
-                    })}
-                  </ol>
+                  <div className="mt-2 space-y-3">
+                    <div>
+                      <p className="text-xs font-medium text-neutral-500">Your order</p>
+                      <ol className="mt-1 space-y-1">
+                        {getOrderingValue(question).map((id, i) => {
+                          const item = question.choices.find((c) => c.id === id)
+                          return (
+                            <li key={id} className="flex items-center gap-2 text-sm text-neutral-700">
+                              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-medium text-neutral-500">
+                                {i + 1}
+                              </span>
+                              {item?.choice_text}
+                            </li>
+                          )
+                        })}
+                      </ol>
+                    </div>
+                    {result.answers_revealed && !answer?.is_correct && answer?.correct_order && (
+                      <div>
+                        <p className="text-xs font-medium text-emerald-700">Correct order</p>
+                        <ol className="mt-1 space-y-1">
+                          {answer.correct_order.map((id, i) => {
+                            const item = question.choices.find((c) => c.id === id)
+                            return (
+                              <li key={id} className="flex items-center gap-2 text-sm text-emerald-700">
+                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-xs font-medium">
+                                  {i + 1}
+                                </span>
+                                {item?.choice_text}
+                              </li>
+                            )
+                          })}
+                        </ol>
+                      </div>
+                    )}
+                  </div>
                 ) : question.question_type === 'MATCHING' ? (
                   <ul className="mt-2 space-y-1">
                     {question.choices.map((choice) => {
                       const assignments = getMatchingValue(question)
                       const placedTargetId = Object.entries(assignments).find(([, itemId]) => itemId === choice.id)?.[0]
-                      const isCorrect = placedTargetId !== undefined && Number(placedTargetId) === choice.id
+                      const isCorrect = result.answers_revealed
+                        && placedTargetId !== undefined
+                        && Number(placedTargetId) === choice.id
                       const placedTarget =
                         placedTargetId !== undefined
                           ? question.match_targets?.find((t) => t.id === Number(placedTargetId))
                           : undefined
-                      const correctTarget = question.match_targets?.find((t) => t.id === choice.id)
+                      const correctTarget = result.answers_revealed
+                        ? question.match_targets?.find((t) => t.id === choice.id)
+                        : undefined
                       return (
                         <li
                           key={choice.id}
@@ -597,10 +631,9 @@ export function QuizPlayer({ quizSummary, onSubmitted }: QuizPlayerProps) {
                     </ul>
                   </div>
                 ) : (
-                  // The quiz itself never sends choice.is_correct to a learner (it
-                  // would leak the answer key while the quiz is in progress). Once
-                  // there's a result, the attempt's own answer carries the correct
-                  // choice ids for this question instead — safe to show now.
+                  // The attempt carries correct ids only after a pass or the
+                  // final allowed attempt. Earlier failed attempts still show
+                  // the learner's selection and Correct/Incorrect status.
                   <ChoiceQuestionResult
                     choices={question.choices}
                     selectedIds={answer?.selected_choices ?? []}

@@ -241,7 +241,18 @@ class QuizViewSet(
         if Enrollment.objects.filter(user=request.user, course=course, status=Enrollment.Status.COMPLETED).exists():
             try_issue_learning_path_certificate(request.user)
 
-        return Response(QuizAttemptSerializer(attempt).data, status=201)
+        # Keep the per-question correct/incorrect result visible after every
+        # submission, but reveal the answer key and explanatory feedback only
+        # after a pass or once the learner has used the final allowed attempt.
+        # With unlimited attempts, a failed submission always has another try,
+        # so its answer key stays hidden.
+        answers_revealed = attempt.passed or (
+            effective_max_attempts is not None and attempt.attempt_number >= effective_max_attempts
+        )
+        return Response(
+            QuizAttemptSerializer(attempt, context={'answers_revealed': answers_revealed}).data,
+            status=201,
+        )
 
 
 class QuestionViewSet(viewsets.ModelViewSet):

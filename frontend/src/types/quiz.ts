@@ -143,8 +143,8 @@ export interface QuizAnswerResult {
   // Only present for FILL_BLANK/WORD_BANK — {blank_index: token id}.
   word_bank_placements: Record<string, number>
   is_correct: boolean
-  // Answer-key data revealed only for this specific answer, once an attempt
-  // exists — see backend assessments.serializers.QuizAnswerSerializer.
+  // Answer-key data remains empty until the learner passes or uses the final
+  // permitted attempt — see backend QuizAnswerSerializer.
   correct_choice_ids: number[]
   // Only present for ORDERING — the correct choice-id sequence.
   correct_order: number[] | null
@@ -170,6 +170,9 @@ export interface QuizAttemptResult {
   score_percent: string
   passed: boolean
   attempt_number: number
+  // True only after a pass or the final permitted attempt. is_correct is
+  // still available on every answer while answer-key fields remain hidden.
+  answers_revealed: boolean
   answers: QuizAnswerResult[]
 }
 

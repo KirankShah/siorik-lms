@@ -380,21 +380,18 @@ class QuizSubmitSerializer(serializers.Serializer):
 
 
 class QuizAnswerSerializer(serializers.ModelSerializer):
-    # The quiz itself (QuizSerializer/QuestionSerializer/ChoiceSerializer)
-    # strips is_correct/explanation/feedback for learners so the answer key
-    # isn't visible while a quiz is in progress. Once an attempt exists,
-    # though, the learner has already committed their answers, so it's safe
-    # — and it's what the results screen needs — to surface the answer key
-    # for this question right here, scoped to just this one attempt/answer.
+    # is_correct is always returned so the learner knows how each response
+    # was graded. Answer-key fields are conditional: a failed attempt with a
+    # retry remaining must not disclose the answer for the next attempt.
     correct_choice_ids = serializers.SerializerMethodField()
     correct_order = serializers.SerializerMethodField()
     correct_placements = serializers.SerializerMethodField()
     correct_region_ids = serializers.SerializerMethodField()
     correct_fill_blank_text = serializers.SerializerMethodField()
     correct_word_bank_placements = serializers.SerializerMethodField()
-    explanation = serializers.CharField(source='question.explanation', read_only=True)
-    feedback_correct = serializers.CharField(source='question.feedback_correct', read_only=True)
-    feedback_incorrect = serializers.CharField(source='question.feedback_incorrect', read_only=True)
+    explanation = serializers.SerializerMethodField()
+    feedback_correct = serializers.SerializerMethodField()
+    feedback_incorrect = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAnswer
@@ -418,32 +415,43 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             'feedback_incorrect',
         ]
 
+    def answers_revealed(self):
+        return bool(self.context.get('answers_revealed', False))
+
     def get_correct_choice_ids(self, obj):
+        if not self.answers_revealed():
+            return []
         return list(obj.question.choices.filter(is_correct=True).values_list('id', flat=True))
 
     def get_correct_order(self, obj):
         # Only meaningful for ORDERING — `order` is never exposed pre-submit
         # (see ChoiceSerializer/QuestionSerializer), so this is the one place
         # the correct sequence is safe to reveal, scoped to this one answer.
-        if obj.question.question_type != Question.QuestionType.ORDERING:
+        if not self.answers_revealed() or obj.question.question_type != Question.QuestionType.ORDERING:
             return None
         return list(obj.question.choices.order_by('order', 'id').values_list('id', flat=True))
 
     def get_correct_placements(self, obj):
         # Only meaningful for CATEGORIZE — correct_bucket is never exposed
         # pre-submit (see CategorizeItemSerializer), same reasoning as above.
-        if obj.question.question_type != Question.QuestionType.CATEGORIZE:
+        if not self.answers_revealed() or obj.question.question_type != Question.QuestionType.CATEGORIZE:
             return None
         return {item.id: item.correct_bucket_id for item in obj.question.categorize_items.all()}
 
     def get_correct_region_ids(self, obj):
+        if not self.answers_revealed():
+            return []
         return list(obj.question.hotspot_regions.filter(is_correct=True).values_list('id', flat=True))
 
     def get_correct_fill_blank_text(self, obj):
         # Only meaningful for FILL_BLANK/TEXT_INPUT — accepted answers are
         # never exposed pre-submit (see ChoiceSerializer), same reasoning.
         question = obj.question
-        if question.question_type != Question.QuestionType.FILL_BLANK or question.fill_blank_mode != Question.FillBlankMode.TEXT_INPUT:
+        if (
+            not self.answers_revealed()
+            or question.question_type != Question.QuestionType.FILL_BLANK
+            or question.fill_blank_mode != Question.FillBlankMode.TEXT_INPUT
+        ):
             return None
         accepted = {}
         for choice in question.choices.all():
@@ -455,7 +463,11 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
         # Only meaningful for FILL_BLANK/WORD_BANK — correct_blank_index is
         # never exposed pre-submit (see WordBankTokenSerializer).
         question = obj.question
-        if question.question_type != Question.QuestionType.FILL_BLANK or question.fill_blank_mode != Question.FillBlankMode.WORD_BANK:
+        if (
+            not self.answers_revealed()
+            or question.question_type != Question.QuestionType.FILL_BLANK
+            or question.fill_blank_mode != Question.FillBlankMode.WORD_BANK
+        ):
             return None
         return {
             token.correct_blank_index: token.id
@@ -463,9 +475,19 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             if token.correct_blank_index is not None
         }
 
+    def get_explanation(self, obj):
+        return obj.question.explanation if self.answers_revealed() else ''
+
+    def get_feedback_correct(self, obj):
+        return obj.question.feedback_correct if self.answers_revealed() else ''
+
+    def get_feedback_incorrect(self, obj):
+        return obj.question.feedback_incorrect if self.answers_revealed() else ''
+
 
 class QuizAttemptSerializer(serializers.ModelSerializer):
     answers = QuizAnswerSerializer(many=True, read_only=True)
+    answers_revealed = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAttempt
@@ -478,8 +500,12 @@ class QuizAttemptSerializer(serializers.ModelSerializer):
             'score_percent',
             'passed',
             'attempt_number',
+            'answers_revealed',
             'answers',
         ]
+
+    def get_answers_revealed(self, obj):
+        return bool(self.context.get('answers_revealed', False))
 
 
 class GradingQuestionSerializer(serializers.ModelSerializer):
