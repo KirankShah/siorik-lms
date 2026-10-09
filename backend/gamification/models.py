@@ -17,6 +17,15 @@ class LeaderboardEntry(models.Model):
     total_points = models.PositiveIntegerField(default=0)
     courses_completed_count = models.PositiveIntegerField(default=0)
     average_quiz_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Current-knowledge leaderboard fields. Unlike total_points (a cumulative
+    # achievement measure), these deliberately use the learner's latest quiz
+    # and level-assessment results so a later reassessment can move the score
+    # up or down. Null means the learner has not yet completed every required
+    # input needed for a fair score.
+    current_course_quiz_average = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    latest_level_assessment_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    knowledge_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    last_assessed_at = models.DateTimeField(null=True, blank=True)
     # Distinct AssessmentLevels passed at least once — see
     # gamification.services.recalculate_leaderboard_entry for why this counts
     # the level, not the attempt (a retake of an already-passed level doesn't
@@ -28,7 +37,7 @@ class LeaderboardEntry(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-total_points', '-average_quiz_score']
+        ordering = ['-knowledge_score', '-current_course_quiz_average', '-last_assessed_at']
 
     def __str__(self):
         return f'{self.user} - {self.total_points} pts'

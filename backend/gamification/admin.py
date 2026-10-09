@@ -11,6 +11,9 @@ class LeaderboardEntryAdmin(admin.ModelAdmin):
         'total_points',
         'courses_completed_count',
         'average_quiz_score',
+        'current_course_quiz_average',
+        'latest_level_assessment_score',
+        'knowledge_score',
         'certificates_earned_count',
         'updated_at',
     )

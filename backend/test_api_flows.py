@@ -7433,6 +7433,113 @@ class LeaderboardLevelAssessmentIntegrationTests(BaseAPITestCase):
         self.assertEqual(other_entry.total_points, LEVEL_ASSESSMENT_PASS_POINTS)
 
 
+class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
+    """Latest results drive the current-knowledge ranking without changing certificates or achievement points."""
+
+    def setUp(self):
+        super().setUp()
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+        self.level = configure_assessment_level(self.org, User.AssessmentLevel.OFFICER, questions_per_attempt=1)
+        self.course = Course.objects.create(
+            title='Current Knowledge', slug='current-knowledge', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, path_order=1, is_published=True,
+        )
+        module = Module.objects.create(course=self.course, title='Module', order=1)
+        lesson = Lesson.objects.create(module=module, title='Lesson', order=1)
+        slide_one = Slide.objects.create(lesson=lesson, title='Quiz 1', slide_type=Slide.SlideType.QUIZ, order=1)
+        slide_two = Slide.objects.create(lesson=lesson, title='Quiz 2', slide_type=Slide.SlideType.QUIZ, order=2)
+        self.quiz_one = Quiz.objects.create(slide=slide_one, title='Quiz 1')
+        self.quiz_two = Quiz.objects.create(slide=slide_two, title='Quiz 2')
+
+    def quiz_attempt(self, quiz, score, submitted_at):
+        return QuizAttempt.objects.create(
+            user=self.learner, quiz=quiz,
+            attempt_number=QuizAttempt.objects.filter(user=self.learner, quiz=quiz).count() + 1,
+            score_percent=score, passed=score >= 70, submitted_at=submitted_at,
+        )
+
+    def level_attempt(self, score, submitted_at):
+        return LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=self.level, questions_drawn=[],
+            score_percent=score, passed=score >= 70, submitted_at=submitted_at,
+        )
+
+    def test_knowledge_score_uses_latest_quiz_attempts_and_latest_level_attempt(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now - timedelta(days=4))
+        self.quiz_attempt(self.quiz_one, Decimal('60'), now - timedelta(days=1))
+        self.quiz_attempt(self.quiz_two, Decimal('100'), now - timedelta(days=2))
+        self.level_attempt(Decimal('95'), now - timedelta(days=3))
+        latest_level = self.level_attempt(Decimal('70'), now)
+
+        entry = recalculate_leaderboard_entry(self.learner)
+
+        self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
+        self.assertEqual(entry.latest_level_assessment_score, Decimal('70'))
+        self.assertEqual(entry.knowledge_score, Decimal('74'))
+        self.assertEqual(entry.last_assessed_at, latest_level.submitted_at)
+
+    def test_latest_failed_assessment_lowers_current_score_without_removing_historical_pass(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('80'), now - timedelta(days=3))
+        self.quiz_attempt(self.quiz_two, Decimal('80'), now - timedelta(days=3))
+        self.level_attempt(Decimal('90'), now - timedelta(days=2))
+        self.level_attempt(Decimal('50'), now)
+
+        entry = recalculate_leaderboard_entry(self.learner)
+
+        self.assertEqual(entry.knowledge_score, Decimal('62'))
+        self.assertEqual(entry.level_assessments_passed_count, 1)
+
+    def test_missing_required_quiz_keeps_learner_off_current_knowledge_board(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('80'), now)
+        self.level_attempt(Decimal('80'), now)
+        recalculate_leaderboard_entry(self.learner)
+        self.auth_as(self.learner)
+
+        response = self.client.get('/api/leaderboard/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_endpoint_returns_only_same_level_colleagues_in_knowledge_score_order(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('80'), now)
+        self.quiz_attempt(self.quiz_two, Decimal('80'), now)
+        self.level_attempt(Decimal('70'), now)
+        recalculate_leaderboard_entry(self.learner)
+
+        colleague = User.objects.create_user(
+            email='officer-colleague@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        QuizAttempt.objects.create(user=colleague, quiz=self.quiz_one, attempt_number=1, score_percent=90, submitted_at=now)
+        QuizAttempt.objects.create(user=colleague, quiz=self.quiz_two, attempt_number=1, score_percent=90, submitted_at=now)
+        LevelAssessmentAttempt.objects.create(
+            user=colleague, assessment_level=self.level, questions_drawn=[], score_percent=90,
+            passed=True, submitted_at=now,
+        )
+        recalculate_leaderboard_entry(colleague)
+
+        management_user = User.objects.create_user(
+            email='manager@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.MANAGEMENT,
+        )
+        LeaderboardEntry.objects.create(
+            user=management_user, organization=self.org, knowledge_score=Decimal('100'),
+            current_course_quiz_average=Decimal('100'), latest_level_assessment_score=Decimal('100'),
+            last_assessed_at=now,
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/leaderboard/')
+
+        self.assertEqual([row['user_id'] for row in response.data], [colleague.id, self.learner.id])
+        self.assertEqual(response.data[1]['assessment_level_display'], 'Officer Level')
+
+
 class ResourceFlowTests(BaseAPITestCase):
     def test_org_admin_can_upload_pdf_and_it_appears_for_same_org_learner_only(self):
         self.auth_as(self.org_admin)

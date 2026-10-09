@@ -9,6 +9,11 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
     user_id = serializers.IntegerField(source='user.id', read_only=True)
     first_name = serializers.CharField(source='user.first_name', read_only=True)
     last_name = serializers.CharField(source='user.last_name', read_only=True)
+    assessment_level = serializers.CharField(source='user.assessment_level', read_only=True)
+    assessment_level_display = serializers.SerializerMethodField()
+
+    def get_assessment_level_display(self, obj):
+        return obj.user.get_assessment_level_display() if obj.user.assessment_level else ''
 
     class Meta:
         model = LeaderboardEntry
@@ -16,9 +21,15 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
             'user_id',
             'first_name',
             'last_name',
+            'assessment_level',
+            'assessment_level_display',
             'total_points',
             'courses_completed_count',
             'average_quiz_score',
+            'current_course_quiz_average',
+            'latest_level_assessment_score',
+            'knowledge_score',
+            'last_assessed_at',
             'certificates_earned_count',
             'level_assessments_passed_count',
             'updated_at',

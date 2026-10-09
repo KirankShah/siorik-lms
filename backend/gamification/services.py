@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.db.models import Max
 from django.utils import timezone
 
-from assessments.models import QuizAttempt
+from assessments.models import Quiz, QuizAttempt
 from certificates.models import Certificate
 from courses.models import Enrollment, LevelCourseAssignment
 from levelassessments.models import LevelAssessmentAttempt
@@ -27,6 +27,9 @@ LEVEL_ASSESSMENT_PASS_POINTS = round(COURSE_COMPLETION_POINTS * LEVEL_ASSESSMENT
 # single lucky attempt doesn't trigger it.
 HIGH_ACHIEVER_MIN_QUIZZES = 3
 HIGH_ACHIEVER_MIN_AVERAGE = Decimal('90')
+
+COURSE_QUIZ_KNOWLEDGE_WEIGHT = Decimal('0.40')
+LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT = Decimal('0.60')
 
 # Ascending consecutive-active-day thresholds that award a streak badge — the
 # only place a longer streak (7-day, 30-day, ...) needs to be added later:
@@ -52,6 +55,55 @@ def _average(values):
     if not values:
         return Decimal('0')
     return sum(values) / len(values)
+
+
+def _current_knowledge_metrics(user, path_course_ids):
+    """Return the inputs and final score for the current-knowledge board.
+
+    Every quiz in the learner's effective path must have been attempted. For
+    each quiz we use the most recently submitted attempt, not the historical
+    best. The level component likewise uses the most recently submitted
+    attempt for the learner's currently assigned assessment level, whether it
+    passed or failed. This makes a reassessment an honest current snapshot.
+    """
+    required_quiz_ids = list(
+        Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids)
+        .values_list('id', flat=True)
+    )
+    latest_quiz_scores = []
+    for quiz_id in required_quiz_ids:
+        latest_attempt = (
+            QuizAttempt.objects.filter(user=user, quiz_id=quiz_id, submitted_at__isnull=False)
+            .order_by('-submitted_at', '-id')
+            .first()
+        )
+        if latest_attempt is None:
+            return None, None, None, None
+        latest_quiz_scores.append(latest_attempt.score_percent)
+
+    if not latest_quiz_scores or not user.assessment_level:
+        return None, None, None, None
+
+    latest_level_attempt = (
+        LevelAssessmentAttempt.objects.filter(
+            user=user,
+            assessment_level__name=user.assessment_level,
+            submitted_at__isnull=False,
+        )
+        .order_by('-submitted_at', '-id')
+        .first()
+    )
+    if latest_level_attempt is None:
+        return _average(latest_quiz_scores), None, None, None
+
+    course_average = _average(latest_quiz_scores)
+    assessment_score = latest_level_attempt.score_percent
+    knowledge_score = round(
+        course_average * COURSE_QUIZ_KNOWLEDGE_WEIGHT
+        + assessment_score * LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT,
+        2,
+    )
+    return course_average, assessment_score, knowledge_score, latest_level_attempt.submitted_at
 
 
 def recalculate_leaderboard_entry(user):
@@ -93,10 +145,10 @@ def recalculate_leaderboard_entry(user):
 
     completed_enrollments = Enrollment.objects.filter(user=user, status=Enrollment.Status.COMPLETED)
 
+    path_course_ids = learning_path_course_ids(user)
     if LevelCourseAssignment.objects.filter(
         assessment_level__organization_id=user.organization_id
     ).exists():
-        path_course_ids = learning_path_course_ids(user)
         path_scoped_enrollments = list(completed_enrollments.filter(course_id__in=path_course_ids))
     else:
         # Preserve the legacy scoring contract until this organization opts
@@ -133,6 +185,9 @@ def recalculate_leaderboard_entry(user):
         total_points += round(LEVEL_ASSESSMENT_PASS_POINTS * (best_score / 100))
 
     overall_average = _average(_best_scores_per_quiz(user))
+    current_course_average, latest_level_score, knowledge_score, last_assessed_at = _current_knowledge_metrics(
+        user, path_course_ids
+    )
 
     entry, _created = LeaderboardEntry.objects.update_or_create(
         user=user,
@@ -141,6 +196,10 @@ def recalculate_leaderboard_entry(user):
             'total_points': total_points,
             'courses_completed_count': completed_enrollments.count(),
             'average_quiz_score': overall_average,
+            'current_course_quiz_average': current_course_average,
+            'latest_level_assessment_score': latest_level_score,
+            'knowledge_score': knowledge_score,
+            'last_assessed_at': last_assessed_at,
             'certificates_earned_count': Certificate.objects.filter(user=user).count(),
             'level_assessments_passed_count': len(best_passing_scores_by_level),
         },
