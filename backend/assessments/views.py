@@ -99,7 +99,11 @@ class QuizViewSet(
         quiz = self.get_object()
 
         attempts_taken = QuizAttempt.objects.filter(user=request.user, quiz=quiz).count()
-        if quiz.max_attempts is not None and attempts_taken >= quiz.max_attempts:
+        organization_limit = None
+        if request.user.organization_id:
+            organization_limit = request.user.organization.settings.max_quiz_attempts
+        effective_max_attempts = organization_limit if organization_limit is not None else quiz.max_attempts
+        if effective_max_attempts is not None and attempts_taken >= effective_max_attempts:
             return Response({'detail': 'Maximum number of attempts reached.'}, status=400)
 
         serializer = QuizSubmitSerializer(data=request.data, context={'quiz': quiz})

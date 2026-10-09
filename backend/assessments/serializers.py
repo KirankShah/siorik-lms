@@ -38,6 +38,19 @@ class OrganizationPassMarkMixin:
             return course_organization.settings.pass_mark_percent
         return DEFAULT_PASS_MARK_PERCENT
 
+    def get_max_attempts(self, obj):
+        """Project the organization override while retaining per-quiz fallback."""
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated and request.user.organization_id:
+            organization_limit = request.user.organization.settings.max_quiz_attempts
+            return organization_limit if organization_limit is not None else obj.max_attempts
+
+        course_organization = obj.slide.lesson.module.course.organization
+        if course_organization is not None:
+            organization_limit = course_organization.settings.max_quiz_attempts
+            return organization_limit if organization_limit is not None else obj.max_attempts
+        return obj.max_attempts
+
 
 class CategoryBucketSerializer(serializers.ModelSerializer):
     class Meta:
@@ -207,6 +220,7 @@ class QuizSummarySerializer(OrganizationPassMarkMixin, serializers.ModelSerializ
     """Lightweight quiz representation for nesting under a slide, without questions."""
 
     pass_percentage = serializers.SerializerMethodField()
+    max_attempts = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
@@ -215,6 +229,7 @@ class QuizSummarySerializer(OrganizationPassMarkMixin, serializers.ModelSerializ
 
 class QuizSerializer(OrganizationPassMarkMixin, serializers.ModelSerializer):
     pass_percentage = serializers.SerializerMethodField()
+    max_attempts = serializers.SerializerMethodField()
     questions = QuestionSerializer(many=True, read_only=True)
 
     class Meta:

@@ -76,10 +76,12 @@ class OrganizationSettings(models.Model):
     # levelassessments.services.start_level_assessment_attempt.
     # max_course_retake_attempts counts only the Retake Course action itself
     # (not the original attempt) — see courses.views.EnrollmentViewSet.retake
-    # and Enrollment.retake_count. Deliberately two independent fields, not
-    # one shared cap: the two field names above reflect that same distinction.
+    # and Enrollment.retake_count. max_quiz_attempts is an optional
+    # organization-wide override for every in-course quiz; when it is null,
+    # the limit authored on each Quiz continues to apply.
     max_level_assessment_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
     max_course_retake_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+    max_quiz_attempts = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
 
     # Platform-managed commercial controls. A null seat cap means unlimited.
     # A subscription is considered configured only when both start and

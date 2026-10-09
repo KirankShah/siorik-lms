@@ -25,6 +25,9 @@ export interface OrganizationSettings {
   // what each counts.
   max_level_assessment_attempts: number | null
   max_course_retake_attempts: number | null
+  // null keeps the limit authored on each quiz; a positive value overrides
+  // every in-course quiz for learners in this organization.
+  max_quiz_attempts: number | null
   // Platform-admin-only fields are omitted entirely from org-admin responses.
   max_active_learners?: number | null
   subscription_start_date?: string | null
@@ -51,6 +54,7 @@ export type OrganizationSettingsInput = Partial<
     | 'pass_mark_percent'
     | 'max_level_assessment_attempts'
     | 'max_course_retake_attempts'
+    | 'max_quiz_attempts'
     | 'logged_in_inactive_reminder_enabled'
     | 'logged_in_inactive_reminder_frequency'
     | 'never_logged_in_reminder_enabled'

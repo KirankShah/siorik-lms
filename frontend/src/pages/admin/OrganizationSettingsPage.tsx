@@ -151,6 +151,8 @@ interface MaxAttemptsDraft {
   levelValue: string
   courseLimited: boolean
   courseValue: string
+  quizOverrideEnabled: boolean
+  quizValue: string
 }
 
 const DEFAULT_ATTEMPTS_CAP = '3'
@@ -161,12 +163,14 @@ function maxAttemptsDraftFromSettings(settings: OrganizationSettings): MaxAttemp
     levelValue: settings.max_level_assessment_attempts !== null ? String(settings.max_level_assessment_attempts) : DEFAULT_ATTEMPTS_CAP,
     courseLimited: settings.max_course_retake_attempts !== null,
     courseValue: settings.max_course_retake_attempts !== null ? String(settings.max_course_retake_attempts) : DEFAULT_ATTEMPTS_CAP,
+    quizOverrideEnabled: settings.max_quiz_attempts !== null,
+    quizValue: settings.max_quiz_attempts !== null ? String(settings.max_quiz_attempts) : DEFAULT_ATTEMPTS_CAP,
   }
 }
 
-// Unlimited/Limited toggle for each of the two independent attempt caps —
-// null (Unlimited) on the wire matches today's behavior exactly, so an org
-// that never touches this card keeps working exactly as it always has.
+// Controls for the two independent attempt caps plus the optional
+// organization-wide quiz override. A null quiz override preserves the limit
+// authored on each existing quiz, avoiding a deployment-time behavior change.
 function MaxAttemptsSettingsForm({
   settings,
   onSaved,
@@ -193,6 +197,7 @@ function MaxAttemptsSettingsForm({
       const updated = await updateOrganizationSettings(settings.id, {
         max_level_assessment_attempts: draft.levelLimited ? Number(draft.levelValue) : null,
         max_course_retake_attempts: draft.courseLimited ? Number(draft.courseValue) : null,
+        max_quiz_attempts: draft.quizOverrideEnabled ? Number(draft.quizValue) : null,
       })
       onSaved(updated)
       setSuccess(true)
@@ -207,8 +212,8 @@ function MaxAttemptsSettingsForm({
     <Card className="mt-6 max-w-xl">
       <h2 className="text-sm font-semibold text-neutral-900">Maximum Attempts</h2>
       <p className="mt-1 text-sm text-neutral-500">
-        Optional hard caps. Once a learner reaches the limit without passing, the corresponding retake action is
-        disabled with an explanation — their Final Status stays Fail either way.
+        Configure separate controls for Level Assessments, quizzes inside courses, and whole-course retakes. Each
+        limit is applied independently per learner.
       </p>
 
       {error && (
@@ -251,6 +256,41 @@ function MaxAttemptsSettingsForm({
                 min={1}
                 value={draft.levelValue}
                 onChange={(e) => setDraft({ ...draft, levelValue: e.target.value })}
+                className="w-20 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-neutral-200 p-4">
+          <p className="text-sm font-medium text-neutral-900">Course quiz attempts</p>
+          <p className="mt-1 text-xs text-neutral-500">
+            Overrides the attempt limit on every quiz for this organization's learners. Leave it unchanged to use
+            each quiz's own setting.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="flex overflow-hidden rounded-md border border-neutral-300">
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, quizOverrideEnabled: false })}
+                className={`px-3 py-1.5 text-sm transition ${!draft.quizOverrideEnabled ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Use each quiz's limit
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, quizOverrideEnabled: true })}
+                className={`px-3 py-1.5 text-sm transition ${draft.quizOverrideEnabled ? 'bg-brand-navy text-white' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}
+              >
+                Limit every quiz to X attempts
+              </button>
+            </div>
+            {draft.quizOverrideEnabled && (
+              <input
+                type="number"
+                min={1}
+                value={draft.quizValue}
+                onChange={(e) => setDraft({ ...draft, quizValue: e.target.value })}
                 className="w-20 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
               />
             )}

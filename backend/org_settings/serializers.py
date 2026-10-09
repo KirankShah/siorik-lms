@@ -22,7 +22,7 @@ class OrganizationSettingsSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'organization', 'questions_per_attempt', 'timing_mode', 'seconds_per_question',
             'total_exam_minutes', 'pass_mark_percent',
-            'max_level_assessment_attempts', 'max_course_retake_attempts',
+            'max_level_assessment_attempts', 'max_course_retake_attempts', 'max_quiz_attempts',
             'max_active_learners', 'subscription_start_date', 'subscription_duration_days',
             'org_admin_grace_period_days', 'subscription_expiry_date', 'org_admin_grace_expiry_date',
             'logged_in_inactive_reminder_enabled', 'logged_in_inactive_reminder_frequency',

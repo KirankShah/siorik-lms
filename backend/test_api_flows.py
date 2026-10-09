@@ -1596,6 +1596,27 @@ class QuizFlowTests(BaseAPITestCase):
         self.assertEqual(third.status_code, 400)
         self.assertEqual(QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz).count(), 2)
 
+    def test_organization_quiz_attempt_override_replaces_per_quiz_limit(self):
+        OrganizationSettings.objects.filter(organization=self.org).update(max_quiz_attempts=3)
+        self.auth_as(self.learner)
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+            ],
+        }
+
+        quiz_response = self.client.get(f'/api/quizzes/{self.quiz.id}/')
+        self.assertEqual(quiz_response.data['max_attempts'], 3)
+
+        for _ in range(3):
+            response = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+            self.assertEqual(response.status_code, 201)
+        blocked = self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz).count(), 3)
+
     def test_submit_rejects_choice_from_a_different_question(self):
         self.auth_as(self.learner)
         payload = {
@@ -5419,21 +5440,27 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('total_exam_minutes', response.data)
 
-    def test_max_attempts_default_to_unlimited_and_are_independently_settable(self):
+    def test_attempt_settings_default_unset_and_are_independently_settable(self):
         settings_obj = OrganizationSettings.objects.get(organization=self.org)
         self.assertIsNone(settings_obj.max_level_assessment_attempts)
         self.assertIsNone(settings_obj.max_course_retake_attempts)
+        self.assertIsNone(settings_obj.max_quiz_attempts)
 
         self.auth_as(self.org_admin)
         response = self.client.patch(
             f'/api/organization-settings/{settings_obj.id}/',
-            {'max_level_assessment_attempts': 3, 'max_course_retake_attempts': None},
+            {
+                'max_level_assessment_attempts': 3,
+                'max_course_retake_attempts': None,
+                'max_quiz_attempts': 4,
+            },
             format='json',
         )
         self.assertEqual(response.status_code, 200, response.data)
         settings_obj.refresh_from_db()
         self.assertEqual(settings_obj.max_level_assessment_attempts, 3)
         self.assertIsNone(settings_obj.max_course_retake_attempts)
+        self.assertEqual(settings_obj.max_quiz_attempts, 4)
 
         # And back to unlimited.
         response = self.client.patch(
@@ -5513,13 +5540,23 @@ class OrganizationSettingsApiTests(BaseAPITestCase):
         mine = OrganizationSettings.objects.get(organization=self.org)
         theirs = OrganizationSettings.objects.get(organization=self.other_org)
 
-        self.client.patch(f'/api/organization-settings/{mine.id}/', {'pass_mark_percent': 90}, format='json')
-        self.client.patch(f'/api/organization-settings/{theirs.id}/', {'pass_mark_percent': 40}, format='json')
+        self.client.patch(
+            f'/api/organization-settings/{mine.id}/',
+            {'pass_mark_percent': 90, 'max_quiz_attempts': 5},
+            format='json',
+        )
+        self.client.patch(
+            f'/api/organization-settings/{theirs.id}/',
+            {'pass_mark_percent': 40, 'max_quiz_attempts': 2},
+            format='json',
+        )
 
         mine.refresh_from_db()
         theirs.refresh_from_db()
         self.assertEqual(mine.pass_mark_percent, 90)
         self.assertEqual(theirs.pass_mark_percent, 40)
+        self.assertEqual(mine.max_quiz_attempts, 5)
+        self.assertEqual(theirs.max_quiz_attempts, 2)
 
     def test_questions_per_attempt_rejected_when_it_exceeds_a_levels_question_pool(self):
         level = AssessmentLevel.objects.get(organization=self.org, name=User.AssessmentLevel.OFFICER)
