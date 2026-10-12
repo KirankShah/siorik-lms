@@ -4272,6 +4272,12 @@ class PasswordResetApiTests(BaseAPITestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn(self.learner.email, mail.outbox[0].to)
         self.assertIn('/reset-password/', mail.outbox[0].body)
+        self.assertIn('Google Chrome 109 or newer', mail.outbox[0].body)
+        self.assertEqual(len(mail.outbox[0].alternatives), 1)
+        html_body = mail.outbox[0].alternatives[0][0]
+        self.assertIn('/reset-password/', html_body)
+        self.assertIn('Microsoft Edge 109 or newer', html_body)
+        self.assertIn('copy the complete address below', html_body)
 
     def test_request_is_case_insensitive_on_email(self):
         response = self.client.post('/api/auth/password-reset/', {'email': self.learner.email.upper()})

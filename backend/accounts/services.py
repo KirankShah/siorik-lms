@@ -300,12 +300,17 @@ def send_password_reset_email(user, uid, token):
     """
     display_name = user.get_full_name() or user.email
     reset_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reset-password/{uid}/{token}/"
+    display_name_html = escape(display_name)
+    email_html = escape(user.email)
+    reset_url_html = escape(reset_url)
     subject = 'Reset your Siorik LMS password'
 
     text_body = (
         f'Dear {display_name},\n\n'
         f'We received a request to reset the password for your Siorik LMS account ({user.email}).\n\n'
         f'Reset your password: {reset_url}\n\n'
+        f'Open the link in Google Chrome 109 or newer, or Microsoft Edge 109 or newer. '
+        f'If the button opens in an older browser, copy the complete link above into an updated browser.\n\n'
         f"This link will expire soon for your security. If you didn't request this, you can safely "
         f'ignore this email — your password will not be changed.\n\n'
         f'Best regards,\n'
@@ -314,15 +319,23 @@ def send_password_reset_email(user, uid, token):
 
     html_body = f'''
 <div style="font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto;">
-  <p>Dear {display_name},</p>
-  <p>We received a request to reset the password for your Siorik LMS account (<strong>{user.email}</strong>).</p>
+  <p>Dear {display_name_html},</p>
+  <p>We received a request to reset the password for your Siorik LMS account (<strong>{email_html}</strong>).</p>
   <p>
-    <a href="{reset_url}"
+    <a href="{reset_url_html}"
        style="display: inline-block; padding: 12px 28px; background-color: {_BRAND_NAVY}; color: {_BRAND_GOLD};
               text-decoration: none; font-weight: bold; border-radius: 6px;">
       Reset Your Password &rarr;
     </a>
   </p>
+  <p>If the button opens in an older browser, copy the complete address below and paste it into
+     <strong>Google Chrome 109 or newer</strong> or <strong>Microsoft Edge 109 or newer</strong>:</p>
+  <p style="padding: 12px; background-color: #f5f5f5; border: 1px solid #d4d4d4; border-radius: 6px;
+            overflow-wrap: anywhere; word-break: break-all; user-select: all;">
+    {reset_url_html}
+  </p>
+  <p>If neither updated browser is available, please use another approved device or contact your organization's
+     IT team. Siorik LMS cannot choose which browser your email application opens.</p>
   <p>This link will expire soon for your security. If you didn't request this, you can safely ignore this
      email — your password will not be changed.</p>
   <p>

@@ -20,9 +20,98 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <style>
+      #browser-compatibility-warning[hidden] {
+        display: none !important;
+      }
+
+      #browser-compatibility-warning {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 99999;
+        box-sizing: border-box;
+        overflow: auto;
+        background: #f8fafc;
+        color: #171717;
+        font-family: Arial, Helvetica, sans-serif;
+        padding: 48px 20px;
+      }
+
+      .browser-compatibility-card {
+        max-width: 620px;
+        margin: 0 auto;
+        border: 1px solid #d4d4d4;
+        border-radius: 12px;
+        background: #ffffff;
+        padding: 32px;
+        box-shadow: 0 16px 40px rgba(3, 33, 71, 0.12);
+      }
+
+      .browser-compatibility-card h1 {
+        margin: 0 0 16px;
+        color: #032147;
+        font-size: 26px;
+        line-height: 1.25;
+      }
+
+      .browser-compatibility-card p {
+        margin: 12px 0;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      .browser-compatibility-card label {
+        display: block;
+        margin-top: 20px;
+        color: #404040;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      #browser-compatibility-url {
+        box-sizing: border-box;
+        width: 100%;
+        margin-top: 8px;
+        border: 1px solid #a3a3a3;
+        border-radius: 6px;
+        background: #fafafa;
+        color: #171717;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 14px;
+        padding: 12px;
+      }
+
+      .browser-compatibility-help {
+        border-left: 4px solid #e1b862;
+        background: #fffbeb;
+        padding: 12px 16px;
+      }
+    </style>
   </head>
   <body>
+    <section id="browser-compatibility-warning" role="alert" hidden>
+      <div class="browser-compatibility-card">
+        <h1>Your browser needs to be updated</h1>
+        <p>
+          Siorik LMS is available, but this browser is too old to run it securely. This is a browser or device
+          compatibility issue rather than a temporary LMS outage.
+        </p>
+        <p class="browser-compatibility-help">
+          Open this page in Google Chrome 109 or newer, or Microsoft Edge 109 or newer. If an updated browser is
+          unavailable on this device, please use another approved device or contact your organization's IT team.
+        </p>
+        <label for="browser-compatibility-url">Copy this complete address into an updated browser:</label>
+        <input id="browser-compatibility-url" type="text" readonly aria-label="Current page address" />
+      </div>
+    </section>
     <div id="root"></div>
+    <script src="/browser-compatibility.js"></script>
+    <script nomodule>
+      window.SiorikBrowserCompatibility && window.SiorikBrowserCompatibility.showWarning();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
