@@ -3758,7 +3758,7 @@ class CertificateTemplateRenderingTests(BaseAPITestCase):
         # flattened, recompressed JPEG created by Pillow.
         self.assertIn(b'/Font', pdf_bytes)
         self.assertIn(b'/XObject', pdf_bytes)
-        self.assertIn(b'siorik-certificate-renderer-v2', pdf_bytes)
+        self.assertIn(b'siorik-certificate-renderer-v3', pdf_bytes)
 
     def test_generate_certificate_raises_when_no_template_is_configured(self):
         CertificateTemplate.objects.all().delete()

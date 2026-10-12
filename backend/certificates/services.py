@@ -40,7 +40,11 @@ TEXT_ALIGN_ANCHORS = {
 }
 PDF_PAGE_SIZE = landscape(A4)
 DEFAULT_PDF_FONT = 'Helvetica'
-PDF_RENDERER_MARKER = 'siorik-certificate-renderer-v2'
+# Bump this marker whenever a production template upgrade must also apply to
+# PDFs already stored by an earlier renderer. The download endpoint rebuilds
+# any PDF whose marker differs, so existing learners receive the 300-DPI
+# branded template without mutating their certificate record.
+PDF_RENDERER_MARKER = 'siorik-certificate-renderer-v3'
 
 
 class CertificateIssuanceError(Exception):
