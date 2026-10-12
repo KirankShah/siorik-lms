@@ -1,3 +1,5 @@
+import io
+
 from django.http import FileResponse, Http404, JsonResponse
 from django.utils import timezone
 from rest_framework import viewsets
@@ -11,7 +13,12 @@ from core.permissions import IsAdminRole, RoleScopedQuerysetMixin
 from .models import Certificate, CertificateTemplate
 from .permissions import editable_certificate_templates_for_user
 from .serializers import CertificateSerializer, CertificateTemplateSerializer
-from .services import CertificateIssuanceError, generate_learning_path_certificate
+from .services import (
+    CertificateIssuanceError,
+    _render_certificate_pdf,
+    certificate_pdf_uses_current_renderer,
+    generate_learning_path_certificate,
+)
 
 
 class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
@@ -43,11 +50,20 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
         if not certificate.pdf_file:
             return Response({'detail': 'No PDF is available for this certificate.'}, status=404)
         try:
-            file_handle = certificate.pdf_file.open('rb')
+            with certificate.pdf_file.open('rb') as stored_pdf:
+                pdf_bytes = stored_pdf.read()
         except FileNotFoundError:
             raise Http404('Certificate PDF file is missing.')
+
+        # Certificates issued before the A4/vector renderer was introduced
+        # are upgraded in memory when downloaded. The historical database row
+        # and stored file remain untouched, while learners immediately receive
+        # the corrected printable output.
+        if not certificate_pdf_uses_current_renderer(pdf_bytes):
+            pdf_bytes = _render_certificate_pdf(certificate)
+
         return FileResponse(
-            file_handle,
+            io.BytesIO(pdf_bytes),
             content_type='application/pdf',
             as_attachment=True,
             filename=f'{certificate.certificate_number}.pdf',

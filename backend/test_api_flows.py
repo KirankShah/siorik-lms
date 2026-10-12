@@ -6,6 +6,7 @@ Run with:
 """
 import csv
 import io
+import re
 import tempfile
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +24,7 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageDraw
+from reportlab.lib.pagesizes import A4, landscape
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -1944,6 +1946,20 @@ class CertificateFlowTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/pdf')
 
+    @patch('certificates.views._render_certificate_pdf', return_value=b'%PDF corrected A4 certificate')
+    def test_download_upgrades_a_legacy_raster_pdf_in_memory(self, render_pdf):
+        self.certificate.pdf_file.save(
+            f'{self.certificate.certificate_number}-legacy.pdf',
+            SimpleUploadedFile('legacy.pdf', b'%PDF old Pillow raster certificate', content_type='application/pdf'),
+            save=True,
+        )
+        self.auth_as(self.learner)
+
+        response = self.client.get(f'/api/certificates/{self.certificate.id}/download/')
+
+        self.assertEqual(b''.join(response.streaming_content), b'%PDF corrected A4 certificate')
+        render_pdf.assert_called_once()
+
     def test_public_verify_endpoint_returns_certificate_details_without_auth(self):
         self.client.credentials()  # no auth header
         response = self.client.get(f'/verify/{self.certificate.verification_token}/')
@@ -3727,6 +3743,20 @@ class CertificateTemplateRenderingTests(BaseAPITestCase):
         certificate = generate_certificate(self.learner, self.published_org_course)
         pdf_bytes = certificate.pdf_file.read()
         self.assertTrue(pdf_bytes.startswith(b'%PDF'))
+
+        # The certificate must have a standard printable page rather than a
+        # page whose physical dimensions depend on the uploaded image's DPI.
+        media_box = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*\]', pdf_bytes)
+        self.assertIsNotNone(media_box)
+        expected_width, expected_height = landscape(A4)
+        self.assertAlmostEqual(float(media_box.group(1)), expected_width, places=2)
+        self.assertAlmostEqual(float(media_box.group(2)), expected_height, places=2)
+
+        # Text and QR are separate PDF resources; the page is no longer one
+        # flattened, recompressed JPEG created by Pillow.
+        self.assertIn(b'/Font', pdf_bytes)
+        self.assertIn(b'/XObject', pdf_bytes)
+        self.assertIn(b'siorik-certificate-renderer-v2', pdf_bytes)
 
     def test_generate_certificate_raises_when_no_template_is_configured(self):
         CertificateTemplate.objects.all().delete()

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import logging
 
@@ -9,6 +10,12 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 from PIL import Image, ImageDraw, ImageFont
+from reportlab.lib.colors import HexColor
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
 
 from assessments.models import Quiz, QuizAttempt
 from audit.models import AuditLog
@@ -31,6 +38,9 @@ TEXT_ALIGN_ANCHORS = {
     CertificateTemplate.TextAlign.CENTER: 'mm',
     CertificateTemplate.TextAlign.RIGHT: 'rm',
 }
+PDF_PAGE_SIZE = landscape(A4)
+DEFAULT_PDF_FONT = 'Helvetica'
+PDF_RENDERER_MARKER = 'siorik-certificate-renderer-v2'
 
 
 class CertificateIssuanceError(Exception):
@@ -286,57 +296,128 @@ def _draw_field(draw, image_width, image_height, text, x_percent, y_percent, fon
     draw.text((x, y), text, font=font, fill=color, anchor=TEXT_ALIGN_ANCHORS[text_align])
 
 
+def _register_pdf_font(font_file):
+    """Return a ReportLab font name for an uploaded TTF, or a safe built-in fallback."""
+    if not font_file:
+        logger.warning('CertificateTemplate field has no font_file configured; rendering with Helvetica.')
+        return DEFAULT_PDF_FONT
+
+    font_bytes = _read_field_bytes(font_file)
+    font_name = f'CertificateFont_{hashlib.sha256(font_bytes).hexdigest()[:16]}'
+    if font_name not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont(font_name, io.BytesIO(font_bytes)))
+    return font_name
+
+
+def _fit_pdf_font_size(font_name, initial_size_px, text, max_width_points, points_per_pixel):
+    """Scale a calibrated pixel font size to the PDF and shrink it to the safe area."""
+    size_px = initial_size_px
+    size_points = size_px * points_per_pixel
+    while size_px > MIN_AUTO_SHRINK_FONT_SIZE:
+        if pdfmetrics.stringWidth(text, font_name, size_points) <= max_width_points:
+            break
+        size_px -= 2
+        size_points = size_px * points_per_pixel
+    return size_points
+
+
+def _draw_pdf_field(pdf, image_box, text, x_percent, y_percent, font_name, font_size, text_align, color):
+    """Draw a calibrated field using the template's top-left percentage coordinate system."""
+    image_x, image_y, image_width, image_height = image_box
+    x = image_x + image_width * x_percent / 100
+    y_mid = image_y + image_height * (1 - y_percent / 100)
+
+    ascent, descent = pdfmetrics.getAscentDescent(font_name, font_size)
+    baseline_y = y_mid - (ascent + descent) / 2
+
+    pdf.setFillColor(HexColor(color))
+    pdf.setFont(font_name, font_size)
+    if text_align == CertificateTemplate.TextAlign.LEFT:
+        pdf.drawString(x, baseline_y, text)
+    elif text_align == CertificateTemplate.TextAlign.RIGHT:
+        pdf.drawRightString(x, baseline_y, text)
+    else:
+        pdf.drawCentredString(x, baseline_y, text)
+
+
 def _render_certificate_pdf(certificate):
     course = certificate.course
     template = _resolve_template(course, certificate.user)
 
-    image = Image.open(io.BytesIO(_read_field_bytes(template.background_image))).convert('RGB')
-    draw = ImageDraw.Draw(image)
-    width, height = image.size
-    max_text_width_px = width * (1 - 2 * TEXT_SAFE_MARGIN_PERCENT / 100)
+    background_bytes = _read_field_bytes(template.background_image)
+    with Image.open(io.BytesIO(background_bytes)) as background:
+        source_width, source_height = background.size
+
+    page_width, page_height = PDF_PAGE_SIZE
+    scale = min(page_width / source_width, page_height / source_height)
+    image_width = source_width * scale
+    image_height = source_height * scale
+    image_x = (page_width - image_width) / 2
+    image_y = (page_height - image_height) / 2
+    image_box = (image_x, image_y, image_width, image_height)
+    max_text_width_points = image_width * (1 - 2 * TEXT_SAFE_MARGIN_PERCENT / 100)
 
     learner_name = certificate.user.get_full_name() or certificate.user.email
     completion_date = certificate.issued_at.strftime('%B %d, %Y')
 
-    staff_name_font = _fit_font(
-        template.staff_name_font_file, template.staff_name_font_size, learner_name, draw, max_text_width_px
-    )
-    _draw_field(
-        draw, width, height, learner_name,
-        template.staff_name_x_percent, template.staff_name_y_percent,
-        staff_name_font, template.staff_name_text_align, template.staff_name_color,
+    staff_name_font = _register_pdf_font(template.staff_name_font_file)
+    staff_name_font_size = _fit_pdf_font_size(
+        staff_name_font, template.staff_name_font_size, learner_name, max_text_width_points, scale
     )
 
     # Not course.title — see _learning_path_completion_title: this
     # certificate represents finishing the whole Learning Path, not this
     # one (anchor) course.
     course_name_text = _learning_path_completion_title(certificate.user)
-    course_name_font = _fit_font(
-        template.course_name_font_file, template.course_name_font_size, course_name_text, draw, max_text_width_px
-    )
-    _draw_field(
-        draw, width, height, course_name_text,
-        template.course_name_x_percent, template.course_name_y_percent,
-        course_name_font, template.course_name_text_align, template.course_name_color,
+    course_name_font = _register_pdf_font(template.course_name_font_file)
+    course_name_font_size = _fit_pdf_font_size(
+        course_name_font, template.course_name_font_size, course_name_text, max_text_width_points, scale
     )
 
-    issue_date_font = _load_font(template.issue_date_font_file, template.issue_date_font_size)
-    _draw_field(
-        draw, width, height, completion_date,
-        template.issue_date_x_percent, template.issue_date_y_percent,
-        issue_date_font, template.issue_date_text_align, template.issue_date_color,
-    )
+    issue_date_font = _register_pdf_font(template.issue_date_font_file)
+    issue_date_font_size = template.issue_date_font_size * scale
 
     qr_buffer = io.BytesIO()
     qrcode.make(_build_verification_url(certificate.verification_token)).save(qr_buffer, format='PNG')
     qr_buffer.seek(0)
-    qr_size_px = max(1, round(width * template.qr_code_size_percent / 100))
-    qr_image = Image.open(qr_buffer).convert('RGBA').resize((qr_size_px, qr_size_px))
-    qr_x = round(width * template.qr_code_x_percent / 100)
-    qr_y = round(height * template.qr_code_y_percent / 100)
-    image.paste(qr_image, (qr_x, qr_y), qr_image)
 
     output = io.BytesIO()
-    image.save(output, format='PDF', resolution=200.0)
+    pdf = canvas.Canvas(output, pagesize=PDF_PAGE_SIZE, pageCompression=1)
+    pdf.setKeywords(PDF_RENDERER_MARKER)
+    pdf.drawImage(
+        ImageReader(io.BytesIO(background_bytes)), image_x, image_y,
+        width=image_width, height=image_height, preserveAspectRatio=True, mask='auto',
+    )
+
+    _draw_pdf_field(
+        pdf, image_box, learner_name,
+        template.staff_name_x_percent, template.staff_name_y_percent,
+        staff_name_font, staff_name_font_size, template.staff_name_text_align, template.staff_name_color,
+    )
+    _draw_pdf_field(
+        pdf, image_box, course_name_text,
+        template.course_name_x_percent, template.course_name_y_percent,
+        course_name_font, course_name_font_size, template.course_name_text_align, template.course_name_color,
+    )
+    _draw_pdf_field(
+        pdf, image_box, completion_date,
+        template.issue_date_x_percent, template.issue_date_y_percent,
+        issue_date_font, issue_date_font_size, template.issue_date_text_align, template.issue_date_color,
+    )
+
+    # QR positions are stored as top-left percentages, matching the calibration
+    # rectangle in the admin preview. ReportLab uses a bottom-left origin.
+    qr_size = max(1, image_width * template.qr_code_size_percent / 100)
+    qr_x = image_x + image_width * template.qr_code_x_percent / 100
+    qr_y = image_y + image_height * (1 - template.qr_code_y_percent / 100) - qr_size
+    pdf.drawImage(ImageReader(qr_buffer), qr_x, qr_y, width=qr_size, height=qr_size, mask='auto')
+
+    pdf.showPage()
+    pdf.save()
     output.seek(0)
     return output.getvalue()
+
+
+def certificate_pdf_uses_current_renderer(pdf_bytes):
+    """Identify PDFs produced by the high-quality A4 renderer."""
+    return PDF_RENDERER_MARKER.encode('ascii') in pdf_bytes
