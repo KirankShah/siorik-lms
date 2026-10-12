@@ -1945,6 +1945,8 @@ class CertificateFlowTests(BaseAPITestCase):
         response = self.client.get(f'/api/certificates/{self.certificate.id}/download/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertFalse(response.streaming)
+        self.assertTrue(response.content.startswith(b'%PDF'))
 
     @patch('certificates.views._render_certificate_pdf', return_value=b'%PDF corrected A4 certificate')
     def test_download_upgrades_a_legacy_raster_pdf_in_memory(self, render_pdf):
@@ -1957,7 +1959,7 @@ class CertificateFlowTests(BaseAPITestCase):
 
         response = self.client.get(f'/api/certificates/{self.certificate.id}/download/')
 
-        self.assertEqual(b''.join(response.streaming_content), b'%PDF corrected A4 certificate')
+        self.assertEqual(response.content, b'%PDF corrected A4 certificate')
         render_pdf.assert_called_once()
 
     def test_public_verify_endpoint_returns_certificate_details_without_auth(self):

@@ -1,6 +1,4 @@
-import io
-
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -62,12 +60,13 @@ class CertificateViewSet(RoleScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet)
         if not certificate_pdf_uses_current_renderer(pdf_bytes):
             pdf_bytes = _render_certificate_pdf(certificate)
 
-        return FileResponse(
-            io.BytesIO(pdf_bytes),
-            content_type='application/pdf',
-            as_attachment=True,
-            filename=f'{certificate.certificate_number}.pdf',
-        )
+        # This is an in-memory document, so use a regular HttpResponse.
+        # FileResponse asks the WSGI server for a real file descriptor; the
+        # production LiteSpeed/LSAPI adapter calls fileno(), which BytesIO
+        # deliberately does not implement.
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{certificate.certificate_number}.pdf"'
+        return response
 
 
 class CertificateTemplateViewSet(viewsets.ModelViewSet):
