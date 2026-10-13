@@ -7617,16 +7617,23 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
         self.assertEqual(entry.knowledge_score, Decimal('80'))
 
-    def test_no_course_quiz_attempt_keeps_learner_off_current_knowledge_board(self):
+    def test_no_course_quiz_attempt_keeps_learner_unranked_but_reports_their_level_result(self):
         now = timezone.now()
-        self.level_attempt(Decimal('80'), now)
-        recalculate_leaderboard_entry(self.learner)
-        self.auth_as(self.learner)
+        level = self.level_attempt(Decimal('80'), now)
+        entry = recalculate_leaderboard_entry(self.learner)
 
+        self.assertIsNone(entry.current_course_quiz_average)
+        self.assertEqual(entry.latest_level_assessment_score, Decimal('80'))
+        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.last_assessed_at, level.submitted_at)
+
+        self.auth_as(self.learner)
         response = self.client.get('/api/leaderboard/')
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [])
+        self.assertEqual([row['user_id'] for row in response.data], [self.learner.id])
+        self.assertIsNone(response.data[0]['knowledge_score'])
+        self.assertEqual(response.data[0]['latest_level_assessment_score'], '80.00')
 
     def test_endpoint_returns_only_same_level_colleagues_in_knowledge_score_order(self):
         now = timezone.now()
@@ -7663,16 +7670,12 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual([row['user_id'] for row in response.data], [colleague.id, self.learner.id])
         self.assertEqual(response.data[1]['assessment_level_display'], 'Officer Level')
 
-    def test_endpoint_includes_unassessed_same_org_learner_but_never_another_organization(self):
+    def test_endpoint_returns_own_unscored_row_but_never_unscored_colleagues_or_another_organization(self):
         now = timezone.now()
-        self.learner.assessment_level = User.AssessmentLevel.OFFICER
-        self.learner.save(update_fields=['assessment_level'])
 
-        # Six assessed learners, including the caller, make the caller rank
-        # sixth. The seventh same-organization learner has quiz data but no
-        # level-assessment result and must remain visible as unassessed without
-        # taking a ranked place. A high-scoring foreign-organization row must
-        # never be serialized.
+        # Five scored colleagues outrank the caller, who is sixth. An
+        # unscored colleague with partial results and a high-scoring
+        # foreign-organization learner must never be serialized.
         same_org_learners = [self.learner]
         for index in range(5):
             same_org_learners.append(User.objects.create_user(
@@ -7680,18 +7683,18 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
                 organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
             ))
         for index, learner in enumerate(same_org_learners):
-            score = Decimal(40 + index * 10) if learner == self.learner else Decimal(100 - index * 5)
+            score = Decimal(40) if learner == self.learner else Decimal(100 - index * 5)
             LeaderboardEntry.objects.create(
                 user=learner, organization=self.org, current_course_quiz_average=score,
                 latest_level_assessment_score=score, knowledge_score=score, last_assessed_at=now,
             )
 
-        unassessed = User.objects.create_user(
-            email='leaderboard-unassessed@example.com', password='pass12345', role=User.Role.LEARNER,
+        unscored_colleague = User.objects.create_user(
+            email='leaderboard-unscored@example.com', password='pass12345', role=User.Role.LEARNER,
             organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
         )
         LeaderboardEntry.objects.create(
-            user=unassessed, organization=self.org, current_course_quiz_average=Decimal('90'),
+            user=unscored_colleague, organization=self.org, current_course_quiz_average=Decimal('90'),
             latest_level_assessment_score=None, knowledge_score=None, last_assessed_at=None,
         )
 
@@ -7708,19 +7711,25 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         response = self.client.get('/api/leaderboard/')
 
         self.assertEqual(response.status_code, 200)
-        rows_by_id = {row['user_id']: row for row in response.data}
-        with self.subTest('unassessed same-organization learner is returned without a score'):
-            self.assertIn(unassessed.id, rows_by_id)
-            self.assertIsNone(rows_by_id[unassessed.id]['knowledge_score'])
+        returned_ids = [row['user_id'] for row in response.data]
+        with self.subTest('scored rows are ordered by descending Knowledge Score'):
+            self.assertEqual(returned_ids, [*(learner.id for learner in same_org_learners[1:]), self.learner.id])
+        with self.subTest('unscored colleague is excluded'):
+            self.assertNotIn(unscored_colleague.id, returned_ids)
         with self.subTest('foreign-organization learner is excluded'):
-            self.assertNotIn(foreign_learner.id, rows_by_id)
-        ranked_rows = [row for row in response.data if row['knowledge_score'] is not None]
-        with self.subTest('scored learners are ordered by descending Knowledge Score'):
-            self.assertEqual(
-                [row['user_id'] for row in ranked_rows],
-                [*(learner.id for learner in same_org_learners[1:]), self.learner.id],
-            )
+            self.assertNotIn(foreign_learner.id, returned_ids)
 
+        with self.subTest('unscored caller still receives only their own row among unscored rows'):
+            self.auth_as(unscored_colleague)
+            response = self.client.get('/api/leaderboard/')
+            rows_by_id = {row['user_id']: row for row in response.data}
+            self.assertIn(unscored_colleague.id, rows_by_id)
+            self.assertIsNone(rows_by_id[unscored_colleague.id]['knowledge_score'])
+            self.assertEqual(
+                [row['user_id'] for row in response.data if row['knowledge_score'] is None],
+                [unscored_colleague.id],
+            )
+            self.assertNotIn(foreign_learner.id, rows_by_id)
 
 class ResourceFlowTests(BaseAPITestCase):
     def test_org_admin_can_upload_pdf_and_it_appears_for_same_org_learner_only(self):

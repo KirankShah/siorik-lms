@@ -66,6 +66,10 @@ def _current_knowledge_metrics(user, path_course_ids):
     its separate, stricter all-quizzes rule. The level component likewise uses
     the most recently submitted attempt for the learner's currently assigned
     assessment level, whether it passed or failed.
+
+    Each input is reported on its own even when the other is missing, so the
+    learner's own dashboard can say which one is outstanding. knowledge_score
+    stays null until both exist, which is what keeps a learner unranked.
     """
     required_quiz_ids = list(
         Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids)
@@ -81,9 +85,10 @@ def _current_knowledge_metrics(user, path_course_ids):
         if latest_attempt is not None:
             latest_quiz_scores.append(latest_attempt.score_percent)
 
-    if not latest_quiz_scores or not user.assessment_level:
+    if not user.assessment_level:
         return None, None, None, None
 
+    course_average = _average(latest_quiz_scores) if latest_quiz_scores else None
     latest_level_attempt = (
         LevelAssessmentAttempt.objects.filter(
             user=user,
@@ -94,10 +99,12 @@ def _current_knowledge_metrics(user, path_course_ids):
         .first()
     )
     if latest_level_attempt is None:
-        return _average(latest_quiz_scores), None, None, None
+        return course_average, None, None, None
 
-    course_average = _average(latest_quiz_scores)
     assessment_score = latest_level_attempt.score_percent
+    if course_average is None:
+        return None, assessment_score, None, latest_level_attempt.submitted_at
+
     knowledge_score = round(
         course_average * COURSE_QUIZ_KNOWLEDGE_WEIGHT
         + assessment_score * LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT,

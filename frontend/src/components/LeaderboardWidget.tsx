@@ -50,8 +50,12 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
   const myEntry = entries?.find((entry) => entry.user_id === user?.id) ?? null
   const myRankIndex = rankedEntries.findIndex((entry) => entry.user_id === user?.id)
   const myRank = myRankIndex >= 0 ? myRankIndex + 1 : null
-  const noScoreLabel = user?.role === 'LEARNER' ? 'Not yet assessed' : 'No learner score'
-  const cardState = entries === null ? 'Loading…' : noScoreLabel
+  // A learner can hold a Level Assessment result without a Knowledge Score
+  // (no course quiz yet), so "assessed" is keyed off the level result alone.
+  const hasLevelResult = myEntry?.last_assessed_at != null
+  const cardState = entries === null ? 'Loading…' : 'Not yet assessed'
+  const rankState = hasLevelResult ? 'Not ranked yet' : cardState
+  const knowledgeState = hasLevelResult ? 'Complete a course quiz' : cardState
   const topEntries = rankedEntries.slice(0, TOP_RANKS_LIMIT)
   const showOwnPosition = myEntry?.knowledge_score != null && myRank !== null && myRank > TOP_RANKS_LIMIT
 
@@ -69,7 +73,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           </span>
           <div>
             <p className="text-sm text-neutral-500">My Rank</p>
-            <p className="text-2xl font-semibold text-brand-navy">{myRank === null ? cardState : myRank}</p>
+            <p className="text-2xl font-semibold text-brand-navy">{myRank === null ? rankState : myRank}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 p-5">
@@ -79,7 +83,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           <div>
             <p className="text-sm text-neutral-500">Current Knowledge</p>
             <p className="text-2xl font-semibold text-brand-navy">
-              {myEntry?.knowledge_score == null ? cardState : formatPercent(myEntry.knowledge_score)}
+              {myEntry?.knowledge_score == null ? knowledgeState : formatPercent(myEntry.knowledge_score)}
             </p>
           </div>
         </Card>
@@ -90,7 +94,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           <div>
             <p className="text-sm text-neutral-500">Last Assessed</p>
             <p className="text-xl font-semibold text-brand-navy">
-              {myEntry?.last_assessed_at == null ? cardState : formatAssessmentDate(myEntry.last_assessed_at)}
+              {hasLevelResult ? formatAssessmentDate(myEntry?.last_assessed_at) : cardState}
             </p>
           </div>
         </Card>
@@ -101,9 +105,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           <p className="p-6 text-sm text-neutral-500">Loading…</p>
         ) : topEntries.length === 0 ? (
           <p className="p-6 text-sm text-neutral-500">
-            {entries.length === 0
-              ? 'Complete a course quiz and a Level Assessment to join the leaderboard.'
-              : 'No learners have a completed Level Assessment yet.'}
+            Complete a course quiz and a Level Assessment to join the leaderboard.
           </p>
         ) : (
           <div className="overflow-x-auto">

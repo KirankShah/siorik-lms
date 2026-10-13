@@ -97,4 +97,18 @@ describe('LeaderboardWidget', () => {
     expect(screen.getAllByText('Not yet assessed')).toHaveLength(3)
     expect(screen.getByText('Current Knowledge').parentElement).not.toHaveTextContent('—')
   })
+
+  it('does not call a learner unassessed when only the course quiz is missing', () => {
+    mockAuth.userId = 8
+    render(
+      <LeaderboardWidget
+        entries={[entry, leaderboardEntry(8, 'Quiz Pending', null, '80.00', '2026-10-09T06:00:00Z')]}
+      />,
+    )
+
+    expect(screen.queryByText('Not yet assessed')).not.toBeInTheDocument()
+    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('Not ranked yet')
+    expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('Complete a course quiz')
+    expect(screen.getAllByText('Last Assessed')[0].parentElement).toHaveTextContent('9 Oct 2026')
+  })
 })
