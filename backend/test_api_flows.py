@@ -7663,6 +7663,64 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual([row['user_id'] for row in response.data], [colleague.id, self.learner.id])
         self.assertEqual(response.data[1]['assessment_level_display'], 'Officer Level')
 
+    def test_endpoint_includes_unassessed_same_org_learner_but_never_another_organization(self):
+        now = timezone.now()
+        self.learner.assessment_level = User.AssessmentLevel.OFFICER
+        self.learner.save(update_fields=['assessment_level'])
+
+        # Six assessed learners, including the caller, make the caller rank
+        # sixth. The seventh same-organization learner has quiz data but no
+        # level-assessment result and must remain visible as unassessed without
+        # taking a ranked place. A high-scoring foreign-organization row must
+        # never be serialized.
+        same_org_learners = [self.learner]
+        for index in range(5):
+            same_org_learners.append(User.objects.create_user(
+                email=f'leaderboard-{index}@example.com', password='pass12345', role=User.Role.LEARNER,
+                organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+            ))
+        for index, learner in enumerate(same_org_learners):
+            score = Decimal(40 + index * 10) if learner == self.learner else Decimal(100 - index * 5)
+            LeaderboardEntry.objects.create(
+                user=learner, organization=self.org, current_course_quiz_average=score,
+                latest_level_assessment_score=score, knowledge_score=score, last_assessed_at=now,
+            )
+
+        unassessed = User.objects.create_user(
+            email='leaderboard-unassessed@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        LeaderboardEntry.objects.create(
+            user=unassessed, organization=self.org, current_course_quiz_average=Decimal('90'),
+            latest_level_assessment_score=None, knowledge_score=None, last_assessed_at=None,
+        )
+
+        foreign_learner = User.objects.create_user(
+            email='leaderboard-foreign@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.other_org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        LeaderboardEntry.objects.create(
+            user=foreign_learner, organization=self.other_org, current_course_quiz_average=Decimal('100'),
+            latest_level_assessment_score=Decimal('100'), knowledge_score=Decimal('100'), last_assessed_at=now,
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/leaderboard/')
+
+        self.assertEqual(response.status_code, 200)
+        rows_by_id = {row['user_id']: row for row in response.data}
+        with self.subTest('unassessed same-organization learner is returned without a score'):
+            self.assertIn(unassessed.id, rows_by_id)
+            self.assertIsNone(rows_by_id[unassessed.id]['knowledge_score'])
+        with self.subTest('foreign-organization learner is excluded'):
+            self.assertNotIn(foreign_learner.id, rows_by_id)
+        ranked_rows = [row for row in response.data if row['knowledge_score'] is not None]
+        with self.subTest('scored learners are ordered by descending Knowledge Score'):
+            self.assertEqual(
+                [row['user_id'] for row in ranked_rows],
+                [*(learner.id for learner in same_org_learners[1:]), self.learner.id],
+            )
+
 
 class ResourceFlowTests(BaseAPITestCase):
     def test_org_admin_can_upload_pdf_and_it_appears_for_same_org_learner_only(self):

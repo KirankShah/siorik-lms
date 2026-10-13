@@ -1,8 +1,11 @@
 from django.utils import timezone
+from django.db.models import F, Q
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from accounts.models import User
 
 from .models import Badge, LeaderboardEntry, UserBadge
 from .serializers import BadgeSerializer, LeaderboardEntrySerializer, UserBadgeSerializer
@@ -25,12 +28,18 @@ class LeaderboardEntryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return (
             LeaderboardEntry.objects.filter(
                 organization_id=user.organization_id,
+                user__organization_id=user.organization_id,
                 user__is_active=True,
+                user__role=User.Role.LEARNER,
                 user__assessment_level=user.assessment_level,
-                knowledge_score__isnull=False,
             )
+            .filter(Q(knowledge_score__isnull=False) | Q(current_course_quiz_average__isnull=False))
             .select_related('user')
-            .order_by('-knowledge_score', '-current_course_quiz_average', '-last_assessed_at')
+            .order_by(
+                F('knowledge_score').desc(nulls_last=True),
+                '-current_course_quiz_average',
+                '-last_assessed_at',
+            )
         )
 
 

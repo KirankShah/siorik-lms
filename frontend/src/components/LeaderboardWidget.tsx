@@ -19,8 +19,16 @@ function formatAssessmentDate(value: string | null | undefined): string {
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value))
 }
 
-function knowledgeColor(value: string): string {
-  return Number(value) >= 70 ? 'text-emerald-700' : 'text-amber-600'
+function knowledgeColor(value: string | null): string {
+  return value != null && Number(value) >= 70 ? 'text-emerald-700' : 'text-amber-600'
+}
+
+function ordinal(rank: number): string {
+  const lastTwoDigits = rank % 100
+  const suffix = lastTwoDigits >= 11 && lastTwoDigits <= 13
+    ? 'th'
+    : ({ 1: 'st', 2: 'nd', 3: 'rd' }[rank % 10] ?? 'th')
+  return `${rank}${suffix}`
 }
 
 function Rank({ rank }: { rank: number }) {
@@ -38,9 +46,14 @@ function Rank({ rank }: { rank: number }) {
 
 export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
   const { user } = useAuth()
-  const myIndex = entries?.findIndex((entry) => entry.user_id === user?.id) ?? -1
-  const myEntry = myIndex >= 0 ? (entries as LeaderboardEntry[])[myIndex] : null
-  const topEntries = entries?.slice(0, TOP_RANKS_LIMIT) ?? []
+  const rankedEntries = entries?.filter((entry) => entry.knowledge_score != null) ?? []
+  const myEntry = entries?.find((entry) => entry.user_id === user?.id) ?? null
+  const myRankIndex = rankedEntries.findIndex((entry) => entry.user_id === user?.id)
+  const myRank = myRankIndex >= 0 ? myRankIndex + 1 : null
+  const noScoreLabel = user?.role === 'LEARNER' ? 'Not yet assessed' : 'No learner score'
+  const cardState = entries === null ? 'Loading…' : noScoreLabel
+  const topEntries = rankedEntries.slice(0, TOP_RANKS_LIMIT)
+  const showOwnPosition = myEntry?.knowledge_score != null && myRank !== null && myRank > TOP_RANKS_LIMIT
 
   return (
     <section className="space-y-5">
@@ -56,7 +69,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           </span>
           <div>
             <p className="text-sm text-neutral-500">My Rank</p>
-            <p className="text-2xl font-semibold text-brand-navy">{myEntry ? myIndex + 1 : '—'}</p>
+            <p className="text-2xl font-semibold text-brand-navy">{myRank === null ? cardState : myRank}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 p-5">
@@ -65,7 +78,9 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           </span>
           <div>
             <p className="text-sm text-neutral-500">Current Knowledge</p>
-            <p className="text-2xl font-semibold text-brand-navy">{formatPercent(myEntry?.knowledge_score)}</p>
+            <p className="text-2xl font-semibold text-brand-navy">
+              {myEntry?.knowledge_score == null ? cardState : formatPercent(myEntry.knowledge_score)}
+            </p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 p-5">
@@ -74,7 +89,9 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           </span>
           <div>
             <p className="text-sm text-neutral-500">Last Assessed</p>
-            <p className="text-xl font-semibold text-brand-navy">{formatAssessmentDate(myEntry?.last_assessed_at)}</p>
+            <p className="text-xl font-semibold text-brand-navy">
+              {myEntry?.last_assessed_at == null ? cardState : formatAssessmentDate(myEntry.last_assessed_at)}
+            </p>
           </div>
         </Card>
       </div>
@@ -82,9 +99,11 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
       <Card className="overflow-hidden p-0">
         {!entries ? (
           <p className="p-6 text-sm text-neutral-500">Loading…</p>
-        ) : entries.length === 0 ? (
+        ) : topEntries.length === 0 ? (
           <p className="p-6 text-sm text-neutral-500">
-            Complete a course quiz and a Level Assessment to join the leaderboard.
+            {entries.length === 0
+              ? 'Complete a course quiz and a Level Assessment to join the leaderboard.'
+              : 'No learners have a completed Level Assessment yet.'}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -132,6 +151,32 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
           </div>
         )}
       </Card>
+
+      {showOwnPosition && myEntry && myRank !== null && (
+        <Card className="space-y-3 border-brand-gold/50 bg-brand-gold/5 p-5">
+          <p className="text-sm font-semibold text-brand-navy">Your position: {ordinal(myRank)}</p>
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <div>
+              <p className="text-xs text-neutral-500">Staff Member</p>
+              <p className="font-medium text-neutral-900">{myEntry.first_name} {myEntry.last_name}</p>
+            </div>
+            <div>
+              <p className="text-xs text-neutral-500">Level</p>
+              <p className="text-neutral-700">{myEntry.assessment_level_display}</p>
+            </div>
+            <div>
+              <p className="text-xs text-neutral-500">Knowledge Score</p>
+              <p className={`font-semibold ${knowledgeColor(myEntry.knowledge_score)}`}>
+                {formatPercent(myEntry.knowledge_score)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-neutral-500">Last Assessed</p>
+              <p className="text-neutral-700">{formatAssessmentDate(myEntry.last_assessed_at)}</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="flex gap-3 rounded-xl bg-brand-navy/5 p-4 text-sm text-neutral-600 ring-1 ring-brand-navy/10">
         <Info className="mt-0.5 h-5 w-5 shrink-0 text-brand-navy" />
