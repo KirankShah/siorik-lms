@@ -53,7 +53,8 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
   // A learner can hold a Level Assessment result without a Knowledge Score
   // (no course quiz yet), so "assessed" is keyed off the level result alone.
   const hasLevelResult = myEntry?.last_assessed_at != null
-  const cardState = entries === null ? 'Loading…' : 'Not yet assessed'
+  const noScoreLabel = user?.role === 'LEARNER' ? 'Not yet assessed' : 'No learner score'
+  const cardState = entries === null ? 'Loading…' : noScoreLabel
   const rankState = hasLevelResult ? 'Not ranked yet' : cardState
   const knowledgeState = hasLevelResult ? 'Complete a course quiz' : cardState
   const topEntries = rankedEntries.slice(0, TOP_RANKS_LIMIT)

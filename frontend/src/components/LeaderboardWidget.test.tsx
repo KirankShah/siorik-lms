@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { LeaderboardWidget } from './LeaderboardWidget'
 import type { LeaderboardEntry } from '../types/gamification'
 
-const mockAuth = vi.hoisted(() => ({ userId: 1 }))
+const mockAuth = vi.hoisted(() => ({ userId: 1, role: 'LEARNER' }))
 
 vi.mock('../context/AuthContext', () => ({
-  useAuth: () => ({ user: { id: mockAuth.userId, role: 'LEARNER' } }),
+  useAuth: () => ({ user: { id: mockAuth.userId, role: mockAuth.role } }),
 }))
 
 const entry: LeaderboardEntry = {
@@ -110,5 +110,14 @@ describe('LeaderboardWidget', () => {
     expect(screen.getByText('My Rank').parentElement).toHaveTextContent('Not ranked yet')
     expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('Complete a course quiz')
     expect(screen.getAllByText('Last Assessed')[0].parentElement).toHaveTextContent('9 Oct 2026')
+  })
+
+  it('shows a useful card state for an admin without a learner score', () => {
+    mockAuth.userId = 9
+    mockAuth.role = 'ORG_ADMIN'
+    render(<LeaderboardWidget entries={[]} />)
+
+    expect(screen.getAllByText('No learner score')).toHaveLength(3)
+    expect(screen.queryByText('Not yet assessed')).not.toBeInTheDocument()
   })
 })
