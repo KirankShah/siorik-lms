@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { CertificatesPage } from './CertificatesPage'
 
 const mocks = vi.hoisted(() => ({
@@ -51,6 +51,29 @@ describe('CertificatesPage', () => {
     expect(await screen.findByRole('button', { name: 'Download all (1)' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('textbox', { name: 'Search staff name or email' }), { target: { value: 'asha' } })
     await waitFor(() => expect(mocks.fetchAdminCertificates).toHaveBeenLastCalledWith({ search: 'asha', sort: 'newest', page: 1 }))
+  })
+
+  it('shows ZIP preparation progress and a clear error when a part fails', async () => {
+    let rejectDownload: ((reason?: unknown) => void) | undefined
+    mocks.downloadAdminCertificatesZip.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectDownload = reject
+    }))
+
+    render(<CertificatesPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Download all (1)' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Preparing ZIP 1 of 1…')
+    await act(async () => {
+      rejectDownload?.(new Error('ZIP failed'))
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not prepare the certificate ZIP. Please try again.')
+  })
+
+  it('sends the selected name sort to the backend', async () => {
+    render(<CertificatesPage />)
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort certificates' }), { target: { value: 'name' } })
+
+    await waitFor(() => expect(mocks.fetchAdminCertificates).toHaveBeenLastCalledWith({ search: '', sort: 'name', page: 1 }))
   })
 
   it('shows the no-result state and disables Download all for an empty result', async () => {
