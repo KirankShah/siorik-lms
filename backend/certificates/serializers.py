@@ -33,7 +33,20 @@ class CertificateSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_title(self, certificate):
-        return _learning_path_completion_title(certificate.user)
+        return _learning_path_completion_title(certificate.user) if certificate.user_id else 'Learning Path Certificate'
+
+
+class AdminCertificateSerializer(serializers.ModelSerializer):
+    title = serializers.SerializerMethodField()
+    level = serializers.CharField(source='staff_level', read_only=True)
+
+    class Meta:
+        model = Certificate
+        fields = ['id', 'staff_name', 'staff_email', 'level', 'title', 'issued_at', 'certificate_number']
+        read_only_fields = fields
+
+    def get_title(self, certificate):
+        return _learning_path_completion_title(certificate.user) if certificate.user_id else 'Learning Path Certificate'
 
 
 class CertificateTemplateSerializer(serializers.ModelSerializer):

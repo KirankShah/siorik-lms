@@ -18,8 +18,14 @@ validate_hex_color = RegexValidator(
 
 
 class Certificate(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='certificates')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='certificates'
+    )
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='certificates')
+    staff_name = models.CharField(max_length=320, blank=True)
+    staff_email = models.EmailField(blank=True)
+    staff_level = models.CharField(max_length=150, blank=True)
+    staff_organization_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
     issued_at = models.DateTimeField(auto_now_add=True)
     certificate_number = models.CharField(max_length=50, unique=True, editable=False)
     verification_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -28,6 +34,18 @@ class Certificate(models.Model):
 
     class Meta:
         ordering = ['-issued_at']
+
+    def save(self, *args, **kwargs):
+        if self.user_id:
+            if not self.staff_name:
+                self.staff_name = self.user.get_full_name() or self.user.email
+            if not self.staff_email:
+                self.staff_email = self.user.email
+            if not self.staff_level:
+                self.staff_level = self.user.get_assessment_level_display() if self.user.assessment_level else ''
+            if self.staff_organization_id is None:
+                self.staff_organization_id = self.user.organization_id
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'{self.certificate_number} - {self.user} - {self.course}'

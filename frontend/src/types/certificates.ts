@@ -17,6 +17,19 @@ export interface Certificate {
   expires_at: string | null
 }
 
+export interface AdminCertificate extends Pick<Certificate, 'id' | 'title' | 'issued_at' | 'certificate_number'> {
+  staff_name: string
+  staff_email: string
+  level: string
+}
+
+export interface PaginatedAdminCertificates {
+  count: number
+  next: string | null
+  previous: string | null
+  results: AdminCertificate[]
+}
+
 export type TextAlign = 'LEFT' | 'CENTER' | 'RIGHT'
 
 // Mirrors CertificateTemplateSerializer. background_image/font_file fields

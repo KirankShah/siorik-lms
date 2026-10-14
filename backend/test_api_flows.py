@@ -8,6 +8,7 @@ import csv
 import io
 import re
 import tempfile
+import zipfile
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -35,6 +36,7 @@ from assessments.models import CategorizeItem, CategoryBucket, Choice, HotspotRe
 from assignments.models import Assignment, AssignmentSubmission
 from audit.models import AuditLog
 from certificates.models import Certificate, CertificateTemplate
+from certificates.views import _certificate_zip_name
 from certificates.services import (
     MIN_AUTO_SHRINK_FONT_SIZE,
     CertificateIssuanceError,
@@ -1974,6 +1976,142 @@ class CertificateFlowTests(BaseAPITestCase):
         response = self.client.get('/verify/00000000-0000-0000-0000-000000000000/')
         self.assertEqual(response.status_code, 404)
         self.assertFalse(response.json()['valid'])
+
+
+class AdminCertificatePageApiTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.staff = []
+        for index in range(26):
+            user = User.objects.create_user(
+                email=f'staff{index:02}@example.com', password='pass12345', role=User.Role.LEARNER,
+                organization=self.org, first_name=('Asha/Thapa, Long Name' if index < 2 else f'Staff {index:02}'),
+                last_name='Gurung', assessment_level=User.AssessmentLevel.OFFICER if index else None,
+            )
+            certificate = Certificate.objects.create(
+                user=user, course=self.published_org_course,
+                certificate_number=f'SIORIK-2026-{index + 1:06d}',
+                pdf_file=SimpleUploadedFile(f'cert-{index}.pdf', b'%PDF-1.4\ncurrent-renderer', content_type='application/pdf'),
+            )
+            self.staff.append((user, certificate))
+        self.other_org_certificate = Certificate.objects.create(
+            user=self.other_org_learner, course=self.other_org_course,
+            certificate_number='SIORIK-2026-999999',
+            pdf_file=SimpleUploadedFile('other.pdf', b'%PDF-1.4\ncurrent-renderer', content_type='application/pdf'),
+        )
+
+    def test_org_admin_searches_by_name_or_email_and_results_are_paginated(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/certificates/admin-list/?search=staff0&sort=name')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 10)
+        self.assertEqual(len(response.data['results']), 10)
+        self.assertEqual(response.data['results'][0]['staff_name'], 'Asha/Thapa, Long Name Gurung')
+        email_search = self.client.get('/api/certificates/admin-list/?search=STAFF01%40EXAMPLE.COM')
+        self.assertEqual(email_search.data['count'], 1)
+
+        all_results = self.client.get('/api/certificates/admin-list/')
+        self.assertEqual(all_results.data['count'], 26)
+        self.assertEqual(len(all_results.data['results']), 25)
+        no_assessment = self.client.get('/api/certificates/admin-list/?search=staff00%40example.com')
+        self.assertEqual(no_assessment.data['results'][0]['level'], '')
+        second_page = self.client.get('/api/certificates/admin-list/?page=2')
+        self.assertEqual(len(second_page.data['results']), 1)
+
+    def test_org_admin_list_and_single_download_are_tenant_scoped(self):
+        self.auth_as(self.org_admin)
+        response = self.client.get('/api/certificates/admin-list/')
+        self.assertEqual(response.data['count'], 26)
+        self.assertNotIn(self.other_org_certificate.id, [item['id'] for item in response.data['results']])
+        direct_record = self.client.get(f'/api/certificates/{self.other_org_certificate.id}/')
+        self.assertEqual(direct_record.status_code, 404)
+        direct = self.client.get(f'/api/certificates/{self.other_org_certificate.id}/download/')
+        self.assertEqual(direct.status_code, 404)
+
+    def test_learners_cannot_call_admin_certificate_endpoints(self):
+        self.auth_as(self.learner)
+        self.assertEqual(self.client.get('/api/certificates/admin-list/').status_code, 403)
+        self.assertEqual(self.client.get('/api/certificates/admin-download-all/').status_code, 403)
+
+    def test_platform_admin_can_view_all_or_filter_to_one_organization(self):
+        self.auth_as(self.platform_admin)
+        all_certificates = self.client.get('/api/certificates/admin-list/')
+        own_org = self.client.get(f'/api/certificates/admin-list/?organization={self.org.id}')
+        self.assertEqual(all_certificates.data['count'], 27)
+        self.assertEqual(own_org.data['count'], 26)
+
+    @patch('certificates.views.certificate_pdf_uses_current_renderer', return_value=True)
+    def test_zip_parts_are_bounded_and_search_zip_contains_safe_unique_names(self, _current_renderer):
+        self.auth_as(self.org_admin)
+        first_part = self.client.get('/api/certificates/admin-download-all/?part=1')
+        self.assertEqual(first_part.status_code, 200)
+        self.assertEqual(first_part['X-Certificate-Zip-Total'], '26')
+        self.assertEqual(first_part['X-Certificate-Zip-Parts'], '2')
+        with zipfile.ZipFile(io.BytesIO(b''.join(first_part.streaming_content))) as archive:
+            self.assertEqual(len(archive.namelist()), 25)
+            self.assertTrue(all('SIORIK-2026-999999' not in name for name in archive.namelist()))
+
+        filtered = self.client.get('/api/certificates/admin-download-all/?search=staff02%40example.com')
+        with zipfile.ZipFile(io.BytesIO(b''.join(filtered.streaming_content))) as archive:
+            self.assertEqual(len(archive.namelist()), 1)
+            self.assertIn('Staff_02_Gurung_Officer_Level_SIORIK-2026-000003.pdf', archive.namelist())
+
+        unsafe_filtered = self.client.get('/api/certificates/admin-download-all/?search=staff01%40example.com')
+        with zipfile.ZipFile(io.BytesIO(b''.join(unsafe_filtered.streaming_content))) as archive:
+            self.assertEqual(len(archive.namelist()), 1)
+            self.assertIn('Asha_Thapa__Long_Name_Gurung_Officer_Level_SIORIK-2026-000002.pdf', archive.namelist())
+
+        unsafe_name_certificate = self.staff[0][1]
+        self.assertIn('Asha_Thapa__Long_Name_Gurung', _certificate_zip_name(unsafe_name_certificate, set()))
+        used = set()
+        first_name = _certificate_zip_name(unsafe_name_certificate, used)
+        self.assertEqual(_certificate_zip_name(unsafe_name_certificate, used), first_name[:-4] + '_2.pdf')
+        unsafe_name_certificate.staff_name = 'आशा/देवी, अधिकारी ' * 20
+        nepali_filename = _certificate_zip_name(unsafe_name_certificate, set())
+        self.assertTrue(nepali_filename.startswith('आशा_देवी__अधिकारी_'))
+        self.assertLessEqual(len(nepali_filename), 200)
+
+    @patch('certificates.views.certificate_pdf_uses_current_renderer', return_value=True)
+    def test_certificate_snapshot_survives_deleted_staff_and_zip_part_two_has_remaining_file(self, _current_renderer):
+        self.auth_as(self.org_admin)
+        user, certificate = self.staff[-1]
+        user.delete()
+        certificate.refresh_from_db()
+        self.assertIsNone(certificate.user_id)
+        response = self.client.get('/api/certificates/admin-list/?search=staff%2025')
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['staff_email'], 'staff25@example.com')
+        verified = self.client.get(f'/verify/{certificate.verification_token}/')
+        self.assertEqual(verified.status_code, 200)
+        self.assertEqual(verified.json()['learner_name'], certificate.staff_name)
+        with patch('certificates.views.certificate_pdf_uses_current_renderer', return_value=False):
+            old_pdf = self.client.get(f'/api/certificates/{certificate.id}/download/')
+        self.assertEqual(old_pdf.status_code, 200)
+        self.assertIn(b'%PDF', old_pdf.content)
+        second_part = self.client.get('/api/certificates/admin-download-all/?part=2')
+        with zipfile.ZipFile(io.BytesIO(b''.join(second_part.streaming_content))) as archive:
+            self.assertEqual(len(archive.namelist()), 1)
+
+    def test_empty_organization_and_expired_subscription(self):
+        empty_admin = User.objects.create_user(
+            email='empty-admin@example.com', password='pass12345', role=User.Role.ORG_ADMIN,
+            organization=Organization.objects.create(name='Empty', slug='empty-certificates'),
+        )
+        self.auth_as(empty_admin)
+        empty = self.client.get('/api/certificates/admin-list/')
+        self.assertEqual(empty.data['count'], 0)
+        self.assertEqual(self.client.get('/api/certificates/admin-download-all/').status_code, 400)
+
+        self.org.settings.subscription_start_date = timezone.localdate() - timedelta(days=40)
+        self.org.settings.subscription_duration_days = 30
+        self.org.settings.org_admin_grace_period_days = 0
+        self.org.settings.save()
+        self.auth_as(self.org_admin)
+        locked = self.client.get('/api/certificates/admin-list/')
+        self.assertEqual(locked.status_code, 403)
+        self.assertEqual(self.client.get('/api/certificates/admin-download-all/').status_code, 403)
+        single_locked = self.client.get(f'/api/certificates/{self.staff[0][1].id}/download/')
+        self.assertEqual(single_locked.status_code, 403)
 
 
 class CertificateIssueEndpointTests(BaseAPITestCase):

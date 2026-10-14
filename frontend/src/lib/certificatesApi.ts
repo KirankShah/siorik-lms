@@ -1,8 +1,20 @@
 import { apiFetch, apiFetchBlob } from './apiClient'
-import type { Certificate, CertificateTemplate, CertificateTemplateInput } from '../types/certificates'
+import type { Certificate, CertificateTemplate, CertificateTemplateInput, PaginatedAdminCertificates } from '../types/certificates'
 
 export function fetchCertificates(): Promise<Certificate[]> {
   return apiFetch<Certificate[]>('/certificates/')
+}
+
+export function fetchAdminCertificates(options: { search: string; sort: 'newest' | 'name'; page: number }): Promise<PaginatedAdminCertificates> {
+  const params = new URLSearchParams({ sort: options.sort, page: String(options.page) })
+  if (options.search) params.set('search', options.search)
+  return apiFetch<PaginatedAdminCertificates>(`/certificates/admin-list/?${params.toString()}`)
+}
+
+export function downloadAdminCertificatesZip(search: string, sort: 'newest' | 'name', part: number): Promise<Blob> {
+  const params = new URLSearchParams({ sort, part: String(part) })
+  if (search) params.set('search', search)
+  return apiFetchBlob(`/certificates/admin-download-all/?${params.toString()}`)
 }
 
 // Exactly one certificate per learner — earned by completing their entire
@@ -16,6 +28,10 @@ export function issueCertificate(): Promise<Certificate> {
 
 export async function downloadCertificate(certificateId: number, filename: string): Promise<void> {
   const blob = await apiFetchBlob(`/certificates/${certificateId}/download/`)
+  downloadBlob(blob, filename)
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
   const objectUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = objectUrl
