@@ -6,6 +6,7 @@ from django.db import models
 from accounts.models import Organization
 
 from .validators import RESOURCE_FILE_VALIDATORS
+from .storage import resource_storage
 
 
 def _resource_upload_path(instance, filename):
@@ -30,7 +31,11 @@ class Resource(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='resources')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
-    file = models.FileField(upload_to=_resource_upload_path, validators=RESOURCE_FILE_VALIDATORS)
+    file = models.FileField(
+        upload_to=_resource_upload_path,
+        validators=RESOURCE_FILE_VALIDATORS,
+        storage=resource_storage,
+    )
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

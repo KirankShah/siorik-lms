@@ -2,6 +2,12 @@
 # (client-side routes like /dashboard, /courses/123) falls through to
 # index.html so React Router can handle it. Required because Apache has no
 # concept of the SPA's routes on its own.
+<IfModule mod_mime.c>
+  # PDF.js loads its worker as an ES module. LiteSpeed otherwise serves .mjs
+  # as application/octet-stream, which browsers reject for module workers.
+  AddType application/javascript .mjs
+</IfModule>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /

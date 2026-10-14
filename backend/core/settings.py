@@ -278,6 +278,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Resource PDFs can be kept outside the application checkout in production,
+# so replacing the deployed code cannot remove learner documents. Other
+# existing media fields continue to use MEDIA_ROOT.
+RESOURCE_MEDIA_ROOT = Path(os.environ.get('RESOURCE_MEDIA_ROOT', MEDIA_ROOT))
+
 # Set USE_S3=True in .env to switch uploads to AWS S3 via django-storages.
 # AWS credentials/bucket are read from env vars but are not configured yet —
 # leave USE_S3=False for local development, which uses the filesystem above.

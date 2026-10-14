@@ -5,10 +5,8 @@ from .models import Resource
 
 class ResourceSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
-    # Tells the frontend whether *this* request's user may delete this row,
-    # so the UI doesn't have to re-derive the "own upload, or platform admin"
-    # rule itself — the real enforcement is still server-side, in
-    # resources.views.ResourceViewSet.perform_destroy.
+    # Tells the frontend whether *this* request's user may delete this row;
+    # server-side role and organization checks remain authoritative.
     can_delete = serializers.SerializerMethodField()
 
     class Meta:
@@ -41,4 +39,4 @@ class ResourceSerializer(serializers.ModelSerializer):
         user = request.user
         if user.role == user.Role.PLATFORM_ADMIN:
             return True
-        return user.role == user.Role.ORG_ADMIN and obj.uploaded_by_id == user.id
+        return user.role == user.Role.ORG_ADMIN and obj.organization_id == user.organization_id

@@ -1,7 +1,7 @@
 from django.http import FileResponse, Http404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
 from core.permissions import IsOrgAdminRole
@@ -23,11 +23,11 @@ class ResourceViewSet(
     organization's resources, PLATFORM_ADMIN sees every organization's (see
     visible_resources_for_user). Upload is ORG_ADMIN-only and always scoped
     to the caller's own organization server-side (never a client-supplied
-    org id). Delete is further restricted to the resource's own uploader
-    (platform admin excepted) in perform_destroy. All of this is enforced
-    here, not just hidden in the authoring UI, so a direct API request from
-    another organization — or from a LEARNER — is denied, not merely
-    unreachable through the UI.
+    org id). ORG_ADMIN can delete any resource in their organization, while
+    PLATFORM_ADMIN can delete any resource. All of this is enforced here,
+    not just hidden in the authoring UI, so a direct API request from another
+    organization — or from a LEARNER — is denied, not merely unreachable
+    through the UI.
     """
 
     serializer_class = ResourceSerializer
@@ -49,9 +49,8 @@ class ResourceViewSet(
         serializer.save(organization=user.organization, uploaded_by=user)
 
     def perform_destroy(self, instance):
-        user = self.request.user
-        if user.role != user.Role.PLATFORM_ADMIN and instance.uploaded_by_id != user.id:
-            raise PermissionDenied('You can only delete a resource you uploaded yourself.')
+        # The destroy permission allows ORG_ADMIN and PLATFORM_ADMIN only,
+        # and get_object() has already applied organization scoping.
         instance.delete()
 
     @action(detail=True, methods=['get'])

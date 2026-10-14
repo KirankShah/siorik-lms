@@ -6,6 +6,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { ContentProtectionBoundary } from '../components/player/ContentProtectionBoundary'
 import { useAuth } from '../context/AuthContext'
+import { ApiError } from '../lib/apiClient'
 import { fetchResource, fetchResourcePdfBlob } from '../lib/resourcesApi'
 import type { Resource } from '../types/resources'
 
@@ -15,6 +16,23 @@ const MIN_SCALE = 0.6
 const MAX_SCALE = 2.5
 const SCALE_STEP = 0.2
 const DEFAULT_SCALE = 1.2
+
+function getResourceErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const body = error.body
+    const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : null
+    if (error.status === 404 && detail === 'Resource file is missing.') {
+      return 'The PDF file for this resource is missing from the server.'
+    }
+    if (error.status === 401 || error.status === 403 || error.status === 404) {
+      return 'You do not have permission to view this resource, or it is no longer available.'
+    }
+    if (error.status >= 500) {
+      return 'The server could not load this document. Please try again later.'
+    }
+  }
+  return 'The PDF could not be opened. It may be damaged or unavailable.'
+}
 
 // A small tiled PNG (data URL) drawn once per viewer session, repeated via
 // CSS background over every page's canvas — this never touches the stored
@@ -101,8 +119,8 @@ export function ResourceViewerPage() {
       .then((r) => {
         if (!cancelled) setResource(r)
       })
-      .catch(() => {
-        if (!cancelled) setError('This resource is not available.')
+      .catch((loadError: unknown) => {
+        if (!cancelled) setError(getResourceErrorMessage(loadError))
       })
 
     fetchResourcePdfBlob(Number(id))
@@ -119,8 +137,8 @@ export function ResourceViewerPage() {
         )
         if (!cancelled) setPages(loadedPages)
       })
-      .catch(() => {
-        if (!cancelled) setError('Could not load this document.')
+      .catch((loadError: unknown) => {
+        if (!cancelled) setError(getResourceErrorMessage(loadError))
       })
 
     return () => {

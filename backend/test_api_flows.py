@@ -18,6 +18,7 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -7952,7 +7953,7 @@ class ResourceFlowTests(BaseAPITestCase):
         )
         self.assertEqual(self.client.delete(f'/api/resources/{resource.id}/').status_code, 403)
 
-    def test_org_admin_can_only_delete_their_own_upload(self):
+    def test_org_admin_can_delete_any_resource_in_their_org_but_not_another_org(self):
         other_admin_same_org = User.objects.create_user(
             email='second-orgadmin@example.com', password='pass12345',
             role=User.Role.ORG_ADMIN, organization=self.org,
@@ -7963,16 +7964,20 @@ class ResourceFlowTests(BaseAPITestCase):
         )
 
         self.auth_as(self.org_admin)
+        listed = self.client.get('/api/resources/')
+        self.assertEqual(listed.status_code, 200)
+        self.assertTrue(next(row for row in listed.data if row['id'] == resource.id)['can_delete'])
         response = self.client.delete(f'/api/resources/{resource.id}/')
-        self.assertEqual(response.status_code, 403)
-        self.assertTrue(Resource.objects.filter(pk=resource.id).exists())
-
-        own_resource = Resource.objects.create(
-            organization=self.org, title='My upload', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
-        )
-        response = self.client.delete(f'/api/resources/{own_resource.id}/')
         self.assertEqual(response.status_code, 204)
-        self.assertFalse(Resource.objects.filter(pk=own_resource.id).exists())
+        self.assertFalse(Resource.objects.filter(pk=resource.id).exists())
+
+        foreign_resource = Resource.objects.create(
+            organization=self.other_org, title='Other organization upload', file=make_test_pdf_upload(),
+            uploaded_by=self.other_org_learner,
+        )
+        response = self.client.delete(f'/api/resources/{foreign_resource.id}/')
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Resource.objects.filter(pk=foreign_resource.id).exists())
 
     def test_platform_admin_can_delete_any_organization_resource(self):
         resource = Resource.objects.create(
@@ -7990,6 +7995,7 @@ class ResourceFlowTests(BaseAPITestCase):
         other_resource = Resource.objects.create(
             organization=self.other_org, title='Other Policy', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
         )
+        call_command('check_resource_files', stdout=io.StringIO())
 
         self.auth_as(self.learner)
         response = self.client.get(f'/api/resources/{resource.id}/stream/')
@@ -8001,6 +8007,19 @@ class ResourceFlowTests(BaseAPITestCase):
         # not just hidden from the list.
         denied = self.client.get(f'/api/resources/{other_resource.id}/stream/')
         self.assertEqual(denied.status_code, 404)
+
+    def test_missing_resource_file_returns_clear_not_found_detail(self):
+        resource = Resource.objects.create(
+            organization=self.org, title='Missing file', file=make_test_pdf_upload(), uploaded_by=self.org_admin,
+        )
+        resource.file.storage.delete(resource.file.name)
+
+        self.auth_as(self.learner)
+        response = self.client.get(f'/api/resources/{resource.id}/stream/')
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data['detail'], 'Resource file is missing.')
+        with self.assertRaisesRegex(CommandError, '1 resource file\(s\) are missing'):
+            call_command('check_resource_files', stdout=io.StringIO())
 
     def test_unauthenticated_request_denied(self):
         resource = Resource.objects.create(
