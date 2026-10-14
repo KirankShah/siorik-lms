@@ -16,6 +16,7 @@ tmp/
 # Local scratch files / secrets — not part of the app
 backend/_token.txt
 backend/_dev_server.log
+backend/logs/
 backend/important.txt
 frontend/_richtext.json.txt
 Presentation1.pptx

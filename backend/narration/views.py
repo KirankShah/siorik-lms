@@ -1,4 +1,7 @@
-from rest_framework import mixins, viewsets
+import logging
+import uuid
+
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +14,8 @@ from courses.permissions import path_accessible_courses_for_user
 from .models import SlideNarration
 from .serializers import SlideNarrationSerializer
 from .services import NarrationGenerationError, generate_slide_narration
+
+logger = logging.getLogger(__name__)
 
 
 class SlideNarrationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
@@ -51,9 +56,26 @@ class SlideNarrationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
         except (Slide.DoesNotExist, ValueError, TypeError):
             raise ValidationError({'slide': 'Slide not found.'})
 
+        # Every failure gets a short reference that appears both in the admin
+        # message and beside the full traceback in the narration log, so a
+        # reported failure can always be traced. Unexpected exceptions still
+        # return JSON rather than Django's HTML 500 page, which the authoring
+        # UI cannot read.
         try:
             narration = generate_slide_narration(slide=slide, language=language, user=request.user)
         except NarrationGenerationError as exc:
-            raise ValidationError({'detail': str(exc)})
+            reference = uuid.uuid4().hex[:8]
+            logger.warning(
+                'Narration generation failed for slide %s (%s) [ref %s]: %s',
+                slide.id, language, reference, exc, exc_info=exc.__cause__ is not None,
+            )
+            raise ValidationError({'detail': f'{exc} (Reference: {reference})', 'reference': reference})
+        except Exception:
+            reference = uuid.uuid4().hex[:8]
+            logger.exception('Unexpected narration generation failure for slide %s (%s) [ref %s]', slide.id, language, reference)
+            return Response(
+                {'detail': f'Narration generation failed on the server. Reference: {reference}.', 'reference': reference},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         return Response(SlideNarrationSerializer(narration).data)

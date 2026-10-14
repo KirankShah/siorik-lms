@@ -11,8 +11,10 @@ import tempfile
 import zipfile
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
 from django.core.cache import cache
@@ -4857,6 +4859,90 @@ class SlideNarrationFlowTests(BaseAPITestCase):
         response = self.client.get(f'/api/slide-narrations/?slide={self.content_slide.id}')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 0)
+
+    @staticmethod
+    def claude_response(text, stop_reason):
+        return SimpleNamespace(
+            stop_reason=stop_reason, content=[SimpleNamespace(type='text', text=text)], _request_id='req_test',
+        )
+
+    @override_settings(ANTHROPIC_API_KEY='test-key')
+    @patch('narration.services._synthesize_speech')
+    @patch('narration.services.anthropic.Anthropic')
+    def test_truncated_script_is_rejected_and_existing_narration_is_untouched(self, mock_anthropic, mock_synthesize_speech):
+        # The production symptom: a Nepali script that stopped mid-word at the token cap.
+        mock_anthropic.return_value.messages.create.return_value = self.claude_response(
+            'त्यसैले यस्ता सङ्केतहर', 'max_tokens',
+        )
+        self.auth_as(self.platform_admin)
+
+        for language in ('en', 'ne'):
+            with self.subTest(language=language):
+                existing = SlideNarration.objects.create(
+                    slide=self.content_slide, language=language, script_text=f'Complete {language} script.',
+                    voice_name='existing-voice',
+                    audio_file=SimpleUploadedFile(f'existing-{language}.mp3', b'old audio', content_type='audio/mpeg'),
+                )
+                original_audio_name = existing.audio_file.name
+
+                with self.assertLogs('narration', level='WARNING'):
+                    response = self.client.post(
+                        '/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': language},
+                    )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('The script was cut off. Try again or shorten the slide content.', response.data['detail'])
+                self.assertIn(response.data['reference'], response.data['detail'])
+                existing.refresh_from_db()
+                self.assertEqual(existing.script_text, f'Complete {language} script.')
+                self.assertEqual(existing.voice_name, 'existing-voice')
+                self.assertEqual(existing.audio_file.name, original_audio_name)
+
+        mock_synthesize_speech.assert_not_called()
+
+    @override_settings(ANTHROPIC_API_KEY='test-key')
+    @patch('narration.services._synthesize_speech')
+    @patch('narration.services.anthropic.Anthropic')
+    def test_complete_script_is_saved_using_the_language_token_cap(self, mock_anthropic, mock_synthesize_speech):
+        self.assertGreater(settings.NARRATION_SCRIPT_MAX_TOKENS['en'], 2048)
+        self.assertGreater(settings.NARRATION_SCRIPT_MAX_TOKENS['ne'], settings.NARRATION_SCRIPT_MAX_TOKENS['en'])
+        self.auth_as(self.platform_admin)
+
+        for language, voice_name, script in (
+            ('en', 'en-US-JennyNeural', 'Welcome to your AML training.'),
+            ('ne', 'ne-NP-HemkalaNeural', 'तपाईंको एएमएल तालिममा स्वागत छ।'),
+        ):
+            with self.subTest(language=language):
+                mock_anthropic.return_value.messages.create.return_value = self.claude_response(script, 'end_turn')
+                mock_synthesize_speech.return_value = (b'new audio', voice_name)
+
+                response = self.client.post(
+                    '/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': language},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data['script_text'], script)
+                self.assertEqual(
+                    mock_anthropic.return_value.messages.create.call_args.kwargs['max_tokens'],
+                    settings.NARRATION_SCRIPT_MAX_TOKENS[language],
+                )
+                mock_synthesize_speech.assert_called_with(script, language)
+                self.assertEqual(SlideNarration.objects.get(slide=self.content_slide, language=language).script_text, script)
+
+    @patch('narration.views.generate_slide_narration')
+    def test_unexpected_failure_returns_json_with_a_logged_reference(self, mock_generate_slide_narration):
+        mock_generate_slide_narration.side_effect = OSError('media directory is not writable')
+        self.auth_as(self.platform_admin)
+
+        with self.assertLogs('narration', level='ERROR') as logs:
+            response = self.client.post('/api/slide-narrations/generate/', {'slide': self.content_slide.id, 'language': 'ne'})
+
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(response['Content-Type'].startswith('application/json'))
+        reference = response.data['reference']
+        self.assertIn(reference, response.data['detail'])
+        self.assertIn(reference, logs.records[0].getMessage())
+        self.assertIsInstance(logs.records[0].exc_info[1], OSError)
 
 
 class UserPreferenceApiTests(BaseAPITestCase):

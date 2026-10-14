@@ -14,7 +14,8 @@ from .models import SlideNarration
 logger = logging.getLogger(__name__)
 
 NARRATION_CLAUDE_MODEL = 'claude-sonnet-5'
-CLAUDE_MAX_TOKENS = 2048
+
+SCRIPT_TRUNCATED_MESSAGE = 'The script was cut off. Try again or shorten the slide content.'
 
 # One fixed, professional Azure Neural voice per language, platform-wide —
 # never user- or per-slide-selectable. (locale, voice name) pairs.
@@ -100,13 +101,23 @@ def _generate_script(slide, language, digest):
     try:
         response = client.messages.create(
             model=NARRATION_CLAUDE_MODEL,
-            max_tokens=CLAUDE_MAX_TOKENS,
+            max_tokens=settings.NARRATION_SCRIPT_MAX_TOKENS[language],
             system=system_prompt,
             messages=[{'role': 'user', 'content': user_prompt}],
         )
     except anthropic.APIError as exc:
         logger.exception('Claude narration script generation failed for slide %s (%s)', slide.id, language)
         raise NarrationGenerationError(f'Script generation failed: {exc}') from exc
+
+    # A script that hit the token cap ends mid-sentence (often mid-word), and
+    # narrating it produces audio that stops abruptly. Raising here, before
+    # anything is saved or sent to Azure, leaves the existing narration as-is.
+    if response.stop_reason == 'max_tokens':
+        logger.warning(
+            'Claude narration script for slide %s (%s) hit max_tokens=%s (request %s)',
+            slide.id, language, settings.NARRATION_SCRIPT_MAX_TOKENS[language], response._request_id,
+        )
+        raise NarrationGenerationError(SCRIPT_TRUNCATED_MESSAGE)
 
     script_text = ''.join(block.text for block in response.content if block.type == 'text').strip()
     if not script_text:

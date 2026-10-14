@@ -108,6 +108,45 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 AZURE_SPEECH_KEY = os.environ.get('AZURE_SPEECH_KEY', '')
 AZURE_SPEECH_REGION = os.environ.get('AZURE_SPEECH_REGION', '')
 
+# Output-token cap for the Claude narration-script call, per language. The
+# model's adaptive thinking shares this cap with the script itself, and
+# Devanagari costs several times more tokens per word than English, so Nepali
+# gets the larger budget. Both stay at or below 16000 so the non-streaming
+# request remains within the Anthropic SDK's HTTP timeout guidance.
+NARRATION_SCRIPT_MAX_TOKENS = {
+    'en': int(os.environ.get('NARRATION_SCRIPT_MAX_TOKENS_EN', '8000')),
+    'ne': int(os.environ.get('NARRATION_SCRIPT_MAX_TOKENS_NE', '16000')),
+}
+
+# Narration failures are logged with full tracebacks to a rotating file, so a
+# failed generation can be traced from the reference ID shown in the admin UI
+# even where the host does not expose the process's stderr. LOG_DIR lets the
+# host keep logs outside the deployed checkout.
+LOG_DIR = Path(os.environ.get('LOG_DIR', BASE_DIR / 'logs'))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {'format': '{asctime} {levelname} {name} {message}', 'style': '{'},
+    },
+    'handlers': {
+        'narration_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'narration.log',
+            'maxBytes': 5 * 1024 * 1024,
+            'backupCount': 5,
+            'encoding': 'utf-8',
+            'delay': True,
+            'formatter': 'verbose',
+        },
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
+    },
+    'loggers': {
+        'narration': {'handlers': ['narration_file', 'console'], 'level': 'INFO', 'propagate': False},
+    },
+}
+
 # SMTP credentials read entirely from the environment — never hardcoded. Only
 # ever set EMAIL_HOST_PASSWORD via .env (gitignored) locally or the host's
 # environment-variable UI in production.

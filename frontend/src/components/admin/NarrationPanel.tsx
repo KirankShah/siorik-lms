@@ -21,13 +21,17 @@ const LANGUAGES: { code: NarrationLanguage; label: string }[] = [
 // or {field: [...]} — surface that instead of a one-size-fits-all message,
 // or this exact class of bug (wrong root cause reported to the user) is
 // exactly what makes generation failures hard to diagnose from the UI alone.
+// A response with no readable JSON (a host proxy timeout or error page) still
+// reports its HTTP status, so a timeout is distinguishable from other failures.
 function extractErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError && err.body && typeof err.body === 'object') {
+  if (!(err instanceof ApiError)) return fallback
+  if (err.body && typeof err.body === 'object') {
     const value = Object.values(err.body as Record<string, unknown>)[0]
     if (typeof value === 'string') return value
     if (Array.isArray(value) && typeof value[0] === 'string') return value[0]
   }
-  return fallback
+  if (err.status === 504) return 'Server timed out (504). Please try again.'
+  return `${fallback} (HTTP ${err.status})`
 }
 
 // Status + playback is visible to any admin who can see this slide (the
