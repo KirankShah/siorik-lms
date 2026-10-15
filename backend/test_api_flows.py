@@ -7929,6 +7929,84 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
         self.assertEqual(entry.knowledge_score, Decimal('80'))
 
+    def test_only_learners_completing_every_nonempty_path_quiz_are_rankable(self):
+        """Proposed policy: incomplete quiz coverage has no rankable score.
+
+        This intentionally fails on the current implementation, which averages
+        only attempted quizzes. Admin/preview attempts belong to the admin and
+        must never fill a learner's gap; an authored quiz with no questions is
+        not a learner assignment and must not block otherwise complete coverage.
+        """
+        now = timezone.now()
+        Question.objects.create(
+            quiz=self.quiz_one, question_text='First?',
+            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
+        )
+        Question.objects.create(
+            quiz=self.quiz_two, question_text='Second?',
+            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
+        )
+        empty_slide = Slide.objects.create(
+            lesson=self.quiz_one.slide.lesson, title='Empty quiz',
+            slide_type=Slide.SlideType.QUIZ, order=3,
+        )
+        empty_quiz = Quiz.objects.create(slide=empty_slide, title='Empty quiz')
+
+        # Course preview uses the signed-in admin account and QuizAttempt has
+        # no preview-mode flag, so provenance can only be established by user.
+        QuizAttempt.objects.create(
+            user=self.org_admin, quiz=self.quiz_two, attempt_number=1,
+            score_percent=100, passed=True, submitted_at=now,
+        )
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.level_attempt(Decimal('80'), now)
+        partial = recalculate_leaderboard_entry(self.learner)
+
+        no_attempts = User.objects.create_user(
+            email='no-quizzes@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        LevelAssessmentAttempt.objects.create(
+            user=no_attempts, assessment_level=self.level, questions_drawn=[],
+            score_percent=80, passed=True, submitted_at=now,
+        )
+        none_entry = recalculate_leaderboard_entry(no_attempts)
+
+        complete = User.objects.create_user(
+            email='all-quizzes@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        QuizAttempt.objects.create(
+            user=complete, quiz=self.quiz_one, attempt_number=1,
+            score_percent=100, passed=True, submitted_at=now,
+        )
+        QuizAttempt.objects.create(
+            user=complete, quiz=self.quiz_two, attempt_number=1,
+            score_percent=80, passed=True, submitted_at=now,
+        )
+        LevelAssessmentAttempt.objects.create(
+            user=complete, assessment_level=self.level, questions_drawn=[],
+            score_percent=80, passed=True, submitted_at=now,
+        )
+        complete_entry = recalculate_leaderboard_entry(complete)
+
+        with self.subTest('one perfect result does not rank an incomplete learner'):
+            self.assertIsNone(partial.current_course_quiz_average)
+            self.assertIsNone(partial.knowledge_score)
+        with self.subTest('no attempts remains unranked'):
+            self.assertIsNone(none_entry.current_course_quiz_average)
+            self.assertIsNone(none_entry.knowledge_score)
+        with self.subTest('all nonempty quizzes use their latest scores'):
+            self.assertEqual(complete_entry.current_course_quiz_average, Decimal('90'))
+            self.assertEqual(complete_entry.knowledge_score, Decimal('84'))
+        with self.subTest('admin preview attempt is not borrowed by learner'):
+            self.assertEqual(
+                QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz_two).count(), 0
+            )
+        with self.subTest('zero-question quiz is excluded from required coverage'):
+            self.assertEqual(empty_quiz.questions.count(), 0)
+            self.assertIsNotNone(complete_entry.knowledge_score)
+
     def test_no_course_quiz_attempt_keeps_learner_unranked_but_reports_their_level_result(self):
         now = timezone.now()
         level = self.level_attempt(Decimal('80'), now)
