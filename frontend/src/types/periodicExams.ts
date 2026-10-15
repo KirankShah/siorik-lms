@@ -6,6 +6,53 @@ export interface PeriodicExamQuestionCount {
   question_count: number
 }
 
+export interface PeriodicExamReadinessLevel {
+  level: string
+  level_display: string
+  unique_question_count: number
+  eligible_learner_count: number
+  questions_per_exam: number
+  can_form_full_exam: boolean
+  note: string
+}
+
+export interface PeriodicExamReadiness {
+  organization_id: number
+  cycle_id: number | null
+  as_of: string
+  levels: PeriodicExamReadinessLevel[]
+}
+
+export interface PeriodicExamReportCycle {
+  id: number
+  display_label: string
+  start_date_ad: string
+  end_date_ad: string
+}
+
+export type PeriodicExamReportStatus = 'Passed' | 'Failed' | 'Not attempted' | 'In progress'
+
+export interface PeriodicExamReportRow {
+  staff_name: string
+  email: string
+  level: string
+  branch_department: string
+  cycle: string
+  attempted: boolean
+  completed: boolean
+  attempts_used: number
+  best_score: number | null
+  status: PeriodicExamReportStatus
+  last_attempt_date: string | null
+}
+
+export interface PeriodicExamReportPage {
+  count: number
+  page: number
+  page_size: number
+  results: PeriodicExamReportRow[]
+}
+
 export interface PeriodicExamCycleSummary {
   id: number
   sequence: number

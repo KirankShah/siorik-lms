@@ -4,11 +4,12 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Input } from '../ui/Input'
 import { ApiError } from '../../lib/apiClient'
-import { fetchPeriodicExamSettings, updatePeriodicExamSettings } from '../../lib/periodicExamsApi'
-import type { PeriodicExamFrequency, PeriodicExamSettings } from '../../types/periodicExams'
+import { fetchPeriodicExamReadiness, fetchPeriodicExamSettings, updatePeriodicExamSettings } from '../../lib/periodicExamsApi'
+import type { PeriodicExamFrequency, PeriodicExamReadiness, PeriodicExamSettings } from '../../types/periodicExams'
 
 export function PeriodicExamSettingsCard() {
   const [settings, setSettings] = useState<PeriodicExamSettings | null>(null)
+  const [readiness, setReadiness] = useState<PeriodicExamReadiness | null>(null)
   const [isEnabled, setIsEnabled] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -16,9 +17,10 @@ export function PeriodicExamSettingsCard() {
   const [reminderDays, setReminderDays] = useState('7, 2')
 
   useEffect(() => {
-    fetchPeriodicExamSettings()
-      .then((value) => {
+    Promise.all([fetchPeriodicExamSettings(), fetchPeriodicExamReadiness()])
+      .then(([value, readinessValue]) => {
         setSettings(value)
+        setReadiness(readinessValue)
         setReminderDays(value.reminder_days_before_end.join(', '))
       })
       .catch((requestError) => {
@@ -70,10 +72,15 @@ export function PeriodicExamSettingsCard() {
       <p className="mt-1 text-xs text-neutral-500">Changes apply from the next cycle only.</p>
       {settings && (
         <div className="mt-4 rounded-md bg-neutral-50 p-3 text-xs text-neutral-600">
-          <p className="font-medium text-neutral-700">Current question bank by level</p>
-          <p className="mt-1">
-            {settings.question_counts.map((item) => `${item.level_display}: ${item.question_count}`).join(' · ')}
-          </p>
+          <p className="font-medium text-neutral-700">Current readiness by level</p>
+          <ul className="mt-1 space-y-1">
+            {(readiness?.levels ?? []).map((item) => (
+              <li key={item.level}>
+                {item.level_display}: {item.unique_question_count} questions · {item.eligible_learner_count} eligible learners
+                {item.note ? ` · ${item.note}` : ''}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {settings?.current_cycle && (

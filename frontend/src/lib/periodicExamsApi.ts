@@ -1,9 +1,13 @@
-import { apiFetch } from './apiClient'
+import { apiFetch, apiFetchBlob } from './apiClient'
 import type {
   PeriodicExamAttempt,
   PeriodicExamAvailability,
   PeriodicExamLearnerSummary,
   PeriodicExamResult,
+  PeriodicExamReadiness,
+  PeriodicExamReportCycle,
+  PeriodicExamReportPage,
+  PeriodicExamReportStatus,
   PeriodicExamSettings,
   PeriodicExamSettingsUpdate,
   PlatformPeriodicExamOrganization,
@@ -12,6 +16,53 @@ import type {
 export function fetchPeriodicExamAvailability(): Promise<PeriodicExamAvailability> {
   return apiFetch('/periodic-exams/availability/')
 }
+
+export function fetchPeriodicExamReadiness(organizationId?: number): Promise<PeriodicExamReadiness> {
+  const query = organizationId ? `?organization_id=${organizationId}` : ''
+  return apiFetch(`/periodic-exams/readiness/${query}`)
+}
+
+function reportQuery(organizationId?: number, values: Record<string, string | number | undefined> = {}) {
+  const params = new URLSearchParams()
+  if (organizationId) params.set('organization_id', String(organizationId))
+  Object.entries(values).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') params.set(key, String(value))
+  })
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+export function fetchPeriodicExamReportCycles(organizationId?: number): Promise<PeriodicExamReportCycle[]> {
+  return apiFetch(`/periodic-exams/report/cycles/${reportQuery(organizationId)}`)
+}
+
+export function fetchPeriodicExamReport(
+  cycleId: number,
+  options: { organizationId?: number; search?: string; status?: PeriodicExamReportStatus | ''; page?: number } = {},
+): Promise<PeriodicExamReportPage> {
+  return apiFetch(`/periodic-exams/report/cycles/${cycleId}/${reportQuery(options.organizationId, {
+    search: options.search, status: options.status, page: options.page,
+  })}`)
+}
+
+async function downloadPeriodicExamReport(cycleId: number, format: 'csv' | 'xlsx', organizationId?: number) {
+  const blob = await apiFetchBlob(
+    `/periodic-exams/report/cycles/${cycleId}.${format}${reportQuery(organizationId)}`,
+  )
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `periodic_exam_${cycleId}.${format}`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export const downloadPeriodicExamReportCsv = (cycleId: number, organizationId?: number) =>
+  downloadPeriodicExamReport(cycleId, 'csv', organizationId)
+export const downloadPeriodicExamReportXlsx = (cycleId: number, organizationId?: number) =>
+  downloadPeriodicExamReport(cycleId, 'xlsx', organizationId)
 
 export function fetchPeriodicExamSummary(): Promise<PeriodicExamLearnerSummary> {
   return apiFetch('/periodic-exams/me/summary/')

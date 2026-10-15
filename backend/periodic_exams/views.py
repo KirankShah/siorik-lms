@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.core.paginator import Paginator
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -7,7 +8,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Organization
 
-from .models import PeriodicExamSettings
+from .models import PeriodicExamCycle, PeriodicExamSettings
 from .permissions import IsExactLearner, IsExactOrgAdmin, IsExactPlatformAdmin
 from .serializers import (
     AdvanceInputSerializer,
@@ -34,6 +35,7 @@ from .services import (
     start_periodic_exam_attempt,
     submit_periodic_attempt,
 )
+from .reports import csv_report_response, iter_report_rows, report_participants, xlsx_report_response
 
 
 class PeriodicExamConflictMixin:
@@ -237,3 +239,68 @@ class LearnerResultView(PeriodicExamConflictMixin, APIView):
         if attempt.submitted_at is None:
             raise PeriodicExamError('This attempt is still in progress.', code='ATTEMPT_IN_PROGRESS')
         return Response({'score_percent': attempt.score_percent, 'passed': attempt.passed})
+
+
+def _report_organization(request):
+    user = request.user
+    if user.role == user.Role.ORG_ADMIN and user.organization_id:
+        organization = user.organization
+    elif user.role == user.Role.PLATFORM_ADMIN:
+        organization_id = request.query_params.get('organization_id')
+        if not organization_id:
+            raise PeriodicExamError(
+                'organization_id is required.', code='ORGANIZATION_REQUIRED', status_code=400
+            )
+        organization = get_object_or_404(Organization, pk=organization_id, is_active=True)
+    else:
+        raise PeriodicExamError('Permission denied.', code='PERMISSION_DENIED', status_code=403)
+    enabled = PeriodicExamSettings.objects.filter(
+        organization=organization, enabled=True
+    ).exists()
+    if not enabled:
+        raise PeriodicExamError('Not found.', code='NOT_FOUND', status_code=404)
+    return organization
+
+
+class ReportCycleListView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        organization = _report_organization(request)
+        cycles = PeriodicExamCycle.objects.filter(organization=organization).order_by('-starts_at')
+        return Response([
+            {
+                'id': cycle.id,
+                'display_label': cycle.display_label,
+                'start_date_ad': cycle.start_date_ad,
+                'end_date_ad': cycle.end_date_ad,
+            }
+            for cycle in cycles
+        ])
+
+
+class ReportView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, cycle_id, export_format=None):
+        organization = _report_organization(request)
+        cycle = get_object_or_404(PeriodicExamCycle, pk=cycle_id, organization=organization)
+        search = request.query_params.get('search', '').strip()
+        status_filter = request.query_params.get('status', '').strip()
+        queryset = report_participants(cycle, search=search, status_filter=status_filter)
+        if export_format == 'csv':
+            return csv_report_response(queryset, cycle)
+        if export_format == 'xlsx':
+            return xlsx_report_response(queryset, cycle)
+        try:
+            page_number = max(1, int(request.query_params.get('page', 1)))
+            page_size = min(200, max(1, int(request.query_params.get('page_size', 50))))
+        except (TypeError, ValueError):
+            raise PeriodicExamError('Invalid pagination.', code='INVALID_PAGINATION')
+        page = Paginator(queryset, page_size).get_page(page_number)
+        return Response({
+            'count': page.paginator.count,
+            'page': page.number,
+            'page_size': page_size,
+            'results': [row.json() for row in iter_report_rows(page.object_list)],
+        })

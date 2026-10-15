@@ -786,7 +786,7 @@ export function OrganizationSettingsPage() {
       {selected && <MaxAttemptsSettingsForm settings={selected} onSaved={applyUpdate} />}
       {selected && isPlatformAdmin && <PlatformOrganizationControls settings={selected} onSaved={applyUpdate} />}
       {selected && <ReminderSettingsForm settings={selected} onSaved={applyUpdate} />}
-      {organization && user?.role === 'ORG_ADMIN' && <PeriodicExamSettingsCard />}
+      {organization && user?.role === 'ORG_ADMIN' && <div id="periodic-exam"><PeriodicExamSettingsCard /></div>}
     </div>
   )
 }

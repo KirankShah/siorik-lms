@@ -12,12 +12,18 @@ from .views import (
     PlatformOrganizationListView,
     PlatformOrganizationToggleView,
     ReadinessView,
+    ReportCycleListView,
+    ReportView,
     SettingsView,
 )
 
 urlpatterns = [
     path('availability/', AvailabilityView.as_view(), name='periodic-exam-availability'),
     path('readiness/', ReadinessView.as_view(), name='periodic-exam-readiness'),
+    path('report/cycles/', ReportCycleListView.as_view(), name='periodic-exam-report-cycles'),
+    path('report/cycles/<int:cycle_id>/', ReportView.as_view(), name='periodic-exam-report'),
+    path('report/cycles/<int:cycle_id>.csv', ReportView.as_view(), {'export_format': 'csv'}, name='periodic-exam-report-csv'),
+    path('report/cycles/<int:cycle_id>.xlsx', ReportView.as_view(), {'export_format': 'xlsx'}, name='periodic-exam-report-xlsx'),
     path('me/summary/', LearnerSummaryView.as_view(), name='periodic-exam-learner-summary'),
     path('me/attempts/start/', LearnerAttemptStartView.as_view(), name='periodic-exam-attempt-start'),
     path('me/attempts/<int:attempt_id>/', LearnerAttemptView.as_view(), name='periodic-exam-attempt'),

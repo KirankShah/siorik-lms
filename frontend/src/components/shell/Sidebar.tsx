@@ -140,6 +140,18 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
 
         {isOrgSettingsRole(user?.role) && (
           <>
+            {availability?.enabled && user?.role === 'ORG_ADMIN' && (
+              <NavLink to="/admin/organization#periodic-exam" className={linkClass} onClick={onNavigate}>
+                <Settings className="h-[18px] w-[18px]" />
+                Periodic Exam Settings
+              </NavLink>
+            )}
+            {availability?.enabled && (
+              <NavLink to="/admin/periodic-exam-report" className={linkClass} onClick={onNavigate}>
+                <FileSpreadsheet className="h-[18px] w-[18px]" />
+                Periodic Exam Report
+              </NavLink>
+            )}
             <NavLink to="/admin/staff-enrollment" className={linkClass} onClick={onNavigate}>
               <UserPlus className="h-[18px] w-[18px]" />
               Staff Enrollment

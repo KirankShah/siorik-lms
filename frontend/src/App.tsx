@@ -38,6 +38,7 @@ import { StaffTrainingReportPage } from './pages/admin/StaffTrainingReportPage'
 import { OrganizationSettingsPage } from './pages/admin/OrganizationSettingsPage'
 import { OrganizationsPage } from './pages/admin/OrganizationsPage'
 import { ReportsPage } from './pages/admin/ReportsPage'
+import { PeriodicExamReportPage } from './pages/admin/PeriodicExamReportPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
 import { AssessmentsRoute } from './routes/AssessmentsRoute'
@@ -112,6 +113,7 @@ function App() {
             <Route path="/admin/staff-enrollment" element={<StaffEnrollmentPage />} />
             <Route path="/admin/staff-training-report" element={<StaffTrainingReportPage />} />
             <Route path="/admin/role-based-training" element={<RoleBasedTrainingPage />} />
+            <Route path="/admin/periodic-exam-report" element={<PeriodicExamReportPage />} />
           </Route>
 
           <Route element={<PlatformAdminRoute />}>
