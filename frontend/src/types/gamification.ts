@@ -11,8 +11,11 @@ export interface LeaderboardEntry {
   courses_completed_count: number
   average_quiz_score: string
   current_course_quiz_average: string | null
+  quizzes_completed: number
+  quizzes_required: number
   latest_level_assessment_score: string | null
   knowledge_score: string | null
+  is_ranked: boolean
   last_assessed_at: string | null
   certificates_earned_count: number
   level_assessments_passed_count: number

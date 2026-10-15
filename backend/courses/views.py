@@ -807,6 +807,8 @@ class LevelCourseAssignmentListView(APIView):
                 course=course,
                 order=_append_order(LevelCourseAssignment.objects.filter(assessment_level=level)),
             )
+        from gamification.services import refresh_current_knowledge_for_assessment_level
+        refresh_current_knowledge_for_assessment_level(level)
         return Response(LevelCourseAssignmentSerializer(assignment).data, status=201)
 
 
@@ -822,7 +824,10 @@ class LevelCourseAssignmentDetailView(APIView):
             LevelCourseAssignment.objects.select_related('assessment_level'), pk=pk
         )
         _assessment_level_for_admin(request, assignment.assessment_level_id)
+        level = assignment.assessment_level
         assignment.delete()
+        from gamification.services import refresh_current_knowledge_for_assessment_level
+        refresh_current_knowledge_for_assessment_level(level)
         return Response(status=204)
 
 

@@ -19,8 +19,11 @@ const entry: LeaderboardEntry = {
   courses_completed_count: 2,
   average_quiz_score: '92.00',
   current_course_quiz_average: '80.00',
+  quizzes_completed: 2,
+  quizzes_required: 2,
   latest_level_assessment_score: '70.00',
   knowledge_score: '74.00',
+  is_ranked: true,
   last_assessed_at: '2026-10-08T06:00:00Z',
   certificates_earned_count: 1,
   level_assessments_passed_count: 1,
@@ -82,10 +85,12 @@ describe('LeaderboardWidget', () => {
 
     const table = screen.getByRole('table')
     const displayedRows = within(table).getAllByRole('row').slice(1)
-    expect(displayedRows).toHaveLength(5)
+    expect(displayedRows).toHaveLength(6)
     for (const name of ['Rank One', 'Rank Two', 'Rank Three', 'Rank Four', 'Rank Five']) {
       expect(displayedRows.some((row) => row.textContent?.includes(name))).toBe(true)
     }
+    expect(displayedRows[5]).toHaveTextContent('Not Assessed')
+    expect(displayedRows[5]).toHaveTextContent('Not yet assessed')
     expect(screen.getByText(/Your position: 6th/)).toBeInTheDocument()
     expect(screen.getByText('Asha Gurung')).toBeInTheDocument()
   })
@@ -94,22 +99,32 @@ describe('LeaderboardWidget', () => {
     mockAuth.userId = 7
     render(<LeaderboardWidget entries={[entry, leaderboardEntry(7, 'Not Assessed', null, null, null)]} />)
 
-    expect(screen.getAllByText('Not yet assessed')).toHaveLength(3)
+    expect(screen.getAllByText('Not yet assessed')).toHaveLength(4)
     expect(screen.getByText('Current Knowledge').parentElement).not.toHaveTextContent('—')
   })
 
   it('does not call a learner unassessed when only the course quiz is missing', () => {
     mockAuth.userId = 8
+    const pending = leaderboardEntry(8, 'Quiz Pending', null, '80.00', '2026-10-09T06:00:00Z')
+    pending.current_course_quiz_average = null
+    pending.quizzes_completed = 1
+    pending.quizzes_required = 2
     render(
       <LeaderboardWidget
-        entries={[entry, leaderboardEntry(8, 'Quiz Pending', null, '80.00', '2026-10-09T06:00:00Z')]}
+        entries={[entry, pending]}
       />,
     )
 
     expect(screen.queryByText('Not yet assessed')).not.toBeInTheDocument()
-    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('Not ranked yet')
-    expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('Complete a course quiz')
+    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('Not ranked yet · 1 quiz remaining')
+    expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('In progress (1 of 2 quizzes)')
     expect(screen.getAllByText('Last Assessed')[0].parentElement).toHaveTextContent('9 Oct 2026')
+    const rows = within(screen.getByRole('table')).getAllByRole('row')
+    const pendingRow = rows[rows.length - 1]
+    const pendingCells = within(pendingRow).getAllByRole('cell')
+    expect(pendingRow).toHaveTextContent('1 of 2 quizzes')
+    expect(pendingCells[5]).toHaveTextContent('In progress (1 of 2 quizzes)')
+    expect(pendingCells[5]).not.toHaveTextContent('80%')
   })
 
   it('shows a useful card state for an admin without a learner score', () => {

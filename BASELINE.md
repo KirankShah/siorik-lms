@@ -29,3 +29,21 @@ placeholder was created and neither file is committed:
 The fresh-database migration failure is part of this base and is not introduced
 by either reconciliation branch. Final branch comparisons use the documented
 `--keepdb` workflow against the retained test database and report only deltas.
+
+## Current `main` comparison — 2026-10-15
+
+The original 543/74 figures above predate the Periodic Exam commits now on
+`origin/main@acc12c1`. The leaderboard review branch was rebased onto that
+commit and verified from a newly created database (without `--keepdb`):
+
+- Current `origin/main` comparison: 633 backend tests and 98 frontend tests.
+  The backend figure is the review branch's discovered 641 tests minus its
+  eight new leaderboard/migration regression tests; frontend test count is
+  unchanged by this branch.
+- `fix/leaderboard-quiz-average`: PASS, 641 backend tests in 1394.784 seconds;
+  PASS, 24 frontend files / 98 tests.
+- Frontend lint: PASS with seven pre-existing Fast Refresh warnings.
+- Frontend production build/type check: PASS with the existing large-chunk
+  advisory.
+- `manage.py check` and `makemigrations --check --dry-run`: PASS; no model
+  drift.

@@ -44,9 +44,18 @@ function Rank({ rank }: { rank: number }) {
   return <span className="font-semibold text-neutral-700">{rank}</span>
 }
 
+function quizProgress(entry: LeaderboardEntry): string {
+  return `${entry.quizzes_completed} of ${entry.quizzes_required} quizzes`
+}
+
+function quizCoverageIncomplete(entry: LeaderboardEntry): boolean {
+  return entry.quizzes_required === 0 || entry.quizzes_completed < entry.quizzes_required
+}
+
 export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
   const { user } = useAuth()
   const rankedEntries = entries?.filter((entry) => entry.knowledge_score != null) ?? []
+  const inProgressEntries = entries?.filter((entry) => entry.knowledge_score == null) ?? []
   const myEntry = entries?.find((entry) => entry.user_id === user?.id) ?? null
   const myRankIndex = rankedEntries.findIndex((entry) => entry.user_id === user?.id)
   const myRank = myRankIndex >= 0 ? myRankIndex + 1 : null
@@ -55,9 +64,16 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
   const hasLevelResult = myEntry?.last_assessed_at != null
   const noScoreLabel = user?.role === 'LEARNER' ? 'Not yet assessed' : 'No learner score'
   const cardState = entries === null ? 'Loading…' : noScoreLabel
-  const rankState = hasLevelResult ? 'Not ranked yet' : cardState
-  const knowledgeState = hasLevelResult ? 'Complete a course quiz' : cardState
+  const quizzesRemaining = myEntry ? Math.max(myEntry.quizzes_required - myEntry.quizzes_completed, 0) : 0
+  const myQuizCoverageIncomplete = myEntry != null && quizCoverageIncomplete(myEntry)
+  const rankState = myQuizCoverageIncomplete
+    ? `Not ranked yet · ${quizzesRemaining} ${quizzesRemaining === 1 ? 'quiz' : 'quizzes'} remaining`
+    : hasLevelResult ? 'Not ranked yet' : cardState
+  const knowledgeState = myQuizCoverageIncomplete
+    ? `In progress (${quizProgress(myEntry)})`
+    : hasLevelResult ? 'Complete all course quizzes' : cardState
   const topEntries = rankedEntries.slice(0, TOP_RANKS_LIMIT)
+  const displayedEntries = [...topEntries, ...inProgressEntries]
   const showOwnPosition = myEntry?.knowledge_score != null && myRank !== null && myRank > TOP_RANKS_LIMIT
 
   return (
@@ -104,7 +120,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
       <Card className="overflow-hidden p-0">
         {!entries ? (
           <p className="p-6 text-sm text-neutral-500">Loading…</p>
-        ) : topEntries.length === 0 ? (
+        ) : displayedEntries.length === 0 ? (
           <p className="p-6 text-sm text-neutral-500">
             Complete a course quiz and a Level Assessment to join the leaderboard.
           </p>
@@ -123,27 +139,33 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
                 </tr>
               </thead>
               <tbody>
-                {topEntries.map((entry, index) => {
+                {displayedEntries.map((entry, index) => {
                   const isMe = entry.user_id === user?.id
+                  const isRanked = entry.knowledge_score != null
+                  const isQuizIncomplete = quizCoverageIncomplete(entry)
                   return (
                     <tr
                       key={entry.user_id}
                       className={`border-b border-neutral-100 last:border-b-0 ${isMe ? 'bg-brand-gold/10' : 'hover:bg-neutral-50'}`}
                     >
-                      <td className="px-5 py-4"><Rank rank={index + 1} /></td>
+                      <td className="px-5 py-4">
+                        {isRanked ? <Rank rank={index + 1} /> : <span className="text-neutral-500">—</span>}
+                      </td>
                       <td className="px-4 py-4 text-sm font-medium text-neutral-900">
                         {entry.first_name} {entry.last_name}
                         {isMe && <span className="ml-1 text-xs font-normal text-brand-navy">(You)</span>}
                       </td>
                       <td className="px-4 py-4 text-sm text-neutral-600">{entry.assessment_level_display}</td>
                       <td className="px-4 py-4 text-center text-sm text-neutral-700">
-                        {formatPercent(entry.current_course_quiz_average)}
+                        {isQuizIncomplete ? quizProgress(entry) : formatPercent(entry.current_course_quiz_average)}
                       </td>
                       <td className="px-4 py-4 text-center text-sm text-neutral-700">
                         {formatPercent(entry.latest_level_assessment_score)}
                       </td>
                       <td className={`bg-brand-navy/[0.025] px-4 py-4 text-center text-xl font-bold ${knowledgeColor(entry.knowledge_score)}`}>
-                        {formatPercent(entry.knowledge_score)}
+                        {isRanked
+                          ? formatPercent(entry.knowledge_score)
+                          : isQuizIncomplete ? `In progress (${quizProgress(entry)})` : 'Not yet assessed'}
                       </td>
                       <td className="px-4 py-4 text-sm text-neutral-600">{formatAssessmentDate(entry.last_assessed_at)}</td>
                     </tr>

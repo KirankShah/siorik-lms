@@ -64,3 +64,50 @@ class LeaderboardFreshDatabaseMigrationTests(TransactionTestCase):
         self.assertEqual(entry.certificates_earned_count, 0)
         self.assertEqual(entry.level_assessments_passed_count, 0)
         self.assertIsNone(entry.knowledge_score)
+
+
+class LeaderboardQuizCoverageMigrationTests(TransactionTestCase):
+    migrate_from = ('gamification', '0014_recalculate_current_knowledge')
+    migrate_to = ('gamification', '0015_leaderboard_quiz_coverage')
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_additive_fields_apply_and_reverse_without_changing_existing_rows(self):
+        executor = MigrationExecutor(connection)
+        latest_targets = executor.loader.graph.leaf_nodes()
+        old_targets = [target for target in latest_targets if target[0] != 'gamification'] + [self.migrate_from]
+        executor.migrate(old_targets)
+        old_apps = executor.loader.project_state(old_targets).apps
+
+        Organization = old_apps.get_model('accounts', 'Organization')
+        User = old_apps.get_model('accounts', 'User')
+        Entry = old_apps.get_model('gamification', 'LeaderboardEntry')
+        organization = Organization.objects.create(name='Coverage Migration Bank', slug='coverage-migration-bank')
+        learner = User.objects.create(
+            email='coverage-migration@example.com', role='LEARNER', organization=organization,
+            password='not-a-real-password',
+        )
+        entry = Entry.objects.create(
+            user=learner, organization=organization, total_points=321,
+            courses_completed_count=2, average_quiz_score=75,
+            current_course_quiz_average=80, latest_level_assessment_score=70,
+            knowledge_score=74,
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_to])
+        migrated_apps = executor.loader.project_state([self.migrate_to]).apps
+        migrated = migrated_apps.get_model('gamification', 'LeaderboardEntry').objects.get(pk=entry.pk)
+        self.assertEqual(migrated.total_points, 321)
+        self.assertEqual(migrated.knowledge_score, 74)
+        self.assertEqual((migrated.quizzes_completed, migrated.quizzes_required), (0, 0))
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        reversed_apps = executor.loader.project_state([self.migrate_from]).apps
+        reversed_entry = reversed_apps.get_model('gamification', 'LeaderboardEntry').objects.get(pk=entry.pk)
+        self.assertEqual(reversed_entry.total_points, 321)
+        self.assertEqual(reversed_entry.knowledge_score, 74)

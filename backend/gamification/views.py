@@ -1,5 +1,5 @@
 from django.utils import timezone
-from django.db.models import F, Q
+from django.db.models import F
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -28,13 +28,9 @@ class LeaderboardEntryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 organization_id=user.organization_id,
                 user__organization_id=user.organization_id,
                 user__is_active=True,
+                user__role='LEARNER',
                 user__assessment_level=user.assessment_level,
             )
-            # Colleagues appear only once they hold a Knowledge Score. The
-            # caller's own row is always included, even unscored, so their
-            # dashboard can show which input is still outstanding without
-            # exposing other unranked learners' partial results.
-            .filter(Q(knowledge_score__isnull=False) | Q(user=user))
             .select_related('user')
             .order_by(
                 F('knowledge_score').desc(nulls_last=True),

@@ -11,7 +11,11 @@ from certificates.services import try_issue_learning_path_certificate
 from core.permissions import IsAdminRole
 from courses.models import Enrollment
 from courses.permissions import editable_courses_for_user, exclude_demo_locked, path_accessible_courses_for_user
-from gamification.services import record_learning_activity, update_gamification_for_user
+from gamification.services import (
+    record_learning_activity,
+    refresh_current_knowledge_for_course,
+    update_gamification_for_user,
+)
 
 from .models import (
     CategorizeItem,
@@ -93,6 +97,21 @@ class QuizViewSet(
         if not editable_courses_for_user(self.request.user).filter(pk=course.pk).exists():
             raise ValidationError({'slide': 'You do not have permission to modify this course.'})
         serializer.save()
+
+    def perform_update(self, serializer):
+        old_course_id = serializer.instance.slide.lesson.module.course_id
+        slide = serializer.validated_data.get('slide', serializer.instance.slide)
+        if not editable_courses_for_user(self.request.user).filter(pk=slide.lesson.module.course_id).exists():
+            raise ValidationError({'slide': 'You do not have permission to modify this course.'})
+        quiz = serializer.save()
+        new_course_id = quiz.slide.lesson.module.course_id
+        for course_id in {old_course_id, new_course_id}:
+            refresh_current_knowledge_for_course(course_id)
+
+    def perform_destroy(self, instance):
+        course_id = instance.slide.lesson.module.course_id
+        instance.delete()
+        refresh_current_knowledge_for_course(course_id)
 
     @action(detail=True, methods=['post'], throttle_classes=[ScopedRateThrottle], throttle_scope='quiz-submit')
     def submit(self, request, pk=None):
@@ -269,7 +288,23 @@ class QuestionViewSet(viewsets.ModelViewSet):
         course_id = quiz.slide.lesson.module.course_id
         if not editable_courses_for_user(self.request.user).filter(pk=course_id).exists():
             raise ValidationError({'quiz': 'You do not have permission to modify this quiz.'})
-        serializer.save()
+        question = serializer.save()
+        refresh_current_knowledge_for_course(question.quiz.slide.lesson.module.course_id)
+
+    def perform_update(self, serializer):
+        old_course_id = serializer.instance.quiz.slide.lesson.module.course_id
+        quiz = serializer.validated_data.get('quiz', serializer.instance.quiz)
+        if not editable_courses_for_user(self.request.user).filter(pk=quiz.slide.lesson.module.course_id).exists():
+            raise ValidationError({'quiz': 'You do not have permission to modify this quiz.'})
+        question = serializer.save()
+        new_course_id = question.quiz.slide.lesson.module.course_id
+        for course_id in {old_course_id, new_course_id}:
+            refresh_current_knowledge_for_course(course_id)
+
+    def perform_destroy(self, instance):
+        course_id = instance.quiz.slide.lesson.module.course_id
+        instance.delete()
+        refresh_current_knowledge_for_course(course_id)
 
 
 class ChoiceViewSet(viewsets.ModelViewSet):

@@ -23,6 +23,8 @@ class LeaderboardEntry(models.Model):
     # up or down. Null means the learner has not yet completed every required
     # input needed for a fair score.
     current_course_quiz_average = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    quizzes_completed = models.PositiveIntegerField(default=0)
+    quizzes_required = models.PositiveIntegerField(default=0)
     latest_level_assessment_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     knowledge_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     last_assessed_at = models.DateTimeField(null=True, blank=True)

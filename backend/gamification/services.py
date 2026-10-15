@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db import connection
 from django.db.models import Max
 from django.utils import timezone
 
@@ -60,35 +61,46 @@ def _average(values):
 def _current_knowledge_metrics(user, path_course_ids):
     """Return the inputs and final score for the current-knowledge board.
 
-    For each attempted quiz in the learner's effective path we use the most
-    recently submitted attempt, not the historical best. Unattempted quizzes
-    are omitted from this current snapshot; certificate eligibility retains
-    its separate, stricter all-quizzes rule. The level component likewise uses
-    the most recently submitted attempt for the learner's currently assigned
-    assessment level, whether it passed or failed.
+    The required set is every non-empty quiz in the learner's effective path.
+    For each one we use the learner's most recently submitted attempt, not the
+    historical best. The course average stays null until every required quiz
+    has such an attempt. The level component likewise uses the most recently
+    submitted attempt for the learner's currently assigned assessment level,
+    whether it passed or failed.
 
     Each input is reported on its own even when the other is missing, so the
     learner's own dashboard can say which one is outstanding. knowledge_score
     stays null until both exist, which is what keeps a learner unranked.
     """
-    required_quiz_ids = list(
-        Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids)
-        .values_list('id', flat=True)
-    )
-    latest_quiz_scores = []
-    for quiz_id in required_quiz_ids:
-        latest_attempt = (
-            QuizAttempt.objects.filter(user=user, quiz_id=quiz_id, submitted_at__isnull=False)
-            .order_by('-submitted_at', '-id')
-            .first()
+    required_quiz_ids = set(
+        Quiz.objects.filter(
+            slide__lesson__module__course_id__in=path_course_ids,
+            questions__isnull=False,
         )
-        if latest_attempt is not None:
-            latest_quiz_scores.append(latest_attempt.score_percent)
+        .values_list('id', flat=True)
+        .distinct()
+    )
+    latest_quiz_scores = {}
+    for quiz_id, score in (
+        QuizAttempt.objects.filter(
+            user=user,
+            quiz_id__in=required_quiz_ids,
+            submitted_at__isnull=False,
+        )
+        .order_by('quiz_id', '-submitted_at', '-id')
+        .values_list('quiz_id', 'score_percent')
+    ):
+        latest_quiz_scores.setdefault(quiz_id, score)
+
+    quizzes_required = len(required_quiz_ids)
+    quizzes_completed = len(latest_quiz_scores)
+    course_average = None
+    if quizzes_required and quizzes_completed == quizzes_required:
+        course_average = _average(latest_quiz_scores.values())
 
     if not user.assessment_level:
-        return None, None, None, None
+        return course_average, None, None, None, quizzes_completed, quizzes_required
 
-    course_average = _average(latest_quiz_scores) if latest_quiz_scores else None
     latest_level_attempt = (
         LevelAssessmentAttempt.objects.filter(
             user=user,
@@ -99,18 +111,95 @@ def _current_knowledge_metrics(user, path_course_ids):
         .first()
     )
     if latest_level_attempt is None:
-        return course_average, None, None, None
+        return course_average, None, None, None, quizzes_completed, quizzes_required
 
     assessment_score = latest_level_attempt.score_percent
     if course_average is None:
-        return None, assessment_score, None, latest_level_attempt.submitted_at
+        return None, assessment_score, None, latest_level_attempt.submitted_at, quizzes_completed, quizzes_required
 
     knowledge_score = round(
         course_average * COURSE_QUIZ_KNOWLEDGE_WEIGHT
         + assessment_score * LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT,
         2,
     )
-    return course_average, assessment_score, knowledge_score, latest_level_attempt.submitted_at
+    return (
+        course_average,
+        assessment_score,
+        knowledge_score,
+        latest_level_attempt.submitted_at,
+        quizzes_completed,
+        quizzes_required,
+    )
+
+
+def current_knowledge_defaults(user):
+    """Return only the stored current-knowledge fields for one learner."""
+    if user.organization_id is None:
+        return None
+
+    from courses.learning_path import learning_path_course_ids
+
+    (
+        course_average,
+        latest_level_score,
+        knowledge_score,
+        last_assessed_at,
+        quizzes_completed,
+        quizzes_required,
+    ) = _current_knowledge_metrics(user, learning_path_course_ids(user))
+    return {
+        'organization_id': user.organization_id,
+        'current_course_quiz_average': course_average,
+        'latest_level_assessment_score': latest_level_score,
+        'knowledge_score': knowledge_score,
+        'last_assessed_at': last_assessed_at,
+        'quizzes_completed': quizzes_completed,
+        'quizzes_required': quizzes_required,
+    }
+
+
+def refresh_current_knowledge_for_user(user):
+    """Refresh leaderboard ranking inputs without changing points or badges."""
+    defaults = current_knowledge_defaults(user)
+    if defaults is None:
+        return None
+    entry, _created = LeaderboardEntry.objects.update_or_create(user=user, defaults=defaults)
+    return entry
+
+
+def refresh_current_knowledge_for_assessment_level(assessment_level):
+    """Refresh learners affected when an admin changes a level's course path."""
+    from accounts.models import User
+
+    learners = User.objects.filter(
+        organization_id=assessment_level.organization_id,
+        assessment_level=assessment_level.name,
+        role=User.Role.LEARNER,
+        is_active=True,
+        leaderboard_entry__isnull=False,
+    )
+    for learner in learners.iterator():
+        refresh_current_knowledge_for_user(learner)
+
+
+def refresh_current_knowledge_for_course(course_id):
+    """Refresh existing standings when authored quiz coverage changes."""
+    from accounts.models import User
+    from courses.models import Course
+    from courses.learning_path import learning_path_course_ids
+
+    course = Course.objects.filter(pk=course_id).only('organization_id').first()
+    if course is None:
+        return
+    learners = User.objects.filter(
+        organization_id=course.organization_id,
+        role=User.Role.LEARNER,
+        is_active=True,
+        leaderboard_entry__isnull=False,
+    )
+    for learner in learners.iterator():
+        if course_id in learning_path_course_ids(learner):
+            refresh_current_knowledge_for_user(learner)
 
 
 def recalculate_leaderboard_entry(user):
@@ -192,25 +281,38 @@ def recalculate_leaderboard_entry(user):
         total_points += round(LEVEL_ASSESSMENT_PASS_POINTS * (best_score / 100))
 
     overall_average = _average(_best_scores_per_quiz(user))
-    current_course_average, latest_level_score, knowledge_score, last_assessed_at = _current_knowledge_metrics(
-        user, path_course_ids
-    )
+    current_knowledge = current_knowledge_defaults(user)
 
-    entry, _created = LeaderboardEntry.objects.update_or_create(
-        user=user,
-        defaults={
-            'organization_id': user.organization_id,
-            'total_points': total_points,
-            'courses_completed_count': completed_enrollments.count(),
-            'average_quiz_score': overall_average,
-            'current_course_quiz_average': current_course_average,
-            'latest_level_assessment_score': latest_level_score,
-            'knowledge_score': knowledge_score,
-            'last_assessed_at': last_assessed_at,
-            'certificates_earned_count': Certificate.objects.filter(user=user).count(),
-            'level_assessments_passed_count': len(best_passing_scores_by_level),
-        },
-    )
+    defaults = {
+        'organization_id': user.organization_id,
+        'total_points': total_points,
+        'courses_completed_count': completed_enrollments.count(),
+        'average_quiz_score': overall_average,
+        **current_knowledge,
+        'certificates_earned_count': Certificate.objects.filter(user=user).count(),
+        'level_assessments_passed_count': len(best_passing_scores_by_level),
+    }
+
+    # Historical data migrations 0013/0014 call this service. During an
+    # upgrade they run before later additive columns exist, so restrict that
+    # legacy path to columns physically present in the database. Normal
+    # application calls take the update_or_create branch below.
+    table_name = LeaderboardEntry._meta.db_table
+    with connection.cursor() as cursor:
+        database_columns = {
+            column.name for column in connection.introspection.get_table_description(cursor, table_name)
+        }
+    model_columns = {field.column for field in LeaderboardEntry._meta.concrete_fields}
+    if not model_columns.issubset(database_columns):
+        compatible_defaults = {
+            field_name: value
+            for field_name, value in defaults.items()
+            if LeaderboardEntry._meta.get_field(field_name.removesuffix('_id')).column in database_columns
+        }
+        LeaderboardEntry.objects.filter(user_id=user.id).update(**compatible_defaults)
+        return None
+
+    entry, _created = LeaderboardEntry.objects.update_or_create(user=user, defaults=defaults)
     return entry
 
 

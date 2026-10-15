@@ -7879,6 +7879,14 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         slide_two = Slide.objects.create(lesson=lesson, title='Quiz 2', slide_type=Slide.SlideType.QUIZ, order=2)
         self.quiz_one = Quiz.objects.create(slide=slide_one, title='Quiz 1')
         self.quiz_two = Quiz.objects.create(slide=slide_two, title='Quiz 2')
+        Question.objects.create(
+            quiz=self.quiz_one, question_text='First?',
+            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
+        )
+        Question.objects.create(
+            quiz=self.quiz_two, question_text='Second?',
+            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
+        )
 
     def quiz_attempt(self, quiz, score, submitted_at):
         return QuizAttempt.objects.create(
@@ -7920,14 +7928,16 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(entry.knowledge_score, Decimal('62'))
         self.assertEqual(entry.level_assessments_passed_count, 1)
 
-    def test_unattempted_path_quiz_is_omitted_from_current_average(self):
+    def test_unattempted_path_quiz_keeps_learner_in_progress(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
         self.level_attempt(Decimal('80'), now)
         entry = recalculate_leaderboard_entry(self.learner)
 
-        self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
-        self.assertEqual(entry.knowledge_score, Decimal('80'))
+        self.assertIsNone(entry.current_course_quiz_average)
+        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.quizzes_completed, 1)
+        self.assertEqual(entry.quizzes_required, 2)
 
     def test_only_learners_completing_every_nonempty_path_quiz_are_rankable(self):
         """Proposed policy: incomplete quiz coverage has no rankable score.
@@ -7938,14 +7948,6 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         not a learner assignment and must not block otherwise complete coverage.
         """
         now = timezone.now()
-        Question.objects.create(
-            quiz=self.quiz_one, question_text='First?',
-            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
-        )
-        Question.objects.create(
-            quiz=self.quiz_two, question_text='Second?',
-            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
-        )
         empty_slide = Slide.objects.create(
             lesson=self.quiz_one.slide.lesson, title='Empty quiz',
             slide_type=Slide.SlideType.QUIZ, order=3,
@@ -7993,12 +7995,14 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         with self.subTest('one perfect result does not rank an incomplete learner'):
             self.assertIsNone(partial.current_course_quiz_average)
             self.assertIsNone(partial.knowledge_score)
+            self.assertEqual((partial.quizzes_completed, partial.quizzes_required), (1, 2))
         with self.subTest('no attempts remains unranked'):
             self.assertIsNone(none_entry.current_course_quiz_average)
             self.assertIsNone(none_entry.knowledge_score)
         with self.subTest('all nonempty quizzes use their latest scores'):
             self.assertEqual(complete_entry.current_course_quiz_average, Decimal('90'))
             self.assertEqual(complete_entry.knowledge_score, Decimal('84'))
+            self.assertEqual((complete_entry.quizzes_completed, complete_entry.quizzes_required), (2, 2))
         with self.subTest('admin preview attempt is not borrowed by learner'):
             self.assertEqual(
                 QuizAttempt.objects.filter(user=self.learner, quiz=self.quiz_two).count(), 0
@@ -8060,7 +8064,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual([row['user_id'] for row in response.data], [colleague.id, self.learner.id])
         self.assertEqual(response.data[1]['assessment_level_display'], 'Officer Level')
 
-    def test_endpoint_returns_own_unscored_row_but_never_unscored_colleagues_or_another_organization(self):
+    def test_endpoint_lists_in_progress_colleagues_after_ranked_rows_but_never_another_organization(self):
         now = timezone.now()
 
         # Five scored colleagues outrank the caller, who is sixth. An
@@ -8086,6 +8090,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         LeaderboardEntry.objects.create(
             user=unscored_colleague, organization=self.org, current_course_quiz_average=Decimal('90'),
             latest_level_assessment_score=None, knowledge_score=None, last_assessed_at=None,
+            quizzes_completed=1, quizzes_required=2,
         )
 
         foreign_learner = User.objects.create_user(
@@ -8103,23 +8108,172 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         returned_ids = [row['user_id'] for row in response.data]
         with self.subTest('scored rows are ordered by descending Knowledge Score'):
-            self.assertEqual(returned_ids, [*(learner.id for learner in same_org_learners[1:]), self.learner.id])
-        with self.subTest('unscored colleague is excluded'):
-            self.assertNotIn(unscored_colleague.id, returned_ids)
+            self.assertEqual(
+                returned_ids[:-1],
+                [*(learner.id for learner in same_org_learners[1:]), self.learner.id],
+            )
+        with self.subTest('in-progress colleague follows every ranked row'):
+            self.assertEqual(returned_ids, [*(learner.id for learner in same_org_learners[1:]), self.learner.id, unscored_colleague.id])
+            self.assertEqual(response.data[-1]['quizzes_completed'], 1)
+            self.assertEqual(response.data[-1]['quizzes_required'], 2)
+            self.assertFalse(response.data[-1]['is_ranked'])
         with self.subTest('foreign-organization learner is excluded'):
             self.assertNotIn(foreign_learner.id, returned_ids)
 
-        with self.subTest('unscored caller still receives only their own row among unscored rows'):
+        with self.subTest('in-progress caller receives the same tenant-scoped list'):
             self.auth_as(unscored_colleague)
             response = self.client.get('/api/leaderboard/')
             rows_by_id = {row['user_id']: row for row in response.data}
             self.assertIn(unscored_colleague.id, rows_by_id)
             self.assertIsNone(rows_by_id[unscored_colleague.id]['knowledge_score'])
-            self.assertEqual(
-                [row['user_id'] for row in response.data if row['knowledge_score'] is None],
-                [unscored_colleague.id],
-            )
+            self.assertEqual([row['user_id'] for row in response.data if row['knowledge_score'] is None], [unscored_colleague.id])
             self.assertNotIn(foreign_learner.id, rows_by_id)
+
+    def test_new_nonempty_path_quiz_returns_ranked_learner_to_in_progress(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.quiz_attempt(self.quiz_two, Decimal('100'), now)
+        self.level_attempt(Decimal('80'), now)
+        ranked = recalculate_leaderboard_entry(self.learner)
+        self.assertEqual(ranked.knowledge_score, Decimal('88'))
+
+        slide = Slide.objects.create(
+            lesson=self.quiz_one.slide.lesson, title='Later quiz', slide_type=Slide.SlideType.QUIZ, order=3,
+        )
+        later_quiz = Quiz.objects.create(slide=slide, title='Later quiz')
+        self.auth_as(self.org_admin)
+        response = self.client.post('/api/questions/', {
+            'quiz': later_quiz.id, 'question_text': 'Later?',
+            'question_type': Question.QuestionType.SINGLE_CHOICE, 'points': 1, 'order': 1,
+        })
+        self.assertEqual(response.status_code, 201)
+
+        ranked.refresh_from_db()
+        refreshed = ranked
+        self.assertIsNone(refreshed.current_course_quiz_average)
+        self.assertIsNone(refreshed.knowledge_score)
+        self.assertEqual((refreshed.quizzes_completed, refreshed.quizzes_required), (2, 3))
+
+    def test_path_assignment_change_refreshes_current_knowledge_without_waiting_for_an_attempt(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.quiz_attempt(self.quiz_two, Decimal('100'), now)
+        self.level_attempt(Decimal('80'), now)
+        recalculate_leaderboard_entry(self.learner)
+
+        second_course = Course.objects.create(
+            title='New path course', slug='new-path-course', organization=self.org,
+            content_owner=Course.ContentOwner.ORGANIZATION, is_published=True,
+        )
+        module = Module.objects.create(course=second_course, title='Module', order=1)
+        lesson = Lesson.objects.create(module=module, title='Lesson', order=1)
+        slide = Slide.objects.create(lesson=lesson, title='Quiz', slide_type=Slide.SlideType.QUIZ, order=1)
+        quiz = Quiz.objects.create(slide=slide, title='New required quiz')
+        Question.objects.create(
+            quiz=quiz, question_text='New?', question_type=Question.QuestionType.SINGLE_CHOICE,
+            points=1, order=1,
+        )
+
+        self.auth_as(self.org_admin)
+        first = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.level.id, 'course': self.course.id,
+        })
+        self.assertEqual(first.status_code, 201)
+        second = self.client.post('/api/level-course-assignments/', {
+            'assessment_level': self.level.id, 'course': second_course.id,
+        })
+        self.assertEqual(second.status_code, 201)
+
+        entry = LeaderboardEntry.objects.get(user=self.learner)
+        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual((entry.quizzes_completed, entry.quizzes_required), (2, 3))
+
+    def test_recalculation_commands_are_read_only_by_default_and_apply_idempotently(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.level_attempt(Decimal('80'), now)
+        stale = LeaderboardEntry.objects.create(
+            user=self.learner, organization=self.org, current_course_quiz_average=Decimal('100'),
+            latest_level_assessment_score=Decimal('80'), knowledge_score=Decimal('88'),
+        )
+
+        audit_output = io.StringIO()
+        call_command(
+            'audit_leaderboard_quiz_average', '--organization-id', str(self.org.id), stdout=audit_output,
+        )
+        self.assertIn('In progress (1 of 2 quizzes)', audit_output.getvalue())
+        stale.refresh_from_db()
+        self.assertEqual(stale.knowledge_score, Decimal('88'))
+
+        dry_run_output = io.StringIO()
+        call_command('recalculate_leaderboard', '--organization-id', str(self.org.id), stdout=dry_run_output)
+        self.assertIn('DRY-RUN', dry_run_output.getvalue())
+        stale.refresh_from_db()
+        self.assertEqual(stale.knowledge_score, Decimal('88'))
+
+        apply_output = io.StringIO()
+        call_command(
+            'recalculate_leaderboard', '--organization-id', str(self.org.id), '--apply', stdout=apply_output,
+        )
+        stale.refresh_from_db()
+        self.assertIsNone(stale.knowledge_score)
+        self.assertEqual((stale.quizzes_completed, stale.quizzes_required), (1, 2))
+
+        second_apply = io.StringIO()
+        call_command(
+            'recalculate_leaderboard', '--organization-id', str(self.org.id), '--apply', stdout=second_apply,
+        )
+        self.assertIn('0 learner leaderboard rows applied', second_apply.getvalue())
+
+    def test_deactivated_learner_is_not_returned_and_no_level_assessment_stays_unranked(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.quiz_attempt(self.quiz_two, Decimal('100'), now)
+        no_level_entry = recalculate_leaderboard_entry(self.learner)
+        self.assertEqual(no_level_entry.current_course_quiz_average, Decimal('100'))
+        self.assertIsNone(no_level_entry.knowledge_score)
+
+        inactive = User.objects.create_user(
+            email='inactive-ranked@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER, is_active=False,
+        )
+        LeaderboardEntry.objects.create(
+            user=inactive, organization=self.org, knowledge_score=Decimal('100'),
+            current_course_quiz_average=Decimal('100'), latest_level_assessment_score=Decimal('100'),
+            quizzes_completed=2, quizzes_required=2,
+        )
+        self.auth_as(self.learner)
+        response = self.client.get('/api/leaderboard/')
+        self.assertNotIn(inactive.id, [row['user_id'] for row in response.data])
+
+    def test_ties_keep_existing_order_and_in_progress_rows_have_no_rankable_score(self):
+        now = timezone.now()
+        peers = []
+        for index in range(2):
+            peer = User.objects.create_user(
+                email=f'tied-{index}@example.com', password='pass12345', role=User.Role.LEARNER,
+                organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+            )
+            peers.append(peer)
+            LeaderboardEntry.objects.create(
+                user=peer, organization=self.org, current_course_quiz_average=Decimal('80'),
+                latest_level_assessment_score=Decimal('80'), knowledge_score=Decimal('80'),
+                last_assessed_at=now - timedelta(minutes=index), quizzes_completed=2, quizzes_required=2,
+            )
+        in_progress = User.objects.create_user(
+            email='progress@example.com', password='pass12345', role=User.Role.LEARNER,
+            organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
+        )
+        LeaderboardEntry.objects.create(
+            user=in_progress, organization=self.org, quizzes_completed=1, quizzes_required=2,
+        )
+
+        self.auth_as(self.learner)
+        response = self.client.get('/api/leaderboard/')
+        returned = [row['user_id'] for row in response.data]
+        self.assertLess(returned.index(peers[0].id), returned.index(peers[1].id))
+        self.assertEqual(returned[-1], in_progress.id)
+        self.assertIsNone(response.data[-1]['knowledge_score'])
 
 class ResourceFlowTests(BaseAPITestCase):
     def test_org_admin_can_upload_pdf_and_it_appears_for_same_org_learner_only(self):
