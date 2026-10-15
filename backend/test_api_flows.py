@@ -1701,6 +1701,93 @@ class QuizFlowTests(BaseAPITestCase):
         self.assertFalse(answer['is_correct'])
 
 
+class CategorizeQuizGradingRegressionTests(BaseAPITestCase):
+    """Categorize grading is based on stored item and bucket IDs, not display order or text."""
+
+    def setUp(self):
+        super().setUp()
+        self.question = Question.objects.create(
+            quiz=self.quiz,
+            question_text='Sort these AML examples',
+            question_type=Question.QuestionType.CATEGORIZE,
+            order=3,
+            points=1,
+        )
+        self.red_flag = CategoryBucket.objects.create(question=self.question, label='Red flag', order=1)
+        self.routine = CategoryBucket.objects.create(question=self.question, label='Routine', order=2)
+        self.items = [
+            CategorizeItem.objects.create(
+                question=self.question, item_text=text, correct_bucket=bucket, order=index,
+            )
+            for index, (text, bucket) in enumerate([
+                ('Frequent transfers after no prior digital banking', self.red_flag),
+                ('Customer cannot explain incoming funds', self.red_flag),
+                ("Customer's scheduled KYC review", self.routine),
+                ('NPR 1 debit → NPR 200,000 transfer', self.red_flag),
+            ], start=1)
+        ]
+
+    def _submit_categorize(self, placements):
+        self.auth_as(self.learner)
+        payload = {
+            'answers': [
+                {'question': self.q1.id, 'selected_choices': [self.q1_right.id]},
+                {'question': self.q2.id, 'selected_choices': [self.q2_right.id]},
+                {
+                    'question': self.question.id,
+                    # This is the exact QuizPlayer payload shape: item and
+                    # bucket primary keys, independent of display order/text.
+                    'category_placements': [
+                        {'item': item.id, 'bucket': bucket_id}
+                        for item, bucket_id in placements
+                    ],
+                },
+            ],
+        }
+        return self.client.post(f'/api/quizzes/{self.quiz.id}/submit/', payload, format='json')
+
+    def test_all_correct_two_bucket_placements_get_full_score_and_id_mapping(self):
+        placements = [(item, item.correct_bucket_id) for item in self.items]
+
+        response = self._submit_categorize(placements)
+
+        self.assertEqual(response.status_code, 201, response.data)
+        answer = next(row for row in response.data['answers'] if row['question'] == self.question.id)
+        self.assertTrue(answer['is_correct'])
+        self.assertEqual(response.data['score_percent'], '100.00')
+        self.assertEqual(
+            answer['category_placements'],
+            {str(item.id): item.correct_bucket_id for item in self.items},
+        )
+
+    def test_one_wrong_item_makes_categorize_question_zero_points(self):
+        placements = [(item, item.correct_bucket_id) for item in self.items]
+        placements[-1] = (self.items[-1], self.routine.id)
+
+        response = self._submit_categorize(placements)
+
+        answer = next(row for row in response.data['answers'] if row['question'] == self.question.id)
+        self.assertFalse(answer['is_correct'])
+        self.assertEqual(response.data['score_percent'], '66.67')
+
+    def test_three_buckets_and_reordered_bucket_display_keep_id_grading(self):
+        third = CategoryBucket.objects.create(question=self.question, label='Needs review', order=3)
+        self.items[1].correct_bucket = third
+        self.items[1].save(update_fields=['correct_bucket'])
+        # Reverse the authored bucket order to model a shuffled presentation;
+        # the payload still carries the bucket's primary key.
+        for bucket in (self.red_flag, self.routine, third):
+            bucket.order = 4 - bucket.order
+            bucket.save(update_fields=['order'])
+
+        response = self._submit_categorize([(item, item.correct_bucket_id) for item in self.items])
+
+        self.assertEqual(response.status_code, 201, response.data)
+        answer = next(row for row in response.data['answers'] if row['question'] == self.question.id)
+        self.assertTrue(answer['is_correct'])
+        self.assertEqual(response.data['score_percent'], '100.00')
+
+
 class MultipleAnswerScoringTests(BaseAPITestCase):
     """MULTIPLE_ANSWER questions score all-or-nothing: every correct option
     selected, no incorrect ones — see assessments.views.QuizViewSet.submit."""
