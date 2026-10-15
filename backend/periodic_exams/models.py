@@ -1,0 +1,91 @@
+from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
+from django.db import models
+from django.db.models import Q
+
+
+def default_reminder_days():
+    return [7, 2]
+
+
+class PeriodicExamSettings(models.Model):
+    class Frequency(models.TextChoices):
+        MONTHLY = 'MONTHLY', 'Monthly'
+        QUARTERLY = 'QUARTERLY', 'Quarterly'
+        HALF_YEARLY = 'HALF_YEARLY', 'Half-yearly'
+        YEARLY = 'YEARLY', 'Yearly'
+
+    organization = models.OneToOneField(
+        'accounts.Organization', on_delete=models.CASCADE, related_name='periodic_exam_settings'
+    )
+    enabled = models.BooleanField(default=False)
+    frequency = models.CharField(max_length=20, choices=Frequency.choices, default=Frequency.MONTHLY)
+    pending_frequency = models.CharField(max_length=20, choices=Frequency.choices, null=True, blank=True)
+    pending_frequency_effective_at = models.DateTimeField(null=True, blank=True)
+    questions_per_exam = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1)])
+    pass_mark_percent = models.PositiveSmallIntegerField(
+        default=60, validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
+    seconds_per_question = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
+    max_attempts_per_cycle = models.PositiveSmallIntegerField(default=2, validators=[MinValueValidator(1)])
+    reminders_enabled = models.BooleanField(default=False)
+    reminder_days_before_end = models.JSONField(default=default_reminder_days)
+    configuration_version = models.PositiveIntegerField(default=1)
+    enabled_at = models.DateTimeField(null=True, blank=True)
+    enabled_from = models.DateTimeField(null=True, blank=True)
+    disabled_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updated_periodic_exam_settings',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = 'periodic exam settings'
+        constraints = [
+            models.CheckConstraint(check=Q(questions_per_exam__gte=1), name='pe_settings_questions_positive'),
+            models.CheckConstraint(check=Q(pass_mark_percent__gte=0, pass_mark_percent__lte=100), name='pe_settings_pass_range'),
+            models.CheckConstraint(check=Q(seconds_per_question__gte=5), name='pe_settings_seconds_min'),
+            models.CheckConstraint(check=Q(max_attempts_per_cycle__gte=1), name='pe_settings_attempts_positive'),
+        ]
+
+
+class PeriodicExamCycle(models.Model):
+    organization = models.ForeignKey(
+        'accounts.Organization', on_delete=models.CASCADE, related_name='periodic_exam_cycles'
+    )
+    sequence = models.PositiveIntegerField()
+    frequency_snapshot = models.CharField(max_length=20, choices=PeriodicExamSettings.Frequency.choices)
+    configuration_version = models.PositiveIntegerField()
+    questions_per_exam = models.PositiveIntegerField()
+    pass_mark_percent = models.PositiveSmallIntegerField()
+    seconds_per_question = models.PositiveIntegerField()
+    max_attempts_per_cycle = models.PositiveSmallIntegerField()
+    reminders_enabled = models.BooleanField()
+    reminder_days_before_end = models.JSONField(default=default_reminder_days)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    start_date_ad = models.DateField()
+    end_date_ad = models.DateField()
+    start_year_bs = models.PositiveSmallIntegerField()
+    start_month_bs = models.PositiveSmallIntegerField()
+    start_day_bs = models.PositiveSmallIntegerField()
+    end_year_bs = models.PositiveSmallIntegerField()
+    end_month_bs = models.PositiveSmallIntegerField()
+    end_day_bs = models.PositiveSmallIntegerField()
+    fiscal_year_start_bs = models.PositiveSmallIntegerField()
+    period_number = models.PositiveSmallIntegerField()
+    display_label = models.CharField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-starts_at']
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'sequence'], name='pe_cycle_org_sequence_unique'),
+            models.UniqueConstraint(fields=['organization', 'starts_at'], name='pe_cycle_org_start_unique'),
+            models.CheckConstraint(check=Q(starts_at__lt=models.F('ends_at')), name='pe_cycle_dates_ordered'),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'starts_at', 'ends_at'], name='pe_cycle_current_idx'),
+            models.Index(fields=['organization', '-starts_at'], name='pe_cycle_recent_idx'),
+        ]

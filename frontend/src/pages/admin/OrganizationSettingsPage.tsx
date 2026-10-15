@@ -4,6 +4,7 @@ import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
+import { PeriodicExamSettingsCard } from '../../components/admin/PeriodicExamSettingsCard'
 import { useAuth } from '../../context/AuthContext'
 import { ApiError } from '../../lib/apiClient'
 import { fetchOrganizationSettingsList, updateOrganizationSettings } from '../../lib/orgSettingsApi'
@@ -750,7 +751,6 @@ export function OrganizationSettingsPage() {
           </div>
         </Card>
       )}
-
       {loadError && (
         <Banner variant="warning" className="mt-6">
           {loadError}
@@ -785,6 +785,7 @@ export function OrganizationSettingsPage() {
       {selected && <MaxAttemptsSettingsForm settings={selected} onSaved={applyUpdate} />}
       {selected && isPlatformAdmin && <PlatformOrganizationControls settings={selected} onSaved={applyUpdate} />}
       {selected && <ReminderSettingsForm settings={selected} onSaved={applyUpdate} />}
+      {organization && user?.role === 'ORG_ADMIN' && <PeriodicExamSettingsCard />}
     </div>
   )
 }

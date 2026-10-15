@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'narration',
     'resources',
     'org_settings',
+    'periodic_exams',
 ]
 
 MIDDLEWARE = [

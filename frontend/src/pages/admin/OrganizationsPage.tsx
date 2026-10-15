@@ -6,12 +6,17 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { ApiError } from '../../lib/apiClient'
 import { createOrgAdmin, createOrganization, deleteOrganization, fetchOrganizations } from '../../lib/accountsApi'
+import { fetchPlatformPeriodicExamOrganizations, setPeriodicExamEnabled } from '../../lib/periodicExamsApi'
 import type { Organization } from '../../types/auth'
+import type { PlatformPeriodicExamOrganization } from '../../types/periodicExams'
 
 export function OrganizationsPage() {
   const [organizations, setOrganizations] = useState<Organization[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [periodicExamOrganizations, setPeriodicExamOrganizations] = useState<PlatformPeriodicExamOrganization[] | null>(null)
+  const [toggleError, setToggleError] = useState<string | null>(null)
+  const [togglingOrgId, setTogglingOrgId] = useState<number | null>(null)
 
   const [name, setName] = useState('')
   const [createError, setCreateError] = useState<string | null>(null)
@@ -29,6 +34,9 @@ export function OrganizationsPage() {
     fetchOrganizations()
       .then(setOrganizations)
       .catch(() => setListError('Could not load organizations.'))
+    fetchPlatformPeriodicExamOrganizations()
+      .then(setPeriodicExamOrganizations)
+      .catch(() => setListError('Could not load Periodic Exam settings.'))
   }
 
   useEffect(loadOrganizations, [])
@@ -100,6 +108,19 @@ export function OrganizationsPage() {
       }
     } finally {
       setIsSubmittingAdmin(false)
+    }
+  }
+
+  async function handlePeriodicExamToggle(organization: PlatformPeriodicExamOrganization) {
+    setToggleError(null)
+    setTogglingOrgId(organization.id)
+    try {
+      await setPeriodicExamEnabled(organization.id, !organization.periodic_exam_enabled)
+      await fetchPlatformPeriodicExamOrganizations().then(setPeriodicExamOrganizations)
+    } catch {
+      setToggleError('Could not update Periodic Exam for this organization.')
+    } finally {
+      setTogglingOrgId(null)
     }
   }
 
@@ -209,6 +230,51 @@ export function OrganizationsPage() {
           )}
         </Card>
       </div>
+
+      <Card className="mt-6">
+        <h2 className="text-sm font-semibold text-neutral-900">Periodic Exam</h2>
+        <p className="mt-1 text-xs text-neutral-500">
+          Enable the feature per organization. A first enable begins at the next full Nepali-calendar cycle.
+        </p>
+        {toggleError && <p className="mt-3 text-sm text-red-600">{toggleError}</p>}
+        {!periodicExamOrganizations ? (
+          <p className="mt-4 text-sm text-neutral-500">Loading…</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-neutral-200">
+            {periodicExamOrganizations.map((organization) => (
+              <li key={organization.id} className="flex items-center justify-between gap-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-neutral-900">{organization.name}</p>
+                  <p className="text-xs text-neutral-500">
+                    {organization.periodic_exam_enabled
+                      ? organization.periodic_exam_enabled_from
+                        ? `Enabled · available ${new Date(organization.periodic_exam_enabled_from).toLocaleDateString()}`
+                        : 'Enabled'
+                      : 'Disabled'}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    {organization.periodic_exam_question_counts
+                      .map((item) => `${item.level_display}: ${item.question_count}`)
+                      .join(' · ')}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant={organization.periodic_exam_enabled ? 'danger' : 'primary'}
+                  disabled={togglingOrgId === organization.id}
+                  onClick={() => handlePeriodicExamToggle(organization)}
+                >
+                  {togglingOrgId === organization.id
+                    ? 'Saving…'
+                    : organization.periodic_exam_enabled
+                      ? 'Disable'
+                      : 'Enable'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   )
 }
