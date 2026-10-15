@@ -17,6 +17,21 @@ def recalculate_all_leaderboard_entries(apps, schema_editor):
     running today's actual formula code, not a snapshot of it frozen at
     whatever point this migration was written.
     """
+    table_name = apps.get_model('gamification', 'LeaderboardEntry')._meta.db_table
+    with schema_editor.connection.cursor() as cursor:
+        columns = {
+            column.name
+            for column in schema_editor.connection.introspection.get_table_description(cursor, table_name)
+        }
+
+    # This migration predates the current-knowledge fields added by 0013.
+    # The callable deliberately uses the live recalculation service, so a
+    # replay with today's code must wait until that service's schema exists.
+    # 0013 and 0014 already recalculate every existing entry after adding the
+    # fields, while production databases that recorded 0011 are unaffected.
+    if 'knowledge_score' not in columns:
+        return
+
     from accounts.models import User
     from gamification.models import LeaderboardEntry
     from gamification.services import recalculate_leaderboard_entry
