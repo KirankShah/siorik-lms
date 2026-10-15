@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Menu, PanelLeftOpen, X } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from '../components/shell/Sidebar'
+import { PeriodicExamAvailabilityProvider } from '../context/PeriodicExamAvailabilityContext'
 import siorikLogo from '../img/siorik_logo_icon.png'
 
 export function AppLayout() {
@@ -9,6 +10,7 @@ export function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   return (
+    <PeriodicExamAvailabilityProvider>
     <div className="flex min-h-screen bg-neutral-50">
       {/* Desktop sidebar — a real flex sibling (sticky, not fixed-positioned),
           so the content column reflows to fill the freed space automatically
@@ -68,5 +70,6 @@ export function AppLayout() {
         </main>
       </div>
     </div>
+    </PeriodicExamAvailabilityProvider>
   )
 }

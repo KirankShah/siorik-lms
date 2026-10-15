@@ -335,12 +335,25 @@ class PeriodicExamPhase3ApiTests(TestCase):
         self.client.force_authenticate(self.learner)
 
     def test_endpoints_never_return_answer_keys_or_review(self):
+        forbidden = ('correct_option_keys', 'is_correct', 'marks_awarded', 'locked_at')
+
+        summary = self.client.get('/api/periodic-exams/me/summary/')
+        self.assertEqual(summary.status_code, 200, summary.data)
+        self.assertIsNone(summary.data['last_completed_attempt_id'])
+        for key in forbidden:
+            self.assertNotIn(key, str(summary.data))
+
         response = self.client.post('/api/periodic-exams/me/attempts/start/')
         self.assertEqual(response.status_code, 201, response.data)
         attempt_id = response.data['id']
-        forbidden = ('correct_option_keys', 'is_correct', 'marks_awarded', 'locked_at')
         for key in forbidden:
             self.assertNotIn(key, str(response.data))
+
+        retrieved = self.client.get(f'/api/periodic-exams/me/attempts/{attempt_id}/')
+        self.assertEqual(retrieved.status_code, 200, retrieved.data)
+        for key in forbidden:
+            self.assertNotIn(key, str(retrieved.data))
+
         index = response.data['current_question_index']
         selected = [response.data['current_question']['choices'][0]['key']]
         saved = self.client.put(
@@ -352,17 +365,36 @@ class PeriodicExamPhase3ApiTests(TestCase):
         for key in forbidden:
             self.assertNotIn(key, str(saved.data))
 
-        self.client.post(
+        advanced = self.client.post(
             f'/api/periodic-exams/me/attempts/{attempt_id}/advance/',
             {'current_question_index': 0}, format='json',
         )
+        self.assertEqual(advanced.status_code, 200, advanced.data)
+        for key in forbidden:
+            self.assertNotIn(key, str(advanced.data))
+
         submitted = self.client.post(f'/api/periodic-exams/me/attempts/{attempt_id}/submit/')
         self.assertEqual(submitted.status_code, 200)
+        for key in forbidden:
+            self.assertNotIn(key, str(submitted.data))
         result = self.client.get(f'/api/periodic-exams/me/attempts/{attempt_id}/result/')
         self.assertEqual(set(result.data), {'score_percent', 'passed'})
+        for key in forbidden:
+            self.assertNotIn(key, str(result.data))
+        completed_summary = self.client.get('/api/periodic-exams/me/summary/')
+        self.assertEqual(completed_summary.data['last_completed_attempt_id'], attempt_id)
 
     def test_other_learner_and_other_organization_attempt_ids_return_404(self):
         attempt = start_periodic_exam_attempt(self.other, now=NOW, rng=random.Random(1))[0]
+        advance_periodic_attempt(
+            self.other, attempt.id, current_question_index=0, now=NOW + timedelta(seconds=1)
+        )
+        advance_periodic_attempt(
+            self.other, attempt.id, current_question_index=1, now=NOW + timedelta(seconds=2)
+        )
+        own_summary = self.client.get('/api/periodic-exams/me/summary/')
+        self.assertEqual(own_summary.status_code, 200)
+        self.assertIsNone(own_summary.data['last_completed_attempt_id'])
         response = self.client.get(f'/api/periodic-exams/me/attempts/{attempt.id}/')
         self.assertEqual(response.status_code, 404)
         other_attempt = start_periodic_exam_attempt(

@@ -7,6 +7,9 @@ import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LevelAssessmentPage } from './pages/LevelAssessmentPage'
+import { PeriodicExamAttemptPage } from './pages/PeriodicExamAttemptPage'
+import { PeriodicExamIntroPage } from './pages/PeriodicExamIntroPage'
+import { PeriodicExamResultPage } from './pages/PeriodicExamResultPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { ResourcesPage } from './pages/ResourcesPage'
@@ -41,6 +44,7 @@ import { AssessmentsRoute } from './routes/AssessmentsRoute'
 import { LevelAssessmentRoute } from './routes/LevelAssessmentRoute'
 import { OrgAdminRoute } from './routes/OrgAdminRoute'
 import { PlatformAdminRoute } from './routes/PlatformAdminRoute'
+import { PeriodicExamRoute } from './routes/PeriodicExamRoute'
 import { ProtectedRoute } from './routes/ProtectedRoute'
 
 function App() {
@@ -65,6 +69,11 @@ function App() {
           </Route>
           <Route element={<LevelAssessmentRoute />}>
             <Route path="/level-assessment" element={<LevelAssessmentPage />} />
+          </Route>
+          <Route element={<PeriodicExamRoute />}>
+            <Route path="/periodic-exam" element={<PeriodicExamIntroPage />} />
+            <Route path="/periodic-exam/attempt/:attemptId" element={<PeriodicExamAttemptPage />} />
+            <Route path="/periodic-exam/attempt/:attemptId/result" element={<PeriodicExamResultPage />} />
           </Route>
           <Route path="/achievements" element={<AchievementsPage />} />
           <Route path="/certificates" element={<CertificatesPage />} />

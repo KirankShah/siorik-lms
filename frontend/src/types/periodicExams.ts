@@ -23,6 +23,65 @@ export interface PeriodicExamCycleSummary {
   reminder_days_before_end: number[]
 }
 
+export interface PeriodicExamAvailability {
+  enabled: boolean
+  available_from?: string | null
+  current_cycle?: PeriodicExamCycleSummary | null
+}
+
+export type PeriodicExamReasonCode =
+  | 'ALREADY_PASSED'
+  | 'REVOKED'
+  | 'ATTEMPT_IN_PROGRESS'
+  | 'ATTEMPT_LIMIT_REACHED'
+  | 'INSUFFICIENT_POOL'
+  | 'CYCLE_CLOSED'
+
+export interface PeriodicExamLearnerSummary {
+  cycle: Pick<PeriodicExamCycleSummary, 'id' | 'display_label' | 'starts_at' | 'ends_at'>
+  attempted: boolean
+  completed: boolean
+  attempts_used: number
+  attempts_remaining: number
+  best_score_percent: string | null
+  passed: boolean
+  open_attempt_id: number | null
+  last_completed_attempt_id: number | null
+  can_start: boolean
+  reason_code: PeriodicExamReasonCode | null
+}
+
+export interface PeriodicExamChoice {
+  key: string
+  text: string
+}
+
+export interface PeriodicExamQuestion {
+  id: number
+  question_text: string
+  question_type: 'SINGLE_CHOICE' | 'MULTIPLE_ANSWER'
+  marks: number
+  choices: PeriodicExamChoice[]
+  selected_option_keys: string[]
+}
+
+export interface PeriodicExamAttempt {
+  id: number
+  attempt_number: number
+  submitted: boolean
+  current_question_index: number
+  total_questions: number
+  remaining_seconds: number
+  current_question?: PeriodicExamQuestion
+  score_percent?: string
+  passed?: boolean
+}
+
+export interface PeriodicExamResult {
+  score_percent: string
+  passed: boolean
+}
+
 export interface PeriodicExamSettings {
   organization_id: number
   enabled: boolean

@@ -726,6 +726,9 @@ def periodic_exam_summary(user, *, now=None):
         raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
     _validate_participant_access(user, participant, now=now)
     open_attempt = participant.attempts.filter(submitted_at__isnull=True).first()
+    last_completed_attempt = participant.attempts.filter(
+        submitted_at__isnull=False
+    ).order_by('-submitted_at', '-id').first()
     attempts_started = participant.attempts.count()
     reason = None
     if participant.passed_at is not None:
@@ -754,6 +757,7 @@ def periodic_exam_summary(user, *, now=None):
         'best_score_percent': participant.best_score_percent,
         'passed': participant.passed_at is not None,
         'open_attempt_id': open_attempt.id if open_attempt else None,
+        'last_completed_attempt_id': last_completed_attempt.id if last_completed_attempt else None,
         'can_start': reason is None,
         'reason_code': reason,
     }

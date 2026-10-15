@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   ClipboardList,
+  Clock3,
   FileSpreadsheet,
   FileText,
   GraduationCap,
@@ -22,6 +23,7 @@ import type { LucideIcon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import siorikLogo from '../../img/siorik_logo_icon.png'
 import { useAuth } from '../../context/AuthContext'
+import { usePeriodicExamAvailability } from '../../context/usePeriodicExamAvailability'
 import { isAdminRole, isOrgSettingsRole, isPlatformAdminRole } from '../../lib/roles'
 
 interface NavItem {
@@ -42,6 +44,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
 
 export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
   const { user, logout, updateNarrationLanguage } = useAuth()
+  const { availability } = usePeriodicExamAvailability()
   const admin = isAdminRole(user?.role)
 
   const navItems: NavItem[] = [
@@ -65,6 +68,9 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // LEARNER and PLATFORM_ADMIN.
     ...(user?.role === 'LEARNER' || isPlatformAdminRole(user?.role)
       ? [{ to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap }]
+      : []),
+    ...(user?.role === 'LEARNER' && availability?.enabled
+      ? [{ to: '/periodic-exam', label: 'Periodic Exam', icon: Clock3 }]
       : []),
     // Second entry point into LevelQuestionsImportPage (the Level Assessment
     // question bank Excel import) alongside the existing "Level Assessments"

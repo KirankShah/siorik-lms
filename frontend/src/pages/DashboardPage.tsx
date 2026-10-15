@@ -7,6 +7,7 @@ import { AchievementCelebrationModal } from '../components/AchievementCelebratio
 import { LeaderboardWidget } from '../components/LeaderboardWidget'
 import { LearnerWelcomeBanner } from '../components/LearnerWelcomeBanner'
 import { LearningPathSection } from '../components/LearningPathSection'
+import { PeriodicExamDashboardCard } from '../components/PeriodicExamDashboardCard'
 import { Badge } from '../components/ui/Badge'
 import type { BadgeVariant } from '../components/ui/Badge'
 import { Banner } from '../components/ui/Banner'
@@ -442,6 +443,8 @@ function LearnerDashboard({ user }: { user: User }) {
       <LeaderboardWidget entries={leaderboard} />
 
       <LevelAssessmentCard myLevelAssessment={myLevelAssessment} />
+
+      <PeriodicExamDashboardCard />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
