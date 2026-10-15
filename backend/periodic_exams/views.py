@@ -36,6 +36,7 @@ from .services import (
     set_feature_enabled,
     start_periodic_exam_attempt,
     submit_periodic_attempt,
+    upcoming_cycle_preview,
 )
 from .reports import csv_report_response, iter_report_rows, report_participants, xlsx_report_response
 
@@ -156,6 +157,7 @@ class AvailabilityView(PeriodicExamConflictMixin, APIView):
             'enabled': True,
             'available_from': row.enabled_from,
             'current_cycle': CycleSerializer(cycle).data if cycle else None,
+            'upcoming_cycle': None if cycle else upcoming_cycle_preview(row, timezone.now()),
         })
 
 

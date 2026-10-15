@@ -74,6 +74,14 @@ export interface PeriodicExamAvailability {
   enabled: boolean
   available_from?: string | null
   current_cycle?: PeriodicExamCycleSummary | null
+  /** Set only while the first cycle after enabling has not opened yet. */
+  upcoming_cycle?: PeriodicExamUpcomingCycle | null
+}
+
+export interface PeriodicExamUpcomingCycle {
+  starts_at: string
+  start_date_ad: string
+  display_label: string
 }
 
 export type PeriodicExamReasonCode =

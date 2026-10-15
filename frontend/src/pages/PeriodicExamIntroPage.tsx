@@ -5,21 +5,28 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { usePeriodicExamAvailability } from '../context/usePeriodicExamAvailability'
 import { fetchPeriodicExamSummary, startPeriodicExamAttempt } from '../lib/periodicExamsApi'
-import { formatPeriodicExamDate, periodicExamReasonMessage } from '../lib/periodicExamPresentation'
+import {
+  formatPeriodicExamDate,
+  periodicExamErrorMessage,
+  periodicExamNotOpenMessage,
+  periodicExamReasonMessage,
+} from '../lib/periodicExamPresentation'
 import type { PeriodicExamLearnerSummary } from '../types/periodicExams'
 
 export function PeriodicExamIntroPage() {
   const navigate = useNavigate()
-  const { availability } = usePeriodicExamAvailability()
+  const { availability, isLoading: availabilityLoading } = usePeriodicExamAvailability()
   const [summary, setSummary] = useState<PeriodicExamLearnerSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
-  useEffect(() => {
-    fetchPeriodicExamSummary().then(setSummary).catch(() => setError('Periodic Exam details could not be loaded.'))
-  }, [])
-
   const cycle = availability?.current_cycle
+  const notOpenYet = !availabilityLoading && !!availability?.enabled && !cycle
+
+  useEffect(() => {
+    if (availabilityLoading || notOpenYet) return
+    fetchPeriodicExamSummary().then(setSummary).catch((reason: unknown) => setError(periodicExamErrorMessage(reason)))
+  }, [availabilityLoading, notOpenYet])
 
   async function start() {
     if (starting) return
@@ -28,10 +35,26 @@ export function PeriodicExamIntroPage() {
     try {
       const attempt = await startPeriodicExamAttempt()
       navigate(`/periodic-exam/attempt/${attempt.id}`)
-    } catch {
-      setError('The attempt could not be started. Please try again.')
+    } catch (reason: unknown) {
+      setError(periodicExamErrorMessage(reason))
       setStarting(false)
     }
+  }
+
+  if (notOpenYet) {
+    return (
+      <div className="mx-auto max-w-3xl">
+        <Card>
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-brand-navy" />
+            <div>
+              <h1 className="text-lg font-semibold text-neutral-900">Periodic Exam</h1>
+              <p className="mt-1 text-sm text-neutral-600">{periodicExamNotOpenMessage(availability)}</p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    )
   }
 
   if (!summary || !cycle) {

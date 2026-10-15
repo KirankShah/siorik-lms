@@ -347,6 +347,25 @@ def ensure_current_cycle(organization, now=None):
             return PeriodicExamCycle.objects.get(organization=organization, starts_at=boundary.starts_at)
 
 
+def upcoming_cycle_preview(settings, now):
+    """Describe the first cycle of a newly enabled feature that has not opened yet.
+
+    Returns None when there is no future start to announce (already open, a gap
+    between cycles, or a start outside the supported calendar range).
+    """
+    if not settings.enabled or not settings.enabled_from or settings.enabled_from <= now:
+        return None
+    try:
+        boundary = period_for(settings.frequency, settings.enabled_from)
+    except CalendarRangeError:
+        return None
+    return {
+        'starts_at': boundary.starts_at,
+        'start_date_ad': boundary.start_date_ad,
+        'display_label': boundary.display_label,
+    }
+
+
 def set_feature_enabled(organization, enabled, actor, now=None):
     now = now or timezone.now()
     with transaction.atomic():

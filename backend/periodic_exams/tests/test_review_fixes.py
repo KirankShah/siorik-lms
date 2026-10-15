@@ -217,3 +217,39 @@ class AbandonedAttemptReconciliationTests(TestCase):
         self.assertIn('Closed 1 expired', out.getvalue())
         retake.refresh_from_db()
         self.assertIsNotNone(retake.submitted_at)
+
+
+class UpcomingCycleAvailabilityTests(TestCase):
+    """A newly enabled feature announces when its first cycle opens."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name='Upcoming Bank', slug='upcoming-bank')
+        add_question(self.organization, User.AssessmentLevel.OFFICER, 'Upcoming question')
+        self.learner = make_learner(self.organization, 'upcoming@example.com')
+        self.client = APIClient()
+        self.client.force_authenticate(self.learner)
+
+    def availability(self, now):
+        with patch('django.utils.timezone.now', return_value=now):
+            return self.client.get('/api/periodic-exams/availability/').json()
+
+    def test_before_first_cycle_reports_upcoming_start_and_no_cycle(self):
+        settings = set_feature_enabled(self.organization, True, None, now=NOW)
+        self.assertGreater(settings.enabled_from, NOW)
+        data = self.availability(NOW)
+        self.assertTrue(data['enabled'])
+        self.assertIsNone(data['current_cycle'])
+        self.assertEqual(
+            datetime.fromisoformat(data['upcoming_cycle']['starts_at'].replace('Z', '+00:00')),
+            settings.enabled_from,
+        )
+        self.assertTrue(data['upcoming_cycle']['display_label'])
+        self.assertFalse(PeriodicExamCycle.objects.exists())
+
+    def test_once_open_reports_current_cycle_and_no_upcoming(self):
+        settings = set_feature_enabled(self.organization, True, None, now=NOW)
+        opened = settings.enabled_from + timedelta(hours=1)
+        PeriodicExamSettings.objects.filter(pk=settings.pk).update(questions_per_exam=1)
+        data = self.availability(opened)
+        self.assertIsNotNone(data['current_cycle'])
+        self.assertIsNone(data['upcoming_cycle'])

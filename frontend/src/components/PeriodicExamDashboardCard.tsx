@@ -4,28 +4,35 @@ import { Clock3 } from 'lucide-react'
 import { Card } from './ui/Card'
 import { usePeriodicExamAvailability } from '../context/usePeriodicExamAvailability'
 import { fetchPeriodicExamSummary } from '../lib/periodicExamsApi'
-import { formatPeriodicExamDate, periodicExamReasonMessage, periodicExamStatus } from '../lib/periodicExamPresentation'
+import {
+  formatPeriodicExamDate,
+  periodicExamErrorMessage,
+  periodicExamNotOpenMessage,
+  periodicExamReasonMessage,
+  periodicExamStatus,
+} from '../lib/periodicExamPresentation'
 import type { PeriodicExamLearnerSummary } from '../types/periodicExams'
 
 export function PeriodicExamDashboardCard() {
   const { availability, isLoading: availabilityLoading } = usePeriodicExamAvailability()
   const [summary, setSummary] = useState<PeriodicExamLearnerSummary | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const hasCycle = !!availability?.current_cycle
 
   useEffect(() => {
-    if (!availability?.enabled) return
+    if (!availability?.enabled || !hasCycle) return
     let cancelled = false
     fetchPeriodicExamSummary()
       .then((value) => {
         if (!cancelled) setSummary(value)
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
+      .catch((reason: unknown) => {
+        if (!cancelled) setFailure(periodicExamErrorMessage(reason))
       })
     return () => {
       cancelled = true
     }
-  }, [availability?.enabled])
+  }, [availability?.enabled, hasCycle])
 
   if (availabilityLoading || !availability?.enabled) return null
 
@@ -42,14 +49,19 @@ export function PeriodicExamDashboardCard() {
         <div>
           <p className="text-xs font-semibold tracking-wide text-brand-gold uppercase">Periodic Exam</p>
           <h2 className="mt-1 text-lg font-semibold text-neutral-900">
-            {summary?.cycle.display_label ?? availability.current_cycle?.display_label ?? 'Current cycle'}
+            {summary?.cycle.display_label
+              ?? availability.current_cycle?.display_label
+              ?? availability.upcoming_cycle?.display_label
+              ?? 'Current cycle'}
           </h2>
         </div>
         <Clock3 className="h-6 w-6 text-brand-navy" />
       </div>
 
-      {failed ? (
-        <p className="mt-4 text-sm text-red-600">Periodic Exam details could not be loaded.</p>
+      {!hasCycle ? (
+        <p className="mt-4 text-sm text-neutral-600">{periodicExamNotOpenMessage(availability)}</p>
+      ) : failure ? (
+        <p className="mt-4 text-sm text-amber-700">{failure}</p>
       ) : !summary ? (
         <p className="mt-4 text-sm text-neutral-500">Loading…</p>
       ) : (
