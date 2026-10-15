@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import math
 import random
 from datetime import timedelta
@@ -14,7 +15,12 @@ from accounts.models import User
 from levelassessments.models import LevelQuestion
 from levelassessments.services import normalize_question_text
 
-from .calendar import first_full_period_start_on_or_after, next_full_period_start, period_for
+from .calendar import (
+    CalendarRangeError,
+    first_full_period_start_on_or_after,
+    next_full_period_start,
+    period_for,
+)
 from .models import (
     PeriodicExamAttempt,
     PeriodicExamAttemptQuestion,
@@ -31,6 +37,7 @@ SUPPORTED_QUESTION_TYPES = (
     LevelQuestion.QuestionType.MULTIPLE_ANSWER,
 )
 SNAPSHOT_BATCH_SIZE = 500
+logger = logging.getLogger(__name__)
 
 
 class PeriodicExamPoolConflictError(ValueError):
@@ -43,6 +50,18 @@ class PeriodicExamError(ValueError):
         self.detail = detail
         self.code = code
         self.status_code = status_code
+
+
+def _calendar_boundary(boundary_fn, frequency, instant):
+    """Run a calendar boundary helper, turning an unsupported BS date into a 409."""
+    try:
+        return boundary_fn(frequency, instant)
+    except CalendarRangeError:
+        raise PeriodicExamError(
+            'This date is outside the supported Nepali calendar range for Periodic Exam.',
+            code='CALENDAR_UNSUPPORTED',
+            status_code=409,
+        )
 
 
 def question_counts_for_organizations(organization_ids):
@@ -256,7 +275,18 @@ def ensure_current_cycle(organization, now=None):
             return None
 
         _promote_pending_frequency(settings, now)
-        boundary = period_for(settings.frequency, now)
+        try:
+            boundary = period_for(settings.frequency, now)
+        except CalendarRangeError:
+            # Fail closed: outside the verified BS range no new cycle opens, but
+            # an already-materialized cycle still covering ``now`` stays usable.
+            logger.warning(
+                'Periodic Exam calendar range exceeded: organization=%s now=%s',
+                organization.pk, now.isoformat(),
+            )
+            return PeriodicExamCycle.objects.filter(
+                organization=organization, starts_at__lte=now, ends_at__gt=now
+            ).first()
         if boundary.starts_at < settings.enabled_from or not (boundary.starts_at <= now < boundary.ends_at):
             return None
 
@@ -316,7 +346,10 @@ def set_feature_enabled(organization, enabled, actor, now=None):
             row.enabled = True
             row.enabled_at = now
             row.disabled_at = None
-            row.enabled_from = current.starts_at if current else next_full_period_start(row.frequency, now)
+            row.enabled_from = (
+                current.starts_at if current
+                else _calendar_boundary(next_full_period_start, row.frequency, now)
+            )
         else:
             row.enabled = False
             row.disabled_at = now
@@ -341,15 +374,15 @@ def update_operational_settings(row, validated_data, actor, now=None):
         if frequency_changed:
             if current:
                 row.pending_frequency = requested_frequency
-                row.pending_frequency_effective_at = first_full_period_start_on_or_after(
-                    requested_frequency, current.ends_at
+                row.pending_frequency_effective_at = _calendar_boundary(
+                    first_full_period_start_on_or_after, requested_frequency, current.ends_at
                 )
             else:
                 row.frequency = requested_frequency
                 row.pending_frequency = None
                 row.pending_frequency_effective_at = None
                 if row.enabled:
-                    row.enabled_from = next_full_period_start(requested_frequency, now)
+                    row.enabled_from = _calendar_boundary(next_full_period_start, requested_frequency, now)
 
         changed = frequency_changed or any(getattr(row, field) != value for field, value in validated_data.items())
         for field, value in validated_data.items():
@@ -432,24 +465,25 @@ def select_questions_for_participant(participant, *, now=None, rng=None):
             level=participant.level_snapshot,
         )
     }
-    lifetime_unused = [question for question in pool if question.normalized_text_hash not in usages]
+    # Questions already on any of this learner's papers in this cycle are never
+    # eligible again, including on retakes: refuse the retake rather than repeat.
+    eligible = [question for question in pool if question.normalized_text_hash not in current_cycle_keys]
+    lifetime_unused = [question for question in eligible if question.normalized_text_hash not in usages]
     rng.shuffle(lifetime_unused)
-    unused_this_cycle = [
-        question for question in pool
-        if question.normalized_text_hash in usages
-        and question.normalized_text_hash not in current_cycle_keys
-    ]
-    used_this_cycle = [
-        question for question in pool if question.normalized_text_hash in current_cycle_keys
-    ]
+    used_before_this_cycle = [question for question in eligible if question.normalized_text_hash in usages]
 
     def age(question):
         usage = usages[question.normalized_text_hash]
         return usage.last_cycle_sequence, usage.last_used_at
 
     candidates = lifetime_unused
-    candidates += _randomized_age_order(unused_this_cycle, age_key=age, rng=rng)
-    candidates += _randomized_age_order(used_this_cycle, age_key=age, rng=rng)
+    candidates += _randomized_age_order(used_before_this_cycle, age_key=age, rng=rng)
+    if len(candidates) < cycle.questions_per_exam:
+        raise PeriodicExamError(
+            'The question bank cannot supply another new paper this cycle: '
+            f'{len(candidates)} unused questions remain; {cycle.questions_per_exam} required.',
+            code='CYCLE_POOL_EXHAUSTED',
+        )
     selected = candidates[:cycle.questions_per_exam]
     rng.shuffle(selected)
     return selected, usages
@@ -607,6 +641,53 @@ def catch_up_periodic_attempt(attempt, *, now=None):
     return attempt
 
 
+def _catch_up_attempt_by_id(attempt_id, *, now):
+    with transaction.atomic():
+        attempt = PeriodicExamAttempt.objects.select_for_update().select_related(
+            'participant__cycle'
+        ).filter(pk=attempt_id, submitted_at__isnull=True).first()
+        if attempt is None:
+            return None
+        return catch_up_periodic_attempt(attempt, now=now)
+
+
+def close_expired_periodic_attempts(*, cycle=None, now=None):
+    """Finalize open attempts whose remaining question timers have all run out.
+
+    Learner requests catch up their own attempt, but an abandoned attempt would
+    otherwise stay open forever: reported as In progress, never scored, and
+    never counted toward a pass. Access checks are deliberately skipped here,
+    since closing an expired attempt is system bookkeeping, not learner access.
+    """
+    now = now or timezone.now()
+    open_attempts = PeriodicExamAttempt.objects.filter(submitted_at__isnull=True)
+    if cycle is not None:
+        open_attempts = open_attempts.filter(participant__cycle=cycle)
+    rows = list(open_attempts.annotate(
+        total_questions=Count('paper_questions')
+    ).filter(total_questions__gt=0).values_list(
+        'id', 'current_question_index', 'timer_segment_started_at',
+        'participant__cycle__seconds_per_question', 'total_questions',
+    ))
+    closed = 0
+    for attempt_id, index, segment_start, seconds, total in rows:
+        if (now - segment_start).total_seconds() < (total - index) * seconds:
+            continue
+        attempt = _catch_up_attempt_by_id(attempt_id, now=now)
+        if attempt is not None and attempt.submitted_at is not None:
+            closed += 1
+    return closed
+
+
+def _fresh_question_count(participant):
+    used_this_cycle = PeriodicExamAttemptQuestion.objects.filter(
+        attempt__participant=participant
+    ).values('cycle_question__normalized_text_hash')
+    return participant.cycle.question_pool.filter(level=participant.level_snapshot).exclude(
+        normalized_text_hash__in=used_this_cycle
+    ).count()
+
+
 def _locked_owned_attempt(user, attempt_id, *, now=None):
     now = now or timezone.now()
     attempt = PeriodicExamAttempt.objects.select_for_update().select_related(
@@ -726,6 +807,11 @@ def periodic_exam_summary(user, *, now=None):
         raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
     _validate_participant_access(user, participant, now=now)
     open_attempt = participant.attempts.filter(submitted_at__isnull=True).first()
+    if open_attempt is not None:
+        open_attempt = _catch_up_attempt_by_id(open_attempt.id, now=now)
+        if open_attempt is not None and open_attempt.submitted_at is not None:
+            open_attempt = None
+            participant.refresh_from_db()
     last_completed_attempt = participant.attempts.filter(
         submitted_at__isnull=False
     ).order_by('-submitted_at', '-id').first()
@@ -741,6 +827,8 @@ def periodic_exam_summary(user, *, now=None):
         reason = 'ATTEMPT_LIMIT_REACHED'
     elif not participant.can_form_full_exam:
         reason = 'INSUFFICIENT_POOL'
+    elif attempts_started and _fresh_question_count(participant) < cycle.questions_per_exam:
+        reason = 'CYCLE_POOL_EXHAUSTED'
     elif now >= cycle.ends_at:
         reason = 'CYCLE_CLOSED'
     return {

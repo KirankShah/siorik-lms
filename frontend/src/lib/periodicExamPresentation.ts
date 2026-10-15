@@ -6,6 +6,7 @@ const REASON_MESSAGES: Record<PeriodicExamReasonCode, string> = {
   ATTEMPT_IN_PROGRESS: 'You already have an attempt in progress.',
   ATTEMPT_LIMIT_REACHED: 'You have used all attempts available for this cycle.',
   INSUFFICIENT_POOL: 'A full exam cannot be formed for your assigned level yet.',
+  CYCLE_POOL_EXHAUSTED: 'There are not enough new questions for another attempt this cycle.',
   CYCLE_CLOSED: 'This Periodic Exam cycle has closed.',
 }
 

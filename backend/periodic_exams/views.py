@@ -27,6 +27,7 @@ from .services import (
     question_counts_for_organizations,
     readiness_for_organization,
     advance_periodic_attempt,
+    close_expired_periodic_attempts,
     get_periodic_attempt,
     periodic_attempt_payload,
     periodic_exam_summary,
@@ -111,7 +112,7 @@ class PlatformOrganizationListView(APIView):
         return Response(PlatformOrganizationSerializer(data, many=True).data)
 
 
-class PlatformOrganizationToggleView(APIView):
+class PlatformOrganizationToggleView(PeriodicExamConflictMixin, APIView):
     permission_classes = [IsAuthenticated, IsExactPlatformAdmin]
 
     def patch(self, request, organization_id):
@@ -285,6 +286,7 @@ class ReportView(PeriodicExamConflictMixin, APIView):
     def get(self, request, cycle_id, export_format=None):
         organization = _report_organization(request)
         cycle = get_object_or_404(PeriodicExamCycle, pk=cycle_id, organization=organization)
+        close_expired_periodic_attempts(cycle=cycle)
         search = request.query_params.get('search', '').strip()
         status_filter = request.query_params.get('status', '').strip()
         queryset = report_participants(cycle, search=search, status_filter=status_filter)

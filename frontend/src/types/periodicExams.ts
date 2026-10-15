@@ -82,6 +82,7 @@ export type PeriodicExamReasonCode =
   | 'ATTEMPT_IN_PROGRESS'
   | 'ATTEMPT_LIMIT_REACHED'
   | 'INSUFFICIENT_POOL'
+  | 'CYCLE_POOL_EXHAUSTED'
   | 'CYCLE_CLOSED'
 
 export interface PeriodicExamLearnerSummary {

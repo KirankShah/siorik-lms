@@ -11,7 +11,7 @@ from django.utils.html import escape
 from accounts.models import User
 
 from .models import PeriodicExamReminderDelivery, PeriodicExamSettings
-from .services import ensure_current_cycle
+from .services import close_expired_periodic_attempts, ensure_current_cycle
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,9 @@ def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=No
         days_before_end = reminder_days_remaining(cycle, now)
         if days_before_end not in cycle.reminder_days_before_end:
             continue
+        if not dry_run:
+            # An expired attempt may have passed; close it so that learner is excluded.
+            close_expired_periodic_attempts(cycle=cycle, now=now)
         participants = cycle.participants.filter(
             passed_at__isnull=True,
             revoked_at__isnull=True,

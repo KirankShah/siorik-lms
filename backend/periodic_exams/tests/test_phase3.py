@@ -118,14 +118,12 @@ class PeriodicExamPhase3ServiceTests(TestCase):
         self.assertEqual(retake.paper_questions.count(), 3)
         self.assertEqual(len(retake_ids), 3)
         self.complete(retake, correct=False, start_time=NOW + timedelta(minutes=1))
-        third = self.start(self.first, now=NOW + timedelta(minutes=2), seed=31)
-        third_ids = set(third.paper_questions.values_list('cycle_question_id', flat=True))
-        all_ids = set(third.participant.cycle.question_pool.filter(
-            level=User.AssessmentLevel.OFFICER
-        ).values_list('id', flat=True))
-        never_used = all_ids - first_ids - retake_ids
-        self.assertTrue(never_used.issubset(third_ids))
-        self.assertEqual(len(third_ids), 3)
+        # Only 2 of the 8 questions remain unused this cycle; a third paper would
+        # have to repeat one, so the retake is refused instead.
+        with self.assertRaises(PeriodicExamError) as error:
+            self.start(self.first, now=NOW + timedelta(minutes=2), seed=31)
+        self.assertEqual(error.exception.code, 'CYCLE_POOL_EXHAUSTED')
+        self.assertEqual(retake.participant.attempts.count(), 2)
 
     def test_level_pool_isolation(self):
         for index in range(3):
