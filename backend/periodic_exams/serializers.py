@@ -68,3 +68,20 @@ class PlatformOrganizationSerializer(serializers.Serializer):
 
 class PlatformToggleSerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
+
+
+class ReadinessLevelSerializer(serializers.Serializer):
+    level = serializers.CharField()
+    level_display = serializers.CharField()
+    unique_question_count = serializers.IntegerField()
+    eligible_learner_count = serializers.IntegerField()
+    questions_per_exam = serializers.IntegerField()
+    can_form_full_exam = serializers.BooleanField()
+    note = serializers.CharField(allow_blank=True)
+
+
+class ReadinessSerializer(serializers.Serializer):
+    organization_id = serializers.IntegerField()
+    cycle_id = serializers.IntegerField(allow_null=True)
+    as_of = serializers.DateTimeField()
+    levels = ReadinessLevelSerializer(many=True)

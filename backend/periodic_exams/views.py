@@ -1,5 +1,6 @@
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,16 +14,26 @@ from .serializers import (
     PeriodicExamSettingsSerializer,
     PlatformOrganizationSerializer,
     PlatformToggleSerializer,
+    ReadinessSerializer,
 )
 from .services import (
+    PeriodicExamPoolConflictError,
     ensure_current_cycle,
     get_or_create_settings,
     question_counts_for_organizations,
+    readiness_for_organization,
     set_feature_enabled,
 )
 
 
-class SettingsView(APIView):
+class PeriodicExamConflictMixin:
+    def handle_exception(self, exc):
+        if isinstance(exc, PeriodicExamPoolConflictError):
+            return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
+        return super().handle_exception(exc)
+
+
+class SettingsView(PeriodicExamConflictMixin, APIView):
     permission_classes = [IsAuthenticated, IsExactOrgAdmin]
 
     def _get_row(self, request):
@@ -99,7 +110,7 @@ class PlatformOrganizationToggleView(APIView):
         })
 
 
-class AvailabilityView(APIView):
+class AvailabilityView(PeriodicExamConflictMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -128,3 +139,23 @@ class AvailabilityView(APIView):
             'available_from': row.enabled_from,
             'current_cycle': CycleSerializer(cycle).data if cycle else None,
         })
+
+
+class ReadinessView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if user.role == user.Role.ORG_ADMIN and user.organization_id:
+            organization = user.organization
+            row = PeriodicExamSettings.objects.filter(organization=organization).first()
+            if row is None or not row.enabled:
+                return Response({'detail': 'Not found.'}, status=404)
+        elif user.role == user.Role.PLATFORM_ADMIN:
+            organization_id = request.query_params.get('organization_id')
+            if not organization_id:
+                return Response({'organization_id': ['This query parameter is required.']}, status=400)
+            organization = get_object_or_404(Organization, pk=organization_id, is_active=True)
+        else:
+            return Response({'detail': 'You do not have permission to perform this action.'}, status=403)
+        return Response(ReadinessSerializer(readiness_for_organization(organization)).data)

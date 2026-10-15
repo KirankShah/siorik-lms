@@ -89,3 +89,69 @@ class PeriodicExamCycle(models.Model):
             models.Index(fields=['organization', 'starts_at', 'ends_at'], name='pe_cycle_current_idx'),
             models.Index(fields=['organization', '-starts_at'], name='pe_cycle_recent_idx'),
         ]
+
+
+class PeriodicExamCycleQuestion(models.Model):
+    cycle = models.ForeignKey(
+        PeriodicExamCycle, on_delete=models.CASCADE, related_name='question_pool'
+    )
+    level = models.CharField(max_length=30)
+    source_question = models.ForeignKey(
+        'levelassessments.LevelQuestion', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='periodic_exam_snapshots',
+    )
+    source_question_id_snapshot = models.PositiveBigIntegerField()
+    normalized_text = models.TextField()
+    normalized_text_hash = models.CharField(max_length=64)
+    question_text = models.TextField()
+    question_type = models.CharField(max_length=20)
+    marks = models.PositiveIntegerField()
+    choices = models.JSONField(default=list)
+    correct_option_keys = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['level', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cycle', 'level', 'normalized_text_hash'],
+                name='pe_cycle_question_text_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['cycle', 'level'], name='pe_cycle_question_level_idx'),
+        ]
+
+
+class PeriodicExamParticipant(models.Model):
+    cycle = models.ForeignKey(
+        PeriodicExamCycle, on_delete=models.CASCADE, related_name='participants'
+    )
+    learner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='periodic_exam_participations',
+    )
+    learner_id_snapshot = models.PositiveBigIntegerField()
+    name_snapshot = models.CharField(max_length=301, blank=True)
+    email_snapshot = models.EmailField()
+    level_snapshot = models.CharField(max_length=30)
+    branch_department_snapshot = models.CharField(max_length=150, blank=True)
+    can_form_full_exam = models.BooleanField(default=True)
+    attempts_used = models.PositiveSmallIntegerField(default=0)
+    best_score_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    passed_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    eligible_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['cycle', 'learner_id_snapshot']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cycle', 'learner_id_snapshot'], name='pe_participant_cycle_learner_unique'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['cycle', 'level_snapshot'], name='pe_participant_level_idx'),
+            models.Index(fields=['cycle', 'passed_at', 'revoked_at'], name='pe_participant_status_idx'),
+        ]

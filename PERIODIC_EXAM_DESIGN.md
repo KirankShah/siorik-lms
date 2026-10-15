@@ -122,21 +122,20 @@ Frozen source pool for one cycle and level. This prevents question edits/deletes
 Fields:
 
 - `cycle` FK.
-- `level_code`: snapshot of `User.AssessmentLevel` value.
+- `level`: snapshot of `User.AssessmentLevel` value (the implemented name follows the existing Level Assessment field).
 - `source_question`: nullable FK to `LevelQuestion`, `SET_NULL`.
 - `source_question_id_snapshot`: integer for audit after deletion.
-- `question_key`: SHA-256 of normalized learner-visible question text.
+- `normalized_text` plus `normalized_text_hash`: the existing normalized learner-visible text and its SHA-256 key. Keeping both makes conflicts diagnosable without putting a MySQL `TEXT` field in a unique index.
 - `question_text`, `question_type`, `marks`: snapshots.
-- `choices_snapshot`: JSON array of opaque option keys, display text, and order.
+- `choices`: JSON array of stable A–E option keys and display text; the key is derived from the Level Assessment option order.
 - `correct_option_keys`: JSON array, never exposed by learner pre-submit serializers.
 
 At cycle creation, normalized duplicates are collapsed to one pool entry, matching the existing Level Assessment notion of duplicate learner-visible wording. If duplicates disagree on options/answers, cycle creation should fail validation and identify the conflicting source IDs rather than silently choose one.
 
 Indexes/constraints:
 
-- Unique `(cycle, level_code, question_key)`.
-- Index `(cycle, level_code)`.
-- Index `(source_question_id_snapshot)`.
+- Unique `(cycle, level, normalized_text_hash)`.
+- Index `(cycle, level)`.
 
 ### 2.4 `PeriodicExamParticipant`
 
@@ -145,8 +144,9 @@ One frozen report/eligibility row per learner per cycle.
 Fields:
 
 - `cycle` FK.
-- `user`: nullable FK with `SET_NULL`, plus `user_id_snapshot`.
-- `staff_name`, `email`, `level_code`, `level_display`, `branch_department`: snapshots.
+- `learner`: nullable FK with `SET_NULL`, plus `learner_id_snapshot`.
+- `name_snapshot`, `email_snapshot`, `level_snapshot`, `branch_department_snapshot`.
+- `can_form_full_exam`: frozen capacity result for the participant's level, so Phase 3 can deny an impossible first paper without failing cycle creation.
 - `eligible_at`, `revoked_at` (deactivation after cycle inclusion).
 - `attempts_used`: default 0.
 - `best_score_percent`: nullable decimal.
@@ -156,9 +156,9 @@ Participant snapshots preserve historical reporting if a user is later edited or
 
 Indexes/constraints:
 
-- Unique `(cycle, user)` while the user exists; also unique `(cycle, user_id_snapshot)` for durable identity.
-- Index `(cycle, level_code)`.
-- Index `(cycle, passed_at)` for reminders/reporting.
+- Unique `(cycle, learner_id_snapshot)` for durable identity after user deletion.
+- Index `(cycle, level_snapshot)`.
+- Composite index `(cycle, passed_at, revoked_at)` for reminders/reporting.
 
 ### 2.5 `PeriodicExamAttempt`
 
@@ -280,6 +280,8 @@ BS month numbers are: 1 Baishakh, 2 Jestha, 3 Asar, 4 Shrawan, 5 Bhadra, 6 Asoj,
 3. Return the already-frozen cycle containing `now`, if present.
 4. If first enable has not reached `enabled_from`, return no cycle. Otherwise compute the applicable natural BS period, applying any due pending-frequency transition, create the cycle with a unique constraint race backstop, snapshot settings and question pools, and materialize eligible participants.
 5. Reconcile any prior expired open attempts.
+
+Phase 2 implements step 4 by reading `LevelQuestion`/`LevelChoice` only, validating normalized duplicate signatures, and bulk-creating the frozen pool and participant rows in batches of 500 inside the same transaction. Low question counts set `can_form_full_exam=False` on affected participants and never roll back the cycle.
 
 Call it from availability/summary, learner start/resume/submit, org-admin settings/report, platform enable, and the reminder job. Do **not** create future or missed cycles. First enable records the next full boundary but does not create that cycle early. If nobody invokes the service during an entire period, a later call creates only the period containing that later call.
 
@@ -430,8 +432,11 @@ JSON preview, CSV, and XLSX must be generated from one typed row builder. Escape
 
 - `GET /platform/organizations/` — organisation list with enabled state and minimal readiness counts.
 - `PATCH /platform/organizations/{organization_id}/` — `{enabled: boolean}` only.
+- `GET /readiness/?organization_id={id}` — platform-admin read-only per-level pool and eligible-learner counts. The organisation selector is mandatory.
 
 Permission is platform admin only. Enabling returns per-level question counts as information but is never blocked by capacity. Operational exam settings remain an org-admin responsibility.
+
+The same `GET /readiness/` path is available to an enabled organisation admin without a selector and is always scoped to their own organisation. Learners and instructors are denied. Each level includes `can_form_full_exam` and a clear informational note when its unique frozen/live pool is below `questions_per_exam`.
 
 ### 8.5 Subscription enforcement
 

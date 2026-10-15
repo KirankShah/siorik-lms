@@ -1,30 +1,83 @@
+from datetime import date, datetime, timezone
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
 
-class InitialMigrationTests(TransactionTestCase):
-    serialized_rollback = True
-    migrate_from = [('periodic_exams', None)]
-    migrate_to = [('periodic_exams', '0001_initial')]
+class Phase2MigrationTests(TransactionTestCase):
+    migrate_from = [('periodic_exams', '0001_initial')]
+    migrate_to = [('periodic_exams', '0002_periodicexamparticipant_periodicexamcyclequestion_and_more')]
 
-    def test_apply_and_reverse_preserve_existing_organization(self):
+    def test_apply_and_reverse_preserve_populated_existing_tables(self):
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_from)
-        old_apps = executor.loader.project_state([('accounts', '0010_staffinvitationjob_staffinvitation')]).apps
+        old_apps = executor.loader.project_state(self.migrate_from).apps
         Organization = old_apps.get_model('accounts', 'Organization')
+        Settings = old_apps.get_model('periodic_exams', 'PeriodicExamSettings')
+        Cycle = old_apps.get_model('periodic_exams', 'PeriodicExamCycle')
         organization = Organization.objects.create(name='Existing', slug='existing')
+        Settings.objects.create(organization_id=organization.pk, enabled=True)
+        cycle = Cycle.objects.create(
+            organization_id=organization.pk,
+            sequence=1,
+            frequency_snapshot='MONTHLY',
+            configuration_version=1,
+            questions_per_exam=30,
+            pass_mark_percent=60,
+            seconds_per_question=60,
+            max_attempts_per_cycle=2,
+            reminders_enabled=False,
+            reminder_days_before_end=[7, 2],
+            starts_at=datetime(2026, 7, 16, 18, 15, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 8, 17, 18, 15, tzinfo=timezone.utc),
+            start_date_ad=date(2026, 7, 17),
+            end_date_ad=date(2026, 8, 17),
+            start_year_bs=2083,
+            start_month_bs=4,
+            start_day_bs=1,
+            end_year_bs=2083,
+            end_month_bs=4,
+            end_day_bs=32,
+            fiscal_year_start_bs=2083,
+            period_number=1,
+            display_label='2083 Shrawan',
+        )
 
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_to)
         apps = executor.loader.project_state(self.migrate_to).apps
-        Settings = apps.get_model('periodic_exams', 'PeriodicExamSettings')
-        Settings.objects.create(organization_id=organization.pk)
-        self.assertTrue(Organization.objects.filter(pk=organization.pk).exists())
+        Snapshot = apps.get_model('periodic_exams', 'PeriodicExamCycleQuestion')
+        Participant = apps.get_model('periodic_exams', 'PeriodicExamParticipant')
+        Snapshot.objects.create(
+            cycle_id=cycle.pk,
+            level='officer',
+            source_question_id_snapshot=123,
+            normalized_text='question',
+            normalized_text_hash='a' * 64,
+            question_text='Question?',
+            question_type='SINGLE_CHOICE',
+            marks=1,
+            choices=[{'key': 'A', 'text': 'Answer'}],
+            correct_option_keys=['A'],
+        )
+        Participant.objects.create(
+            cycle_id=cycle.pk,
+            learner_id_snapshot=456,
+            name_snapshot='Existing Learner',
+            email_snapshot='existing@example.com',
+            level_snapshot='officer',
+            branch_department_snapshot='Branch',
+            eligible_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        )
 
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_from)
-        old_apps = executor.loader.project_state([('accounts', '0010_staffinvitationjob_staffinvitation')]).apps
-        self.assertTrue(old_apps.get_model('accounts', 'Organization').objects.filter(pk=organization.pk).exists())
+        apps = executor.loader.project_state(self.migrate_from).apps
+        self.assertTrue(apps.get_model('accounts', 'Organization').objects.filter(pk=organization.pk).exists())
+        self.assertTrue(apps.get_model('periodic_exams', 'PeriodicExamSettings').objects.filter(
+            organization_id=organization.pk, enabled=True,
+        ).exists())
+        self.assertTrue(apps.get_model('periodic_exams', 'PeriodicExamCycle').objects.filter(pk=cycle.pk).exists())
 
         MigrationExecutor(connection).migrate(self.migrate_to)
