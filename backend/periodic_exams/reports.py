@@ -111,8 +111,11 @@ def iter_report_rows(queryset, *, chunk_size=500):
         yield build_report_row(participant)
 
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
 def spreadsheet_safe(value):
-    if isinstance(value, str) and value.startswith(('=', '+', '-', '@')):
+    if isinstance(value, str) and value.startswith(FORMULA_TRIGGERS):
         return "'" + value
     return value
 

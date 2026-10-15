@@ -28,6 +28,7 @@ from .services import (
     readiness_for_organization,
     advance_periodic_attempt,
     close_expired_periodic_attempts,
+    revoke_ineligible_participants,
     get_periodic_attempt,
     periodic_attempt_payload,
     periodic_exam_summary,
@@ -287,6 +288,7 @@ class ReportView(PeriodicExamConflictMixin, APIView):
         organization = _report_organization(request)
         cycle = get_object_or_404(PeriodicExamCycle, pk=cycle_id, organization=organization)
         close_expired_periodic_attempts(cycle=cycle)
+        revoke_ineligible_participants(cycle=cycle)
         search = request.query_params.get('search', '').strip()
         status_filter = request.query_params.get('status', '').strip()
         queryset = report_participants(cycle, search=search, status_filter=status_filter)

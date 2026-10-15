@@ -11,7 +11,11 @@ from django.utils.html import escape
 from accounts.models import User
 
 from .models import PeriodicExamReminderDelivery, PeriodicExamSettings
-from .services import close_expired_periodic_attempts, ensure_current_cycle
+from .services import (
+    close_expired_periodic_attempts,
+    ensure_current_cycle,
+    revoke_ineligible_participants,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +64,10 @@ def send_periodic_exam_reminder_email(participant, days_before_end):
 
 
 def _deliver(participant, days_before_end, now, email_sender):
+    # Claim the ledger row and commit BEFORE sending, so a rollback can never
+    # undo the record of an email that already went out. A claimed row with no
+    # sent_at and no error (in flight, or a crash mid-send) is never retried
+    # automatically: a possibly-missed reminder beats a possible duplicate.
     with transaction.atomic():
         delivery, _ = PeriodicExamReminderDelivery.objects.get_or_create(
             cycle=participant.cycle,
@@ -69,28 +77,30 @@ def _deliver(participant, days_before_end, now, email_sender):
         delivery = PeriodicExamReminderDelivery.objects.select_for_update().get(pk=delivery.pk)
         if delivery.sent_at is not None:
             return 'duplicate'
+        if delivery.last_attempt_at is not None and not delivery.last_error:
+            return 'duplicate'
         delivery.attempt_count += 1
         delivery.last_attempt_at = now
-        try:
-            email_sender(participant, days_before_end)
-        except Exception as exc:
-            delivery.last_error = str(exc)[:2000]
-            delivery.save(update_fields=['attempt_count', 'last_attempt_at', 'last_error'])
-            logger.error(
-                'Periodic Exam reminder failed: cycle=%s participant=%s days=%s',
-                participant.cycle_id, participant.id, days_before_end,
-            )
-            return 'failed'
-        delivery.sent_at = now
         delivery.last_error = ''
-        delivery.save(update_fields=[
-            'attempt_count', 'last_attempt_at', 'last_error', 'sent_at'
-        ])
-        logger.info(
-            'Periodic Exam reminder sent: cycle=%s participant=%s days=%s',
+        delivery.save(update_fields=['attempt_count', 'last_attempt_at', 'last_error'])
+
+    try:
+        email_sender(participant, days_before_end)
+    except Exception as exc:
+        PeriodicExamReminderDelivery.objects.filter(pk=delivery.pk).update(
+            last_error=str(exc)[:2000] or exc.__class__.__name__
+        )
+        logger.error(
+            'Periodic Exam reminder failed: cycle=%s participant=%s days=%s',
             participant.cycle_id, participant.id, days_before_end,
         )
-        return 'sent'
+        return 'failed'
+    PeriodicExamReminderDelivery.objects.filter(pk=delivery.pk).update(sent_at=now)
+    logger.info(
+        'Periodic Exam reminder sent: cycle=%s participant=%s days=%s',
+        participant.cycle_id, participant.id, days_before_end,
+    )
+    return 'sent'
 
 
 def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=None):
@@ -116,6 +126,7 @@ def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=No
         if not dry_run:
             # An expired attempt may have passed; close it so that learner is excluded.
             close_expired_periodic_attempts(cycle=cycle, now=now)
+            revoke_ineligible_participants(cycle=cycle, now=now)
         participants = cycle.participants.filter(
             passed_at__isnull=True,
             revoked_at__isnull=True,

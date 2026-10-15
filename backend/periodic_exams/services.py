@@ -8,12 +8,11 @@ from itertools import groupby
 from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max
+from django.db.models import Count, F, Max, Q
 from django.utils import timezone
 
 from accounts.models import User
 from levelassessments.models import LevelQuestion
-from levelassessments.services import normalize_question_text
 
 from .calendar import (
     CalendarRangeError,
@@ -30,6 +29,7 @@ from .models import (
     PeriodicExamQuestionUsage,
     PeriodicExamSettings,
 )
+from .text import normalize_question_text
 
 
 SUPPORTED_QUESTION_TYPES = (
@@ -268,6 +268,21 @@ def _promote_pending_frequency(settings, now):
 def ensure_current_cycle(organization, now=None):
     """Create only the cycle containing ``now``; never backfill missed cycles."""
     now = now or timezone.now()
+    # Fast path without row locks: once the current cycle exists, every request
+    # for the rest of the period is a plain read. Locking is only needed to
+    # promote a due frequency change or to create the cycle.
+    settings = PeriodicExamSettings.objects.filter(organization=organization).first()
+    if settings is not None and not (
+        settings.pending_frequency and settings.pending_frequency_effective_at <= now
+    ):
+        if not settings.enabled or not settings.enabled_from or now < settings.enabled_from:
+            return None
+        existing = PeriodicExamCycle.objects.filter(
+            organization=organization, starts_at__lte=now, ends_at__gt=now
+        ).first()
+        if existing:
+            return existing
+
     with transaction.atomic():
         settings = get_or_create_settings(organization)
         settings = PeriodicExamSettings.objects.select_for_update().get(pk=settings.pk)
@@ -677,6 +692,35 @@ def close_expired_periodic_attempts(*, cycle=None, now=None):
         if attempt is not None and attempt.submitted_at is not None:
             closed += 1
     return closed
+
+
+def revoke_ineligible_participants(*, cycle=None, learner=None, now=None):
+    """Revoke open-cycle participants whose learner is no longer eligible.
+
+    Covers deactivation, demo flag, role change, moving organization, and
+    account deletion. A level change is not a revocation: the participant keeps
+    sitting the level snapshotted when the cycle opened. Ended cycles are left
+    untouched so their history stays as it was.
+    """
+    now = now or timezone.now()
+    participants = PeriodicExamParticipant.objects.filter(
+        revoked_at__isnull=True, cycle__ends_at__gt=now,
+    )
+    if cycle is not None:
+        participants = participants.filter(cycle=cycle)
+    if learner is not None:
+        participants = participants.filter(learner=learner)
+    ineligible = (
+        Q(learner__isnull=True)
+        | Q(learner__is_active=False)
+        | Q(learner__is_demo=True)
+        | ~Q(learner__role=User.Role.LEARNER)
+        | Q(learner__organization__isnull=True)
+        | ~Q(learner__organization_id=F('cycle__organization_id'))
+    )
+    return PeriodicExamParticipant.objects.filter(
+        pk__in=list(participants.filter(ineligible).values_list('pk', flat=True))
+    ).update(revoked_at=now)
 
 
 def _fresh_question_count(participant):
