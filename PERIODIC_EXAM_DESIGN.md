@@ -216,8 +216,7 @@ Fields:
 
 - `cycle`, `participant` FKs.
 - `days_before_end`.
-- `scheduled_local_date`, `sent_at`.
-- optional `status`/`error_summary` if retry auditing is desired.
+- `sent_at`, plus `last_attempt_at`, `attempt_count`, and `last_error` for retry auditing.
 
 Unique `(cycle, participant, days_before_end)` prevents duplicate sends if the command is run repeatedly.
 
@@ -407,10 +406,10 @@ Every query is derived from `request.user`; no client-supplied organisation, use
 
 - `GET /settings/` — own organisation only.
 - `PATCH /settings/` — own organisation operational fields only; never `enabled`.
-- `GET /cycles/` — own organisation cycle selector.
-- `GET /cycles/{id}/report/` — paginated/filterable own-organisation report.
-- `GET /cycles/{id}/report.csv`
-- `GET /cycles/{id}/report.xlsx`
+- `GET /report/cycles/` — own organisation cycle selector.
+- `GET /report/cycles/{id}/` — paginated/filterable own-organisation report.
+- `GET /report/cycles/{id}.csv`
+- `GET /report/cycles/{id}.xlsx`
 
 Org admin is always scoped to their own organisation. Platform admin has read-only report access and must supply/select one organisation. Instructor and learner are denied. Validate the organisation before returning any row.
 
@@ -421,7 +420,7 @@ Report columns, in the required order:
 3. Level
 4. Branch/department
 5. Cycle
-6. Attempted (`attempts_used > 0`, so started at least once)
+6. Attempted (the authoritative attempt-row count is greater than zero, including an open attempt)
 7. Completed (at least one submitted attempt)
 8. Attempts used
 9. Best score (blank if no submitted attempt)
