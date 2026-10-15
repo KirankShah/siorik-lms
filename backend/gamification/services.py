@@ -96,7 +96,10 @@ def _current_knowledge_metrics(user, path_course_ids):
     quizzes_completed = len(latest_quiz_scores)
     course_average = None
     if quizzes_required and quizzes_completed == quizzes_required:
-        course_average = _average(latest_quiz_scores.values())
+        # Match LeaderboardEntry's two-decimal DecimalField before comparing
+        # dry-run values with stored rows; otherwise repeating averages (for
+        # example 260 / 3) appear changed forever after the database rounds.
+        course_average = round(_average(latest_quiz_scores.values()), 2)
 
     if not user.assessment_level:
         return course_average, None, None, None, quizzes_completed, quizzes_required

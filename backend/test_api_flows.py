@@ -8225,6 +8225,27 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         self.assertIn('0 learner leaderboard rows applied', second_apply.getvalue())
 
+    def test_recalculation_dry_run_is_stable_for_repeating_decimal_average(self):
+        now = timezone.now()
+        third_slide = Slide.objects.create(
+            lesson=self.quiz_one.slide.lesson, title='Quiz 3', slide_type=Slide.SlideType.QUIZ, order=3,
+        )
+        third_quiz = Quiz.objects.create(slide=third_slide, title='Quiz 3')
+        Question.objects.create(
+            quiz=third_quiz, question_text='Third?',
+            question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
+        )
+        self.quiz_attempt(self.quiz_one, Decimal('100'), now)
+        self.quiz_attempt(self.quiz_two, Decimal('80'), now)
+        self.quiz_attempt(third_quiz, Decimal('80'), now)
+        self.level_attempt(Decimal('80'), now)
+
+        entry = recalculate_leaderboard_entry(self.learner)
+        self.assertEqual(entry.current_course_quiz_average, Decimal('86.67'))
+        output = io.StringIO()
+        call_command('recalculate_leaderboard', '--organization-id', str(self.org.id), stdout=output)
+        self.assertIn('0 learner leaderboard rows would change', output.getvalue())
+
     def test_deactivated_learner_is_not_returned_and_no_level_assessment_stays_unranked(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
