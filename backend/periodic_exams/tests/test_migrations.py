@@ -4,7 +4,8 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
-LATEST = [('periodic_exams', '0003_periodicexamattempt_periodicexamattemptquestion_and_more')]
+PHASE3 = [('periodic_exams', '0003_periodicexamattempt_periodicexamattemptquestion_and_more')]
+LATEST = [('periodic_exams', '0004_periodicexamreminderdelivery')]
 
 
 class Phase2MigrationTests(TransactionTestCase):
@@ -87,7 +88,7 @@ class Phase2MigrationTests(TransactionTestCase):
 
 class Phase3MigrationTests(TransactionTestCase):
     migrate_from = [('periodic_exams', '0002_periodicexamparticipant_periodicexamcyclequestion_and_more')]
-    migrate_to = LATEST
+    migrate_to = PHASE3
 
     def test_apply_and_reverse_preserve_populated_phase2_tables(self):
         executor = MigrationExecutor(connection)
@@ -159,4 +160,44 @@ class Phase3MigrationTests(TransactionTestCase):
             pk=participant.pk
         ).exists())
 
-        MigrationExecutor(connection).migrate(self.migrate_to)
+        MigrationExecutor(connection).migrate(LATEST)
+
+
+class Phase6MigrationTests(TransactionTestCase):
+    migrate_from = PHASE3
+    migrate_to = LATEST
+
+    def test_apply_and_reverse_preserve_populated_phase3_tables(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        apps = executor.loader.project_state(self.migrate_from).apps
+        Organization = apps.get_model('accounts', 'Organization')
+        Settings = apps.get_model('periodic_exams', 'PeriodicExamSettings')
+        Cycle = apps.get_model('periodic_exams', 'PeriodicExamCycle')
+        organization = Organization.objects.create(name='Reminder Existing', slug='reminder-existing')
+        Settings.objects.create(organization_id=organization.pk, enabled=True)
+        cycle = Cycle.objects.create(
+            organization_id=organization.pk, sequence=1, frequency_snapshot='MONTHLY',
+            configuration_version=1, questions_per_exam=1, pass_mark_percent=60,
+            seconds_per_question=60, max_attempts_per_cycle=2, reminders_enabled=True,
+            reminder_days_before_end=[7, 2],
+            starts_at=datetime(2026, 7, 16, 18, 15, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 8, 17, 18, 15, tzinfo=timezone.utc),
+            start_date_ad=date(2026, 7, 17), end_date_ad=date(2026, 8, 17),
+            start_year_bs=2083, start_month_bs=4, start_day_bs=1,
+            end_year_bs=2083, end_month_bs=4, end_day_bs=32,
+            fiscal_year_start_bs=2083, period_number=1, display_label='2083 Shrawan',
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_to)
+        apps = executor.loader.project_state(self.migrate_to).apps
+        self.assertEqual(apps.get_model('periodic_exams', 'PeriodicExamReminderDelivery').objects.count(), 0)
+
+        MigrationExecutor(connection).migrate(self.migrate_from)
+        apps = MigrationExecutor(connection).loader.project_state(self.migrate_from).apps
+        self.assertTrue(apps.get_model('periodic_exams', 'PeriodicExamCycle').objects.filter(pk=cycle.pk).exists())
+        self.assertTrue(apps.get_model('periodic_exams', 'PeriodicExamSettings').objects.filter(
+            organization_id=organization.pk, enabled=True,
+        ).exists())
+        MigrationExecutor(connection).migrate(LATEST)

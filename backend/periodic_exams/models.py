@@ -240,3 +240,30 @@ class PeriodicExamQuestionUsage(models.Model):
                 name='pe_usage_lru_idx',
             ),
         ]
+
+
+class PeriodicExamReminderDelivery(models.Model):
+    cycle = models.ForeignKey(
+        PeriodicExamCycle, on_delete=models.CASCADE, related_name='reminder_deliveries'
+    )
+    participant = models.ForeignKey(
+        PeriodicExamParticipant, on_delete=models.CASCADE, related_name='reminder_deliveries'
+    )
+    days_before_end = models.PositiveSmallIntegerField()
+    sent_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cycle', 'participant', 'days_before_end'],
+                name='pe_reminder_delivery_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['cycle', 'days_before_end'], name='pe_reminder_cycle_due_idx'),
+            models.Index(fields=['cycle', 'sent_at'], name='pe_reminder_unsent_idx'),
+        ]
