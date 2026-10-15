@@ -85,3 +85,14 @@ class ReadinessSerializer(serializers.Serializer):
     cycle_id = serializers.IntegerField(allow_null=True)
     as_of = serializers.DateTimeField()
     levels = ReadinessLevelSerializer(many=True)
+
+
+class CurrentAnswerInputSerializer(serializers.Serializer):
+    current_question_index = serializers.IntegerField(min_value=0)
+    selected_option_keys = serializers.ListField(
+        child=serializers.CharField(max_length=10), allow_empty=True
+    )
+
+
+class AdvanceInputSerializer(serializers.Serializer):
+    current_question_index = serializers.IntegerField(min_value=0)

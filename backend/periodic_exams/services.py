@@ -1,4 +1,10 @@
 import hashlib
+import math
+import random
+from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from itertools import groupby
+from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Max
@@ -10,9 +16,12 @@ from levelassessments.services import normalize_question_text
 
 from .calendar import first_full_period_start_on_or_after, next_full_period_start, period_for
 from .models import (
+    PeriodicExamAttempt,
+    PeriodicExamAttemptQuestion,
     PeriodicExamCycle,
     PeriodicExamCycleQuestion,
     PeriodicExamParticipant,
+    PeriodicExamQuestionUsage,
     PeriodicExamSettings,
 )
 
@@ -26,6 +35,14 @@ SNAPSHOT_BATCH_SIZE = 500
 
 class PeriodicExamPoolConflictError(ValueError):
     pass
+
+
+class PeriodicExamError(ValueError):
+    def __init__(self, detail, *, code, status_code=400):
+        super().__init__(detail)
+        self.detail = detail
+        self.code = code
+        self.status_code = status_code
 
 
 def question_counts_for_organizations(organization_ids):
@@ -342,3 +359,401 @@ def update_operational_settings(row, validated_data, actor, now=None):
         row.updated_by = actor
         row.save()
         return row
+
+
+KATHMANDU = ZoneInfo('Asia/Kathmandu')
+
+
+def grade_selection(selected_option_keys, correct_option_keys):
+    """Pure exact-set grading shared by manual and timeout transitions."""
+    return set(selected_option_keys) == set(correct_option_keys)
+
+
+def _learner_access_settings(user, *, require_enabled=True, now=None):
+    now = now or timezone.now()
+    if (
+        user.role != User.Role.LEARNER
+        or not user.is_active
+        or user.is_demo
+        or not user.organization_id
+    ):
+        raise PeriodicExamError('Periodic Exam is not available.', code='NOT_ELIGIBLE', status_code=403)
+    settings = PeriodicExamSettings.objects.filter(organization_id=user.organization_id).first()
+    if settings is None or (require_enabled and not settings.enabled):
+        raise PeriodicExamError('Periodic Exam is disabled.', code='FEATURE_DISABLED', status_code=403)
+    if user.organization.settings.is_access_locked_for(user, now.astimezone(KATHMANDU).date()):
+        raise PeriodicExamError(
+            "Your organization's subscription has expired.",
+            code='SUBSCRIPTION_EXPIRED',
+            status_code=403,
+        )
+    return settings
+
+
+def _validate_participant_access(user, participant, *, now=None):
+    _learner_access_settings(user, now=now)
+    if participant.learner_id != user.id or participant.cycle.organization_id != user.organization_id:
+        raise PeriodicExamError('Not found.', code='NOT_FOUND', status_code=404)
+    if participant.revoked_at is not None:
+        raise PeriodicExamError('Periodic Exam access has been revoked.', code='REVOKED', status_code=403)
+
+
+def _randomized_age_order(rows, *, age_key, rng):
+    ordered = []
+    for _age, group in groupby(sorted(rows, key=age_key), key=age_key):
+        tied = list(group)
+        rng.shuffle(tied)
+        ordered.extend(tied)
+    return ordered
+
+
+def select_questions_for_participant(participant, *, now=None, rng=None):
+    """Select one paper without repetition, honoring lifetime/current-cycle history."""
+    now = now or timezone.now()
+    rng = rng or random.SystemRandom()
+    cycle = participant.cycle
+    pool = list(PeriodicExamCycleQuestion.objects.filter(
+        cycle=cycle, level=participant.level_snapshot
+    ))
+    if len(pool) < cycle.questions_per_exam:
+        raise PeriodicExamError(
+            f'Cannot form a full exam: {len(pool)} unique questions available; '
+            f'{cycle.questions_per_exam} required.',
+            code='INSUFFICIENT_POOL',
+        )
+
+    current_cycle_keys = set(PeriodicExamAttemptQuestion.objects.filter(
+        attempt__participant=participant,
+    ).values_list('cycle_question__normalized_text_hash', flat=True))
+    usages = {
+        usage.question_key: usage
+        for usage in PeriodicExamQuestionUsage.objects.select_for_update().filter(
+            learner_id=participant.learner_id,
+            level=participant.level_snapshot,
+        )
+    }
+    lifetime_unused = [question for question in pool if question.normalized_text_hash not in usages]
+    rng.shuffle(lifetime_unused)
+    unused_this_cycle = [
+        question for question in pool
+        if question.normalized_text_hash in usages
+        and question.normalized_text_hash not in current_cycle_keys
+    ]
+    used_this_cycle = [
+        question for question in pool if question.normalized_text_hash in current_cycle_keys
+    ]
+
+    def age(question):
+        usage = usages[question.normalized_text_hash]
+        return usage.last_cycle_sequence, usage.last_used_at
+
+    candidates = lifetime_unused
+    candidates += _randomized_age_order(unused_this_cycle, age_key=age, rng=rng)
+    candidates += _randomized_age_order(used_this_cycle, age_key=age, rng=rng)
+    selected = candidates[:cycle.questions_per_exam]
+    rng.shuffle(selected)
+    return selected, usages
+
+
+def _record_question_usage(participant, questions, usages, *, now):
+    new_rows = []
+    changed = []
+    for question in questions:
+        usage = usages.get(question.normalized_text_hash)
+        if usage is None:
+            new_rows.append(PeriodicExamQuestionUsage(
+                learner_id=participant.learner_id,
+                level=participant.level_snapshot,
+                question_key=question.normalized_text_hash,
+                first_cycle_sequence=participant.cycle.sequence,
+                last_cycle_sequence=participant.cycle.sequence,
+                last_used_at=now,
+                times_used=1,
+            ))
+        else:
+            usage.last_cycle_sequence = participant.cycle.sequence
+            usage.last_used_at = now
+            usage.times_used += 1
+            changed.append(usage)
+    PeriodicExamQuestionUsage.objects.bulk_create(new_rows, batch_size=SNAPSHOT_BATCH_SIZE)
+    if changed:
+        PeriodicExamQuestionUsage.objects.bulk_update(
+            changed, ['last_cycle_sequence', 'last_used_at', 'times_used'], batch_size=SNAPSHOT_BATCH_SIZE
+        )
+
+
+def start_periodic_exam_attempt(user, *, now=None, rng=None):
+    now = now or timezone.now()
+    _learner_access_settings(user, now=now)
+    cycle = ensure_current_cycle(user.organization, now)
+    if cycle is None or now >= cycle.ends_at:
+        raise PeriodicExamError('No Periodic Exam cycle is open.', code='CYCLE_CLOSED')
+
+    with transaction.atomic():
+        participant = PeriodicExamParticipant.objects.select_for_update().select_related('cycle').filter(
+            cycle=cycle, learner=user
+        ).first()
+        if participant is None:
+            raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
+        _validate_participant_access(user, participant, now=now)
+        if participant.passed_at is not None:
+            raise PeriodicExamError('This cycle has already been passed.', code='ALREADY_PASSED')
+        open_attempt = participant.attempts.filter(submitted_at__isnull=True).first()
+        if open_attempt is not None:
+            return open_attempt, False
+        attempts_started = participant.attempts.count()
+        if attempts_started >= cycle.max_attempts_per_cycle:
+            raise PeriodicExamError('Maximum attempts for this cycle have been used.', code='ATTEMPT_LIMIT_REACHED')
+        if not participant.can_form_full_exam:
+            available = cycle.question_pool.filter(level=participant.level_snapshot).count()
+            raise PeriodicExamError(
+                f'Cannot form a full exam: {available} unique questions available; '
+                f'{cycle.questions_per_exam} required.',
+                code='INSUFFICIENT_POOL',
+            )
+
+        selected, usages = select_questions_for_participant(participant, now=now, rng=rng)
+        attempt = PeriodicExamAttempt.objects.create(
+            participant=participant,
+            attempt_number=attempts_started + 1,
+            started_at=now,
+            timer_segment_started_at=now,
+        )
+        PeriodicExamAttemptQuestion.objects.bulk_create([
+            PeriodicExamAttemptQuestion(attempt=attempt, cycle_question=question, order=order)
+            for order, question in enumerate(selected)
+        ], batch_size=SNAPSHOT_BATCH_SIZE)
+        _record_question_usage(participant, selected, usages, now=now)
+        return attempt, True
+
+
+def remaining_seconds_for_periodic_attempt(attempt, *, now=None):
+    if attempt.submitted_at is not None:
+        return 0
+    now = now or timezone.now()
+    elapsed = (now - attempt.timer_segment_started_at).total_seconds()
+    return max(0, math.ceil(attempt.participant.cycle.seconds_per_question - elapsed))
+
+
+def _lock_attempt_question(row, *, locked_at):
+    if row.locked_at is not None:
+        return row
+    row.is_correct = grade_selection(
+        row.selected_option_keys,
+        row.cycle_question.correct_option_keys,
+    )
+    row.marks_awarded = row.cycle_question.marks if row.is_correct else 0
+    row.locked_at = locked_at
+    row.save(update_fields=['is_correct', 'marks_awarded', 'locked_at'])
+    return row
+
+
+def _finalize_attempt(attempt, *, submitted_at, reason):
+    if attempt.submitted_at is not None:
+        return attempt
+    rows = list(attempt.paper_questions.select_related('cycle_question').order_by('order'))
+    total_marks = sum(row.cycle_question.marks for row in rows)
+    earned_marks = sum(row.marks_awarded for row in rows)
+    score = Decimal('0.00') if total_marks == 0 else (
+        (Decimal(earned_marks) * Decimal('100')) / Decimal(total_marks)
+    ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    attempt.score_percent = score
+    attempt.passed = score >= attempt.participant.cycle.pass_mark_percent
+    attempt.submitted_at = submitted_at
+    attempt.submission_reason = reason
+    attempt.save(update_fields=['score_percent', 'passed', 'submitted_at', 'submission_reason'])
+
+    participant = PeriodicExamParticipant.objects.select_for_update().get(pk=attempt.participant_id)
+    participant.attempts_used = participant.attempts.count()
+    if participant.best_score_percent is None or score > participant.best_score_percent:
+        participant.best_score_percent = score
+    if attempt.passed and participant.passed_at is None:
+        participant.passed_at = submitted_at
+    participant.last_attempt_at = submitted_at
+    participant.save(update_fields=[
+        'attempts_used', 'best_score_percent', 'passed_at', 'last_attempt_at'
+    ])
+    attempt.participant = participant
+    return attempt
+
+
+def catch_up_periodic_attempt(attempt, *, now=None):
+    """Lock every elapsed question in sequence and auto-submit after the last."""
+    if attempt.submitted_at is not None:
+        return attempt
+    now = now or timezone.now()
+    rows = list(attempt.paper_questions.select_related('cycle_question').order_by('order'))
+    seconds = attempt.participant.cycle.seconds_per_question
+    elapsed = (now - attempt.timer_segment_started_at).total_seconds()
+    index = attempt.current_question_index
+    segment_start = attempt.timer_segment_started_at
+    changed = False
+    while elapsed >= seconds and index < len(rows):
+        lock_time = segment_start + timedelta(seconds=seconds)
+        _lock_attempt_question(rows[index], locked_at=lock_time)
+        elapsed -= seconds
+        segment_start = lock_time
+        index += 1
+        changed = True
+    if index >= len(rows):
+        return _finalize_attempt(
+            attempt, submitted_at=segment_start,
+            reason=PeriodicExamAttempt.SubmissionReason.QUESTION_TIMEOUT,
+        )
+    if changed:
+        attempt.current_question_index = index
+        attempt.timer_segment_started_at = segment_start
+        attempt.save(update_fields=['current_question_index', 'timer_segment_started_at'])
+    return attempt
+
+
+def _locked_owned_attempt(user, attempt_id, *, now=None):
+    now = now or timezone.now()
+    attempt = PeriodicExamAttempt.objects.select_for_update().select_related(
+        'participant__cycle'
+    ).filter(
+        pk=attempt_id,
+        participant__learner=user,
+        participant__cycle__organization_id=user.organization_id,
+    ).first()
+    if attempt is None:
+        raise PeriodicExamError('Not found.', code='NOT_FOUND', status_code=404)
+    _validate_participant_access(user, attempt.participant, now=now)
+    return attempt
+
+
+def get_periodic_attempt(user, attempt_id, *, now=None):
+    now = now or timezone.now()
+    with transaction.atomic():
+        attempt = _locked_owned_attempt(user, attempt_id, now=now)
+        return catch_up_periodic_attempt(attempt, now=now)
+
+
+def save_periodic_answer(user, attempt_id, *, current_question_index, selected_option_keys, now=None):
+    now = now or timezone.now()
+    with transaction.atomic():
+        attempt = _locked_owned_attempt(user, attempt_id, now=now)
+        attempt = catch_up_periodic_attempt(attempt, now=now)
+        if attempt.submitted_at is not None:
+            raise PeriodicExamError('This attempt has already been submitted.', code='ALREADY_SUBMITTED')
+        if current_question_index != attempt.current_question_index:
+            raise PeriodicExamError('This question is no longer active.', code='STALE_QUESTION')
+        row = attempt.paper_questions.select_related('cycle_question').get(order=attempt.current_question_index)
+        if row.locked_at is not None:
+            raise PeriodicExamError('This question is locked.', code='QUESTION_LOCKED')
+        valid_keys = {choice['key'] for choice in row.cycle_question.choices}
+        selected = list(dict.fromkeys(selected_option_keys))
+        if any(key not in valid_keys for key in selected):
+            raise PeriodicExamError('A selected option does not belong to this question.', code='INVALID_OPTION')
+        if row.cycle_question.question_type == LevelQuestion.QuestionType.SINGLE_CHOICE and len(selected) > 1:
+            raise PeriodicExamError('Select at most one option.', code='INVALID_SELECTION')
+        row.selected_option_keys = selected
+        row.save(update_fields=['selected_option_keys'])
+        return attempt
+
+
+def advance_periodic_attempt(user, attempt_id, *, current_question_index, now=None):
+    now = now or timezone.now()
+    with transaction.atomic():
+        attempt = _locked_owned_attempt(user, attempt_id, now=now)
+        attempt = catch_up_periodic_attempt(attempt, now=now)
+        if attempt.submitted_at is not None:
+            return attempt
+        if current_question_index < attempt.current_question_index:
+            return attempt
+        if current_question_index != attempt.current_question_index:
+            raise PeriodicExamError('Cannot advance out of sequence.', code='STALE_QUESTION')
+        row = attempt.paper_questions.select_related('cycle_question').get(order=attempt.current_question_index)
+        _lock_attempt_question(row, locked_at=now)
+        if attempt.current_question_index + 1 >= attempt.paper_questions.count():
+            return _finalize_attempt(
+                attempt, submitted_at=now, reason=PeriodicExamAttempt.SubmissionReason.LEARNER
+            )
+        attempt.current_question_index += 1
+        attempt.timer_segment_started_at = now
+        attempt.save(update_fields=['current_question_index', 'timer_segment_started_at'])
+        return attempt
+
+
+def submit_periodic_attempt(user, attempt_id, *, now=None):
+    now = now or timezone.now()
+    with transaction.atomic():
+        attempt = _locked_owned_attempt(user, attempt_id, now=now)
+        attempt = catch_up_periodic_attempt(attempt, now=now)
+        if attempt.submitted_at is not None:
+            return attempt
+        if attempt.current_question_index + 1 != attempt.paper_questions.count():
+            raise PeriodicExamError('Only the final question can submit the attempt.', code='NOT_ON_FINAL_QUESTION')
+        row = attempt.paper_questions.select_related('cycle_question').get(order=attempt.current_question_index)
+        _lock_attempt_question(row, locked_at=now)
+        return _finalize_attempt(attempt, submitted_at=now, reason=PeriodicExamAttempt.SubmissionReason.LEARNER)
+
+
+def periodic_attempt_payload(attempt, *, now=None):
+    now = now or timezone.now()
+    data = {
+        'id': attempt.id,
+        'attempt_number': attempt.attempt_number,
+        'submitted': attempt.submitted_at is not None,
+        'current_question_index': attempt.current_question_index,
+        'total_questions': attempt.paper_questions.count(),
+        'remaining_seconds': remaining_seconds_for_periodic_attempt(attempt, now=now),
+    }
+    if attempt.submitted_at is not None:
+        data.update({'score_percent': attempt.score_percent, 'passed': attempt.passed})
+        return data
+    row = attempt.paper_questions.select_related('cycle_question').get(order=attempt.current_question_index)
+    question = row.cycle_question
+    data['current_question'] = {
+        'id': row.id,
+        'question_text': question.question_text,
+        'question_type': question.question_type,
+        'marks': question.marks,
+        'choices': question.choices,
+        'selected_option_keys': row.selected_option_keys,
+    }
+    return data
+
+
+def periodic_exam_summary(user, *, now=None):
+    now = now or timezone.now()
+    _learner_access_settings(user, now=now)
+    cycle = ensure_current_cycle(user.organization, now)
+    if cycle is None:
+        raise PeriodicExamError('No Periodic Exam cycle is open.', code='CYCLE_CLOSED', status_code=404)
+    participant = PeriodicExamParticipant.objects.filter(cycle=cycle, learner=user).first()
+    if participant is None:
+        raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
+    _validate_participant_access(user, participant, now=now)
+    open_attempt = participant.attempts.filter(submitted_at__isnull=True).first()
+    attempts_started = participant.attempts.count()
+    reason = None
+    if participant.passed_at is not None:
+        reason = 'ALREADY_PASSED'
+    elif participant.revoked_at is not None:
+        reason = 'REVOKED'
+    elif open_attempt is not None:
+        reason = 'ATTEMPT_IN_PROGRESS'
+    elif attempts_started >= cycle.max_attempts_per_cycle:
+        reason = 'ATTEMPT_LIMIT_REACHED'
+    elif not participant.can_form_full_exam:
+        reason = 'INSUFFICIENT_POOL'
+    elif now >= cycle.ends_at:
+        reason = 'CYCLE_CLOSED'
+    return {
+        'cycle': {
+            'id': cycle.id,
+            'display_label': cycle.display_label,
+            'starts_at': cycle.starts_at,
+            'ends_at': cycle.ends_at,
+        },
+        'attempted': attempts_started > 0,
+        'completed': participant.attempts.filter(submitted_at__isnull=False).exists(),
+        'attempts_used': participant.attempts_used,
+        'attempts_remaining': max(0, cycle.max_attempts_per_cycle - attempts_started),
+        'best_score_percent': participant.best_score_percent,
+        'passed': participant.passed_at is not None,
+        'open_attempt_id': open_attempt.id if open_attempt else None,
+        'can_start': reason is None,
+        'reason_code': reason,
+    }

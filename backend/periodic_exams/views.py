@@ -8,8 +8,10 @@ from rest_framework.views import APIView
 from accounts.models import Organization
 
 from .models import PeriodicExamSettings
-from .permissions import IsExactOrgAdmin, IsExactPlatformAdmin
+from .permissions import IsExactLearner, IsExactOrgAdmin, IsExactPlatformAdmin
 from .serializers import (
+    AdvanceInputSerializer,
+    CurrentAnswerInputSerializer,
     CycleSerializer,
     PeriodicExamSettingsSerializer,
     PlatformOrganizationSerializer,
@@ -17,17 +19,29 @@ from .serializers import (
     ReadinessSerializer,
 )
 from .services import (
+    PeriodicExamError,
     PeriodicExamPoolConflictError,
     ensure_current_cycle,
     get_or_create_settings,
     question_counts_for_organizations,
     readiness_for_organization,
+    advance_periodic_attempt,
+    get_periodic_attempt,
+    periodic_attempt_payload,
+    periodic_exam_summary,
+    save_periodic_answer,
     set_feature_enabled,
+    start_periodic_exam_attempt,
+    submit_periodic_attempt,
 )
 
 
 class PeriodicExamConflictMixin:
     def handle_exception(self, exc):
+        if isinstance(exc, PeriodicExamError):
+            return Response(
+                {'detail': exc.detail, 'code': exc.code}, status=exc.status_code
+            )
         if isinstance(exc, PeriodicExamPoolConflictError):
             return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
         return super().handle_exception(exc)
@@ -159,3 +173,67 @@ class ReadinessView(APIView):
         else:
             return Response({'detail': 'You do not have permission to perform this action.'}, status=403)
         return Response(ReadinessSerializer(readiness_for_organization(organization)).data)
+
+
+class LearnerSummaryView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def get(self, request):
+        return Response(periodic_exam_summary(request.user))
+
+
+class LearnerAttemptStartView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def post(self, request):
+        attempt, created = start_periodic_exam_attempt(request.user)
+        return Response(
+            periodic_attempt_payload(attempt),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class LearnerAttemptView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def get(self, request, attempt_id):
+        attempt = get_periodic_attempt(request.user, attempt_id)
+        return Response(periodic_attempt_payload(attempt))
+
+
+class LearnerCurrentAnswerView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def put(self, request, attempt_id):
+        serializer = CurrentAnswerInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        attempt = save_periodic_answer(request.user, attempt_id, **serializer.validated_data)
+        return Response(periodic_attempt_payload(attempt))
+
+
+class LearnerAdvanceView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def post(self, request, attempt_id):
+        serializer = AdvanceInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        attempt = advance_periodic_attempt(request.user, attempt_id, **serializer.validated_data)
+        return Response(periodic_attempt_payload(attempt))
+
+
+class LearnerSubmitView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def post(self, request, attempt_id):
+        attempt = submit_periodic_attempt(request.user, attempt_id)
+        return Response(periodic_attempt_payload(attempt))
+
+
+class LearnerResultView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def get(self, request, attempt_id):
+        attempt = get_periodic_attempt(request.user, attempt_id)
+        if attempt.submitted_at is None:
+            raise PeriodicExamError('This attempt is still in progress.', code='ATTEMPT_IN_PROGRESS')
+        return Response({'score_percent': attempt.score_percent, 'passed': attempt.passed})

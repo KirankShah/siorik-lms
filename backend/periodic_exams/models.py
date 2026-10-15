@@ -155,3 +155,88 @@ class PeriodicExamParticipant(models.Model):
             models.Index(fields=['cycle', 'level_snapshot'], name='pe_participant_level_idx'),
             models.Index(fields=['cycle', 'passed_at', 'revoked_at'], name='pe_participant_status_idx'),
         ]
+
+
+class PeriodicExamAttempt(models.Model):
+    class SubmissionReason(models.TextChoices):
+        LEARNER = 'LEARNER', 'Learner'
+        QUESTION_TIMEOUT = 'QUESTION_TIMEOUT', 'Question timeout'
+
+    participant = models.ForeignKey(
+        PeriodicExamParticipant, on_delete=models.CASCADE, related_name='attempts'
+    )
+    attempt_number = models.PositiveSmallIntegerField()
+    started_at = models.DateTimeField()
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    current_question_index = models.PositiveIntegerField(default=0)
+    timer_segment_started_at = models.DateTimeField()
+    score_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    passed = models.BooleanField(default=False)
+    submission_reason = models.CharField(
+        max_length=30, choices=SubmissionReason.choices, null=True, blank=True
+    )
+
+    class Meta:
+        ordering = ['participant', 'attempt_number']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['participant', 'attempt_number'], name='pe_attempt_participant_number_unique'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['participant', 'submitted_at'], name='pe_attempt_open_idx'),
+        ]
+
+
+class PeriodicExamAttemptQuestion(models.Model):
+    attempt = models.ForeignKey(
+        PeriodicExamAttempt, on_delete=models.CASCADE, related_name='paper_questions'
+    )
+    cycle_question = models.ForeignKey(
+        PeriodicExamCycleQuestion, on_delete=models.PROTECT, related_name='attempt_questions'
+    )
+    order = models.PositiveIntegerField()
+    selected_option_keys = models.JSONField(default=list, blank=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    is_correct = models.BooleanField(null=True, blank=True)
+    marks_awarded = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(fields=['attempt', 'order'], name='pe_attempt_question_order_unique'),
+            models.UniqueConstraint(
+                fields=['attempt', 'cycle_question'], name='pe_attempt_question_unique'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['attempt', 'order'], name='pe_attempt_question_idx'),
+        ]
+
+
+class PeriodicExamQuestionUsage(models.Model):
+    learner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='periodic_exam_question_usage'
+    )
+    level = models.CharField(max_length=30)
+    question_key = models.CharField(max_length=64)
+    first_cycle_sequence = models.PositiveIntegerField()
+    last_cycle_sequence = models.PositiveIntegerField()
+    last_used_at = models.DateTimeField()
+    times_used = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['learner', 'level', 'question_key'], name='pe_usage_learner_level_key_unique'
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['learner', 'level', 'last_cycle_sequence', 'last_used_at'],
+                name='pe_usage_lru_idx',
+            ),
+        ]

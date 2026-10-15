@@ -170,12 +170,12 @@ Fields:
 - `current_question_index`.
 - `timer_segment_started_at`.
 - `score_percent`, `passed`.
-- `submission_reason`: `LEARNER`, `QUESTION_TIMEOUT`, `CYCLE_ENDED`, `RECONCILIATION`.
+- `submission_reason`: `LEARNER` or `QUESTION_TIMEOUT`. Cycle end never submits an already-started attempt, and Phase 3 has no separate reconciliation submission path.
 
 Constraints/indexes:
 
 - Unique `(participant, attempt_number)`.
-- Index `(participant, submitted_at)` and `(submitted_at)`.
+- Index `(participant, submitted_at)`.
 
 Do not use a partial unique constraint for “one open attempt”; MySQL does not enforce PostgreSQL-style conditional unique constraints. Instead, lock the `PeriodicExamParticipant` row with `select_for_update()` inside a transaction, check for an open attempt, allocate the next attempt number, and create it. The unique attempt-number constraint is the race backstop on both databases.
 
@@ -187,12 +187,13 @@ Fields:
 
 - `attempt` FK.
 - `cycle_question` FK with `PROTECT`.
-- `position`.
+- `order`.
 - `selected_option_keys`: JSON list, default empty.
-- `selection_saved_at`, `locked_at`.
+- `locked_at`.
 - `is_correct`: nullable until locked/finalized.
+- `marks_awarded`: frozen awarded marks after locking.
 
-Unique `(attempt, position)` and `(attempt, cycle_question)`, plus index `(attempt, position)`.
+Unique `(attempt, order)` and `(attempt, cycle_question)`, plus index `(attempt, order)`.
 
 ### 2.7 `PeriodicExamQuestionUsage`
 
@@ -200,13 +201,12 @@ Efficient lifetime no-repeat history.
 
 Fields:
 
-- `user` FK.
-- `organization` FK.
-- `level_code`.
+- `learner` FK. Organisation is derived through the learner and is not duplicated.
+- `level`.
 - `question_key`.
 - `first_cycle_sequence`, `last_cycle_sequence`, `last_used_at`, `times_used`.
 
-Unique `(user, level_code, question_key)`. Index `(user, level_code, last_cycle_sequence, last_used_at)`. Update only when a paper is successfully created, in the same transaction as attempt questions.
+Unique `(learner, level, question_key)`. Index `(learner, level, last_cycle_sequence, last_used_at)`. Update only when a paper is successfully created, in the same transaction as attempt questions.
 
 ### 2.8 `PeriodicExamReminderDelivery`
 
@@ -375,7 +375,9 @@ If interactive question types are later required, that is a separate scope: extr
 - No new attempt may start at or after `cycle.ends_at`. An attempt started before the boundary may continue until its own per-question timers and normal submission complete; cycle end does not truncate it.
 - Final submission creates no external side effects. It totals frozen marks, compares with the cycle pass-mark snapshot, updates participant aggregates, and returns the result.
 - Submission is idempotent. A repeated submit returns the existing submitted result, not a second grading event or a 500/duplicate row.
-- Starting is denied when the cycle has ended, the feature is disabled, a pass already exists, the cap is used, or an open attempt exists. Capacity never blocks a retake; least-recently-used fallback fills it.
+- Starting is denied when the resolved cycle has ended, the feature is disabled, a pass already exists, or the cap is used. A repeated/concurrent start returns the one existing open attempt. A pool below the paper size blocks every start with a clear capacity code; otherwise retakes always fill from unused-in-cycle then least-recently-used questions.
+- `attempts_used` is updated transactionally on submission; the existence of any attempt row is the authoritative “Attempted” signal while an attempt is still open.
+- Phase 3 duplicates the existing subscription-lock check in its service boundary in addition to relying on middleware, so direct service callers cannot bypass expiry policy.
 
 ## 8. API and permissions
 
@@ -397,7 +399,7 @@ Proposed base: `/api/periodic-exams/`.
 - `PUT /me/attempts/{id}/current-answer/` — save current selection only.
 - `POST /me/attempts/{id}/advance/` — lock/score current question and advance.
 - `POST /me/attempts/{id}/submit/` — idempotent final submission.
-- `GET /me/cycles/{id}/result/` — own score and pass/fail only. No submitted choices, correct choices, feedback, or per-question review is returned.
+- `GET /me/attempts/{id}/result/` — own score and pass/fail only. No submitted choices, correct choices, feedback, or per-question review is returned.
 
 Every query is derived from `request.user`; no client-supplied organisation, user, or level controls scope. Require role `LEARNER`, active user, enabled settings, matching participant, open cycle where appropriate, and non-locked subscription.
 
