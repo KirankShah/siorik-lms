@@ -58,7 +58,7 @@ def _attach_ranks(rows, source):
             last_assessed_at = proposed['last_assessed_at']
         row[f'{source}_rank'] = None
         if knowledge_score is not None:
-            grouped[(learner.organization_id, learner.assessment_level)].append(
+            grouped[learner.organization_id].append(
                 (row, knowledge_score, quiz_average, last_assessed_at)
             )
 

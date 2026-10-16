@@ -29,13 +29,14 @@ class LeaderboardEntryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 user__organization_id=user.organization_id,
                 user__is_active=True,
                 user__role='LEARNER',
-                user__assessment_level=user.assessment_level,
             )
             .select_related('user')
             .order_by(
                 F('knowledge_score').desc(nulls_last=True),
                 '-current_course_quiz_average',
+                '-latest_level_assessment_score',
                 '-last_assessed_at',
+                'user_id',
             )
         )
 

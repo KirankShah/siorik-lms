@@ -56,13 +56,14 @@ describe('LeaderboardWidget', () => {
     expect(screen.getByText('80%')).toBeInTheDocument()
     expect(screen.getByText('70%')).toBeInTheDocument()
     expect(screen.getByText('Officer Level')).toBeInTheDocument()
-    expect(screen.getByText('Knowledge Score = 40% Course Quiz Average + 60% Latest Level Assessment')).toBeInTheDocument()
+    expect(screen.getByText('Overall Score = 40% Path Quiz Score + 60% Latest Level Assessment')).toBeInTheDocument()
+    expect(screen.getByText('Knowledge Leaderboard')).toBeInTheDocument()
   })
 
   it('explains why an eligible ranking is not available yet', () => {
     render(<LeaderboardWidget entries={[]} />)
 
-    expect(screen.getByText(/Complete a course quiz and a Level Assessment/)).toBeInTheDocument()
+    expect(screen.getByText(/Complete a Level Assessment to join the leaderboard/)).toBeInTheDocument()
   })
 
   it('shows the learner card metrics and own row below the Top 5 while excluding unassessed learners from ranked places', () => {
@@ -79,34 +80,33 @@ describe('LeaderboardWidget', () => {
 
     render(<LeaderboardWidget entries={entries} />)
 
-    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('6')
+    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('6th')
     expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('74%')
     expect(screen.getAllByText('Last Assessed')[0].parentElement).toHaveTextContent('7 Oct 2026')
 
     const table = screen.getByRole('table')
     const displayedRows = within(table).getAllByRole('row').slice(1)
-    expect(displayedRows).toHaveLength(6)
+    expect(displayedRows).toHaveLength(5)
     for (const name of ['Rank One', 'Rank Two', 'Rank Three', 'Rank Four', 'Rank Five']) {
       expect(displayedRows.some((row) => row.textContent?.includes(name))).toBe(true)
     }
-    expect(displayedRows[5]).toHaveTextContent('Not Assessed')
-    expect(displayedRows[5]).toHaveTextContent('Not yet assessed')
+    expect(within(table).queryByText('Not Assessed')).not.toBeInTheDocument()
     expect(screen.getByText(/Your position: 6th/)).toBeInTheDocument()
-    expect(screen.getByText('Asha Gurung')).toBeInTheDocument()
+    expect(screen.getByText(/Asha Gurung/)).toBeInTheDocument()
   })
 
   it('shows a clear card state when the learner has not taken a level assessment', () => {
     mockAuth.userId = 7
     render(<LeaderboardWidget entries={[entry, leaderboardEntry(7, 'Not Assessed', null, null, null)]} />)
 
-    expect(screen.getAllByText('Not yet assessed')).toHaveLength(4)
+    expect(screen.getAllByText('Not yet assessed')).toHaveLength(3)
     expect(screen.getByText('Current Knowledge').parentElement).not.toHaveTextContent('—')
   })
 
-  it('does not call a learner unassessed when only the course quiz is missing', () => {
+  it('shows a zero path score when assigned questions are unanswered', () => {
     mockAuth.userId = 8
-    const pending = leaderboardEntry(8, 'Quiz Pending', null, '80.00', '2026-10-09T06:00:00Z')
-    pending.current_course_quiz_average = null
+    const pending = leaderboardEntry(8, 'Quiz Pending', '48.00', '80.00', '2026-10-09T06:00:00Z')
+    pending.current_course_quiz_average = '0.00'
     pending.quizzes_completed = 1
     pending.quizzes_required = 2
     render(
@@ -116,15 +116,15 @@ describe('LeaderboardWidget', () => {
     )
 
     expect(screen.queryByText('Not yet assessed')).not.toBeInTheDocument()
-    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('Not ranked yet · 1 quiz remaining')
-    expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('In progress (1 of 2 quizzes)')
+    expect(screen.getByText('My Rank').parentElement).toHaveTextContent('2nd')
+    expect(screen.getByText('Current Knowledge').parentElement).toHaveTextContent('48%')
     expect(screen.getAllByText('Last Assessed')[0].parentElement).toHaveTextContent('9 Oct 2026')
     const rows = within(screen.getByRole('table')).getAllByRole('row')
     const pendingRow = rows[rows.length - 1]
     const pendingCells = within(pendingRow).getAllByRole('cell')
-    expect(pendingRow).toHaveTextContent('1 of 2 quizzes')
-    expect(pendingCells[5]).toHaveTextContent('In progress (1 of 2 quizzes)')
-    expect(pendingCells[5]).not.toHaveTextContent('80%')
+    expect(pendingCells[3]).toHaveTextContent('0%')
+    expect(pendingCells[4]).toHaveTextContent('80%')
+    expect(pendingCells[5]).toHaveTextContent('48%')
   })
 
   it('shows a useful card state for an admin without a learner score', () => {

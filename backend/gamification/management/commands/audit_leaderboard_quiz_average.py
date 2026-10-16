@@ -6,7 +6,7 @@ from gamification.leaderboard_recalculation import proposed_rows
 
 
 class Command(BaseCommand):
-    help = 'Read-only comparison of stored leaderboard scores with complete quiz-coverage scoring.'
+    help = 'Read-only comparison of stored leaderboard scores with question-weighted path scoring.'
 
     def add_arguments(self, parser):
         parser.add_argument('--organization-id', type=int)
@@ -37,7 +37,7 @@ class Command(BaseCommand):
                 entry.knowledge_score if entry else '',
                 proposed['knowledge_score'] if proposed['knowledge_score'] is not None else '',
                 'Ranked' if entry and entry.knowledge_score is not None else 'In progress',
-                'Ranked' if proposed['knowledge_score'] is not None else f'In progress ({completed} of {required} quizzes)',
+                'Ranked' if proposed['knowledge_score'] is not None else 'Awaiting Level Assessment',
                 row['old_rank'] or '',
                 row['new_rank'] or '',
             ])

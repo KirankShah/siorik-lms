@@ -7928,25 +7928,19 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(entry.knowledge_score, Decimal('62'))
         self.assertEqual(entry.level_assessments_passed_count, 1)
 
-    def test_unattempted_path_quiz_keeps_learner_in_progress(self):
+    def test_unattempted_path_quiz_questions_count_as_zero(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
         self.level_attempt(Decimal('80'), now)
         entry = recalculate_leaderboard_entry(self.learner)
 
-        self.assertIsNone(entry.current_course_quiz_average)
-        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.current_course_quiz_average, Decimal('40'))
+        self.assertEqual(entry.knowledge_score, Decimal('64'))
         self.assertEqual(entry.quizzes_completed, 1)
         self.assertEqual(entry.quizzes_required, 2)
 
-    def test_only_learners_completing_every_nonempty_path_quiz_are_rankable(self):
-        """Proposed policy: incomplete quiz coverage has no rankable score.
-
-        This intentionally fails on the current implementation, which averages
-        only attempted quizzes. Admin/preview attempts belong to the admin and
-        must never fill a learner's gap; an authored quiz with no questions is
-        not a learner assignment and must not block otherwise complete coverage.
-        """
+    def test_all_assigned_question_points_are_included_in_path_score(self):
+        """Unanswered points are zero and admin preview attempts are ignored."""
         now = timezone.now()
         empty_slide = Slide.objects.create(
             lesson=self.quiz_one.slide.lesson, title='Empty quiz',
@@ -7992,13 +7986,13 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         complete_entry = recalculate_leaderboard_entry(complete)
 
-        with self.subTest('one perfect result does not rank an incomplete learner'):
-            self.assertIsNone(partial.current_course_quiz_average)
-            self.assertIsNone(partial.knowledge_score)
+        with self.subTest('one perfect result earns half of the two assigned quiz points'):
+            self.assertEqual(partial.current_course_quiz_average, Decimal('50'))
+            self.assertEqual(partial.knowledge_score, Decimal('68'))
             self.assertEqual((partial.quizzes_completed, partial.quizzes_required), (1, 2))
-        with self.subTest('no attempts remains unranked'):
-            self.assertIsNone(none_entry.current_course_quiz_average)
-            self.assertIsNone(none_entry.knowledge_score)
+        with self.subTest('no attempts earns zero for the assigned quiz points'):
+            self.assertEqual(none_entry.current_course_quiz_average, Decimal('0'))
+            self.assertEqual(none_entry.knowledge_score, Decimal('48'))
         with self.subTest('all nonempty quizzes use their latest scores'):
             self.assertEqual(complete_entry.current_course_quiz_average, Decimal('90'))
             self.assertEqual(complete_entry.knowledge_score, Decimal('84'))
@@ -8011,14 +8005,14 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             self.assertEqual(empty_quiz.questions.count(), 0)
             self.assertIsNotNone(complete_entry.knowledge_score)
 
-    def test_no_course_quiz_attempt_keeps_learner_unranked_but_reports_their_level_result(self):
+    def test_no_course_quiz_attempt_scores_assigned_questions_as_zero(self):
         now = timezone.now()
         level = self.level_attempt(Decimal('80'), now)
         entry = recalculate_leaderboard_entry(self.learner)
 
-        self.assertIsNone(entry.current_course_quiz_average)
+        self.assertEqual(entry.current_course_quiz_average, Decimal('0'))
         self.assertEqual(entry.latest_level_assessment_score, Decimal('80'))
-        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.knowledge_score, Decimal('48'))
         self.assertEqual(entry.last_assessed_at, level.submitted_at)
 
         self.auth_as(self.learner)
@@ -8026,10 +8020,10 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual([row['user_id'] for row in response.data], [self.learner.id])
-        self.assertIsNone(response.data[0]['knowledge_score'])
+        self.assertEqual(response.data[0]['knowledge_score'], '48.00')
         self.assertEqual(response.data[0]['latest_level_assessment_score'], '80.00')
 
-    def test_endpoint_returns_only_same_level_colleagues_in_knowledge_score_order(self):
+    def test_all_levels_receive_the_same_organization_wide_standings(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
         self.quiz_attempt(self.quiz_two, Decimal('80'), now)
@@ -8061,8 +8055,17 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.auth_as(self.learner)
         response = self.client.get('/api/leaderboard/')
 
-        self.assertEqual([row['user_id'] for row in response.data], [colleague.id, self.learner.id])
-        self.assertEqual(response.data[1]['assessment_level_display'], 'Officer Level')
+        learner_view = response.data
+        self.assertEqual(
+            [row['user_id'] for row in learner_view],
+            [management_user.id, colleague.id, self.learner.id],
+        )
+        self.assertEqual(learner_view[0]['assessment_level_display'], 'Middle Management Level')
+
+        self.auth_as(management_user)
+        management_view = self.client.get('/api/leaderboard/')
+        self.assertEqual(management_view.status_code, 200)
+        self.assertEqual(management_view.data, learner_view)
 
     def test_endpoint_lists_in_progress_colleagues_after_ranked_rows_but_never_another_organization(self):
         now = timezone.now()
@@ -8129,7 +8132,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             self.assertEqual([row['user_id'] for row in response.data if row['knowledge_score'] is None], [unscored_colleague.id])
             self.assertNotIn(foreign_learner.id, rows_by_id)
 
-    def test_new_nonempty_path_quiz_returns_ranked_learner_to_in_progress(self):
+    def test_new_nonempty_path_quiz_adds_unanswered_points_to_denominator(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
         self.quiz_attempt(self.quiz_two, Decimal('100'), now)
@@ -8150,8 +8153,8 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
 
         ranked.refresh_from_db()
         refreshed = ranked
-        self.assertIsNone(refreshed.current_course_quiz_average)
-        self.assertIsNone(refreshed.knowledge_score)
+        self.assertEqual(refreshed.current_course_quiz_average, Decimal('66.67'))
+        self.assertEqual(refreshed.knowledge_score, Decimal('74.67'))
         self.assertEqual((refreshed.quizzes_completed, refreshed.quizzes_required), (2, 3))
 
     def test_path_assignment_change_refreshes_current_knowledge_without_waiting_for_an_attempt(self):
@@ -8185,7 +8188,8 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(second.status_code, 201)
 
         entry = LeaderboardEntry.objects.get(user=self.learner)
-        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.current_course_quiz_average, Decimal('66.67'))
+        self.assertEqual(entry.knowledge_score, Decimal('74.67'))
         self.assertEqual((entry.quizzes_completed, entry.quizzes_required), (2, 3))
 
     def test_recalculation_commands_are_read_only_by_default_and_apply_idempotently(self):
@@ -8201,7 +8205,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         call_command(
             'audit_leaderboard_quiz_average', '--organization-id', str(self.org.id), stdout=audit_output,
         )
-        self.assertIn('In progress (1 of 2 quizzes)', audit_output.getvalue())
+        self.assertIn('Ranked', audit_output.getvalue())
         stale.refresh_from_db()
         self.assertEqual(stale.knowledge_score, Decimal('88'))
 
@@ -8216,7 +8220,8 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             'recalculate_leaderboard', '--organization-id', str(self.org.id), '--apply', stdout=apply_output,
         )
         stale.refresh_from_db()
-        self.assertIsNone(stale.knowledge_score)
+        self.assertEqual(stale.current_course_quiz_average, Decimal('50'))
+        self.assertEqual(stale.knowledge_score, Decimal('68'))
         self.assertEqual((stale.quizzes_completed, stale.quizzes_required), (1, 2))
 
         second_apply = io.StringIO()

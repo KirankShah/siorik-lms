@@ -5,7 +5,7 @@ from gamification.models import LeaderboardEntry
 
 
 class Command(BaseCommand):
-    help = 'Preview or apply complete quiz-coverage fields for the current-knowledge leaderboard.'
+    help = 'Preview or apply question-weighted path quiz scores for the current-knowledge leaderboard.'
 
     def add_arguments(self, parser):
         parser.add_argument('--organization-id', type=int)

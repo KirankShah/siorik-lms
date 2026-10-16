@@ -1,9 +1,33 @@
+from decimal import Decimal
+
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from accounts.models import Organization, User
 
 from .models import Badge, UserBadge
+from .services import _question_weighted_path_quiz_score
+
+
+class QuestionWeightedPathScoreTests(APITestCase):
+    def test_unanswered_assigned_questions_count_as_zero(self):
+        score = _question_weighted_path_quiz_score([
+            (Decimal('10'), Decimal('80')),
+            (Decimal('5'), None),
+        ])
+
+        self.assertEqual(score, Decimal('53.33'))
+
+    def test_quizzes_are_weighted_by_assigned_question_points(self):
+        score = _question_weighted_path_quiz_score([
+            (Decimal('2'), Decimal('100')),
+            (Decimal('8'), Decimal('50')),
+        ])
+
+        self.assertEqual(score, Decimal('60.00'))
+
+    def test_no_assigned_points_has_no_path_quiz_score(self):
+        self.assertIsNone(_question_weighted_path_quiz_score([]))
 
 
 class UserBadgeCelebrationTests(APITestCase):

@@ -2,7 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import connection
-from django.db.models import Max
+from django.db.models import Max, Sum
 from django.utils import timezone
 
 from assessments.models import Quiz, QuizAttempt
@@ -58,28 +58,50 @@ def _average(values):
     return sum(values) / len(values)
 
 
+def _question_weighted_path_quiz_score(quiz_results):
+    """Score all assigned quiz questions, counting unanswered points as zero.
+
+    ``quiz_results`` contains ``(assigned_points, latest_score_percent)`` pairs.
+    Weighting by assigned points makes a ten-question quiz contribute more than
+    a one-question quiz, while a missing attempt contributes zero earned points
+    without removing its questions from the denominator.
+    """
+    total_assigned_points = sum(Decimal(str(points or 0)) for points, _score in quiz_results)
+    if total_assigned_points <= 0:
+        return None
+
+    earned_points = sum(
+        Decimal(str(points or 0)) * Decimal(str(score or 0)) / Decimal('100')
+        for points, score in quiz_results
+    )
+    return round(earned_points * Decimal('100') / total_assigned_points, 2)
+
+
 def _current_knowledge_metrics(user, path_course_ids):
     """Return the inputs and final score for the current-knowledge board.
 
-    The required set is every non-empty quiz in the learner's effective path.
-    For each one we use the learner's most recently submitted attempt, not the
-    historical best. The course average stays null until every required quiz
-    has such an attempt. The level component likewise uses the most recently
-    submitted attempt for the learner's currently assigned assessment level,
-    whether it passed or failed.
+    The required set is every question-bearing quiz in the learner's effective
+    path. For each one we use the learner's most recently submitted attempt,
+    not the historical best. The path quiz score is weighted by the total
+    points assigned in each quiz, and unanswered assigned points count as zero.
+    The level component likewise uses the most recently submitted attempt for
+    the learner's currently assigned assessment level, whether it passed or
+    failed.
 
     Each input is reported on its own even when the other is missing, so the
     learner's own dashboard can say which one is outstanding. knowledge_score
     stays null until both exist, which is what keeps a learner unranked.
     """
-    required_quiz_ids = set(
+    required_quizzes = list(
         Quiz.objects.filter(
             slide__lesson__module__course_id__in=path_course_ids,
             questions__isnull=False,
         )
-        .values_list('id', flat=True)
+        .annotate(total_points=Sum('questions__points'))
+        .values_list('id', 'total_points')
         .distinct()
     )
+    required_quiz_ids = {quiz_id for quiz_id, _points in required_quizzes}
     latest_quiz_scores = {}
     for quiz_id, score in (
         QuizAttempt.objects.filter(
@@ -94,12 +116,10 @@ def _current_knowledge_metrics(user, path_course_ids):
 
     quizzes_required = len(required_quiz_ids)
     quizzes_completed = len(latest_quiz_scores)
-    course_average = None
-    if quizzes_required and quizzes_completed == quizzes_required:
-        # Match LeaderboardEntry's two-decimal DecimalField before comparing
-        # dry-run values with stored rows; otherwise repeating averages (for
-        # example 260 / 3) appear changed forever after the database rounds.
-        course_average = round(_average(latest_quiz_scores.values()), 2)
+    course_average = _question_weighted_path_quiz_score([
+        (total_points, latest_quiz_scores.get(quiz_id))
+        for quiz_id, total_points in required_quizzes
+    ])
 
     if not user.assessment_level:
         return course_average, None, None, None, quizzes_completed, quizzes_required
@@ -107,6 +127,7 @@ def _current_knowledge_metrics(user, path_course_ids):
     latest_level_attempt = (
         LevelAssessmentAttempt.objects.filter(
             user=user,
+            assessment_level__organization_id=user.organization_id,
             assessment_level__name=user.assessment_level,
             submitted_at__isnull=False,
         )
