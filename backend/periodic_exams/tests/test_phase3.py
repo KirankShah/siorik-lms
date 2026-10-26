@@ -283,7 +283,7 @@ class PeriodicExamPhase3ServiceTests(TestCase):
             get_periodic_attempt(self.first, attempt.id, now=NOW + timedelta(seconds=4))
         self.assertEqual(expired.exception.code, 'SUBSCRIPTION_EXPIRED')
 
-    def test_no_certificate_gamification_level_or_path_side_effects(self):
+    def test_submission_updates_current_knowledge_without_other_side_effects(self):
         before = {
             'certificates': Certificate.objects.count(),
             'badges': UserBadge.objects.count(),
@@ -295,7 +295,11 @@ class PeriodicExamPhase3ServiceTests(TestCase):
         self.first.refresh_from_db()
         self.assertEqual(Certificate.objects.count(), before['certificates'])
         self.assertEqual(UserBadge.objects.count(), before['badges'])
-        self.assertEqual(LeaderboardEntry.objects.count(), before['leaderboard'])
+        self.assertEqual(LeaderboardEntry.objects.count(), before['leaderboard'] + 1)
+        entry = LeaderboardEntry.objects.get(user=self.first)
+        self.assertEqual(entry.latest_periodic_exam_score, Decimal('100'))
+        self.assertIsNone(entry.knowledge_score)
+        self.assertEqual(entry.total_points, 0)
         self.assertEqual(self.first.assessment_level, before['level'])
 
     def test_start_query_count_is_bounded_for_large_pool(self):

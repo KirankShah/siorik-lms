@@ -18,7 +18,6 @@ import { fetchAssignments, fetchMySubmissions } from '../lib/assignmentsApi'
 import { fetchCertificates } from '../lib/certificatesApi'
 import { fetchCourseDetail, fetchCourses, fetchEnrollments } from '../lib/coursesApi'
 import { acknowledgeBadgeCelebration, fetchLeaderboard, fetchMyBadges } from '../lib/gamificationApi'
-import { fetchMyAssessmentLevel } from '../lib/levelAssessmentsApi'
 import { fetchQuizzes } from '../lib/quizApi'
 import { isAdminRole, isPlatformAdminRole } from '../lib/roles'
 import type { Certificate } from '../types/certificates'
@@ -26,7 +25,6 @@ import type { User } from '../types/auth'
 import type { Assignment } from '../types/assignment'
 import type { CourseListItem, Enrollment } from '../types/courses'
 import type { LeaderboardEntry, UserBadge } from '../types/gamification'
-import type { MyAssessmentLevelStatus } from '../types/levelAssessments'
 import type { QuizListItem } from '../types/quiz'
 
 function isThisMonth(isoDate: string): boolean {
@@ -215,48 +213,6 @@ const STATUS_BADGE: Record<string, BadgeVariant> = {
   COMPLETED: 'gold',
 }
 
-const LEVEL_ASSESSMENT_STATUS_LABEL: Record<string, string> = {
-  NOT_STARTED: 'Not started',
-  IN_PROGRESS: 'In progress',
-  PASSED: 'Passed',
-  FAILED: 'Failed — retake available',
-}
-
-const LEVEL_ASSESSMENT_STATUS_CLASSES: Record<string, string> = {
-  NOT_STARTED: 'bg-neutral-100 text-neutral-700',
-  IN_PROGRESS: 'bg-brand-navy/10 text-brand-navy',
-  PASSED: 'bg-emerald-100 text-emerald-800',
-  FAILED: 'bg-red-100 text-red-700',
-}
-
-function LevelAssessmentCard({ myLevelAssessment }: { myLevelAssessment: MyAssessmentLevelStatus | null }) {
-  if (myLevelAssessment !== null && !myLevelAssessment.assigned) return null
-
-  return (
-    <Card>
-      <h2 className="text-sm font-semibold text-neutral-900">My Level Assessment</h2>
-
-      {!myLevelAssessment ? (
-        <p className="mt-4 text-sm text-neutral-500">Loading…</p>
-      ) : (
-        <Link
-          to="/level-assessment"
-          className="mt-4 flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3 hover:bg-neutral-50"
-        >
-          <p className="text-sm font-medium text-neutral-900">{myLevelAssessment.assessment_level?.name_display}</p>
-          <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
-              LEVEL_ASSESSMENT_STATUS_CLASSES[myLevelAssessment.status ?? 'NOT_STARTED']
-            }`}
-          >
-            {LEVEL_ASSESSMENT_STATUS_LABEL[myLevelAssessment.status ?? 'NOT_STARTED']}
-          </span>
-        </Link>
-      )}
-    </Card>
-  )
-}
-
 interface PendingAssignment {
   assignment: Assignment
   slideTitle: string
@@ -264,10 +220,6 @@ interface PendingAssignment {
   courseSlug: string
 }
 
-// Unifies the two different "outstanding to-do" sources (an unstarted/failed
-// Level Assessment, and pending assignment submissions) into one list for
-// the dashboard's Pending card — see the combined `pendingItems` below.
-// Kept row-shape-identical (title/subtitle/link) so both render the same way.
 interface PendingItem {
   key: string
   title: string
@@ -280,7 +232,6 @@ function LearnerDashboard({ user }: { user: User }) {
   const [pendingAssignments, setPendingAssignments] = useState<PendingAssignment[] | null>(null)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[] | null>(null)
   const [myBadges, setMyBadges] = useState<UserBadge[] | null>(null)
-  const [myLevelAssessment, setMyLevelAssessment] = useState<MyAssessmentLevelStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const uncelebratedBadges = (myBadges ?? [])
@@ -297,12 +248,11 @@ function LearnerDashboard({ user }: { user: User }) {
   useEffect(() => {
     let cancelled = false
 
-    Promise.all([fetchLeaderboard(), fetchMyBadges(), fetchMyAssessmentLevel()])
-      .then(([entries, badges, levelAssessment]) => {
+    Promise.all([fetchLeaderboard(), fetchMyBadges()])
+      .then(([entries, badges]) => {
         if (cancelled) return
         setLeaderboard(entries)
         setMyBadges(badges)
-        setMyLevelAssessment(levelAssessment)
       })
       .catch(() => {
         if (!cancelled) setError('Some dashboard data could not be loaded.')
@@ -386,24 +336,7 @@ function LearnerDashboard({ user }: { user: User }) {
 
   const myPoints = leaderboard?.find((entry) => entry.user_id === user.id)?.total_points ?? 0
 
-  // An unstarted or failed Level Assessment is just as much an outstanding
-  // to-do as a pending assignment — surfaced here too so the Pending card
-  // never says "you're all caught up" while one is sitting unaddressed
-  // right above it (see LevelAssessmentCard, which links to the same place).
-  const isLevelAssessmentPending =
-    myLevelAssessment?.assigned &&
-    (myLevelAssessment.status === 'NOT_STARTED' || myLevelAssessment.status === 'FAILED')
   const pendingItems: PendingItem[] = [
-    ...(isLevelAssessmentPending
-      ? [
-          {
-            key: 'level-assessment',
-            title: `${myLevelAssessment.assessment_level?.name_display} Assessment`,
-            subtitle: LEVEL_ASSESSMENT_STATUS_LABEL[myLevelAssessment.status ?? 'NOT_STARTED'],
-            to: '/level-assessment',
-          },
-        ]
-      : []),
     ...(pendingAssignments ?? []).map(({ assignment, slideTitle, courseTitle, courseSlug }) => ({
       key: `assignment-${assignment.id}`,
       title: slideTitle,
@@ -411,10 +344,7 @@ function LearnerDashboard({ user }: { user: User }) {
       to: `/courses/${courseSlug}`,
     })),
   ]
-  // Loading until BOTH sources have resolved, so the list doesn't flash
-  // "nothing pending" before the (separately-fetched) Level Assessment
-  // status arrives.
-  const isPendingListLoading = pendingAssignments === null || myLevelAssessment === null
+  const isPendingListLoading = pendingAssignments === null
 
   return (
     <div className="space-y-6">
@@ -441,8 +371,6 @@ function LearnerDashboard({ user }: { user: User }) {
       <LearningPathSection />
 
       <LeaderboardWidget entries={leaderboard} />
-
-      <LevelAssessmentCard myLevelAssessment={myLevelAssessment} />
 
       <PeriodicExamDashboardCard />
 

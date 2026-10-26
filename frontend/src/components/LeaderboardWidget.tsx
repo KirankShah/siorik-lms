@@ -87,7 +87,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
             </span>
             <h2 className="text-2xl font-semibold text-brand-navy">Knowledge Leaderboard</h2>
           </div>
-          <p className="mt-2 text-sm text-neutral-500">Top five learners based on assigned path quizzes and the latest Level Assessment.</p>
+          <p className="mt-2 text-sm text-neutral-500">Top five learners based on assigned path quizzes and the latest Periodic Exam.</p>
         </div>
         <span className="w-fit rounded-full bg-brand-navy/5 px-3 py-1 text-xs font-semibold text-brand-navy">Organization-wide standings</span>
       </div>
@@ -111,14 +111,14 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
         {!entries ? (
           <p className="p-6 text-sm text-neutral-500">Loading…</p>
         ) : topEntries.length === 0 ? (
-          <p className="p-6 text-sm text-neutral-500">Complete a Level Assessment to join the leaderboard. Assigned path quiz questions count automatically.</p>
+          <p className="p-6 text-sm text-neutral-500">Complete a Periodic Exam to join the leaderboard. Assigned path quiz questions count automatically.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] border-collapse">
               <thead className="bg-brand-navy">
                 <tr className="text-left text-xs font-semibold uppercase tracking-wide text-white/85">
                   <th className="w-20 px-5 py-4">Rank</th><th className="px-4 py-4">Staff Member</th><th className="px-4 py-4">Level</th>
-                  <th className="px-4 py-4 text-center">Path Quiz Score</th><th className="px-4 py-4 text-center">Level Assessment</th>
+                  <th className="px-4 py-4 text-center">Path Quiz Score</th><th className="px-4 py-4 text-center">Periodic Exam</th>
                   <th className="bg-white/5 px-4 py-4 text-center">Overall Score</th><th className="px-4 py-4">Last Assessed</th>
                 </tr>
               </thead>
@@ -134,7 +134,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
                       </div></td>
                       <td className="px-4 py-4 text-sm text-neutral-600">{entry.assessment_level_display}</td>
                       <td className="px-4 py-4"><ScoreCell value={entry.current_course_quiz_average} /></td>
-                      <td className="px-4 py-4"><ScoreCell value={entry.latest_level_assessment_score} /></td>
+                      <td className="px-4 py-4"><ScoreCell value={entry.latest_periodic_exam_score} /></td>
                       <td className="bg-brand-navy/[0.025] px-4 py-4"><ScoreCell value={entry.knowledge_score} prominent /></td>
                       <td className="px-4 py-4 text-sm text-neutral-600">{formatAssessmentDate(entry.last_assessed_at)}</td>
                     </tr>
@@ -152,7 +152,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
             <div><p className="text-sm font-semibold text-brand-navy">Your position: {ordinal(myRank)}</p><p className="mt-1 text-sm text-neutral-600">{myEntry.first_name} {myEntry.last_name} · {myEntry.assessment_level_display}</p></div>
             <div className="grid grid-cols-3 gap-5 text-center sm:min-w-[430px]">
               <div><p className="text-xs text-neutral-500">Path Quiz</p><p className="font-semibold text-brand-navy">{formatPercent(myEntry.current_course_quiz_average)}</p></div>
-              <div><p className="text-xs text-neutral-500">Level Assessment</p><p className="font-semibold text-brand-navy">{formatPercent(myEntry.latest_level_assessment_score)}</p></div>
+              <div><p className="text-xs text-neutral-500">Periodic Exam</p><p className="font-semibold text-brand-navy">{formatPercent(myEntry.latest_periodic_exam_score)}</p></div>
               <div><p className="text-xs text-neutral-500">Overall</p><p className={`font-bold ${knowledgeColor(myEntry.knowledge_score)}`}>{formatPercent(myEntry.knowledge_score)}</p></div>
             </div>
           </div>
@@ -161,7 +161,7 @@ export function LeaderboardWidget({ entries }: LeaderboardWidgetProps) {
 
       <div className="flex gap-3 rounded-xl bg-brand-navy/5 p-4 text-sm text-neutral-600 ring-1 ring-brand-navy/10">
         <Info className="mt-0.5 h-5 w-5 shrink-0 text-brand-navy" />
-        <div><p className="font-semibold text-brand-navy">Overall Score = 40% Path Quiz Score + 60% Latest Level Assessment</p><p className="mt-1">The Path Quiz Score uses all question points assigned through the learner's learning path. Unanswered questions count as zero.</p></div>
+        <div><p className="font-semibold text-brand-navy">Overall Score = 40% Path Quiz Score + 60% Latest Periodic Exam</p><p className="mt-1">The Path Quiz Score uses all question points assigned through the learner's learning path. Unanswered questions count as zero.</p></div>
       </div>
     </section>
   )

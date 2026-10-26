@@ -55,6 +55,7 @@ describe('Periodic Exam visibility', () => {
   it('shows learner navigation only when enabled and never changes other roles', () => {
     const { rerender } = render(<MemoryRouter><Sidebar /></MemoryRouter>)
     expect(screen.getByRole('link', { name: 'Periodic Exam' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Level Assessment' })).not.toBeInTheDocument()
 
     mocks.enabled = false
     rerender(<MemoryRouter><Sidebar /></MemoryRouter>)

@@ -19,13 +19,13 @@ class LeaderboardEntry(models.Model):
     average_quiz_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     # Current-knowledge leaderboard fields. Unlike total_points (a cumulative
     # achievement measure), these deliberately use the learner's latest quiz
-    # and level-assessment results so a later reassessment can move the score
+    # and periodic-exam results so a later reassessment can move the score
     # up or down. Null means the learner has not yet completed every required
     # input needed for a fair score.
     current_course_quiz_average = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     quizzes_completed = models.PositiveIntegerField(default=0)
     quizzes_required = models.PositiveIntegerField(default=0)
-    latest_level_assessment_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    latest_periodic_exam_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     knowledge_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     last_assessed_at = models.DateTimeField(null=True, blank=True)
     # Distinct AssessmentLevels passed at least once — see

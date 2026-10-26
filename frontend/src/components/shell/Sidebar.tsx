@@ -7,7 +7,6 @@ import {
   Clock3,
   FileSpreadsheet,
   FileText,
-  GraduationCap,
   Layers,
   LayoutDashboard,
   Library,
@@ -56,19 +55,10 @@ export function Sidebar({ onNavigate, onCollapse }: SidebarProps) {
     // view only — the unfiltered list is deliberately editable-only
     // server-side (assessments.views.QuizViewSet.get_queryset), so a
     // learner can never see anything here regardless of org content.
-    // Admin-only in the nav so it's never confused with Level Assessment.
+    // Admin-only in the nav so it is never confused with the Periodic Exam.
     // Read-only quiz inventory that duplicates nothing else — hidden from
     // ORG_ADMIN/INSTRUCTOR (see AssessmentsRoute), kept for PLATFORM_ADMIN.
     ...(isPlatformAdminRole(user?.role) ? [{ to: '/assessments', label: 'Assessments', icon: ClipboardList }] : []),
-    // Distinct from "Assessments" above — this is the standalone role-based
-    // knowledge check (levelassessments app). A separate top-level entry
-    // so the two never get confused for one another — see
-    // LevelAssessmentPage.tsx. This is the learner's own exam-taking page —
-    // hidden from ORG_ADMIN/INSTRUCTOR (see LevelAssessmentRoute), kept for
-    // LEARNER and PLATFORM_ADMIN.
-    ...(user?.role === 'LEARNER' || isPlatformAdminRole(user?.role)
-      ? [{ to: '/level-assessment', label: 'Level Assessment', icon: GraduationCap }]
-      : []),
     ...(user?.role === 'LEARNER' && availability?.enabled
       ? [{ to: '/periodic-exam', label: 'Periodic Exam', icon: Clock3 }]
       : []),

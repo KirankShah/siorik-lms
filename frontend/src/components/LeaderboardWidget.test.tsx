@@ -21,7 +21,7 @@ const entry: LeaderboardEntry = {
   current_course_quiz_average: '80.00',
   quizzes_completed: 2,
   quizzes_required: 2,
-  latest_level_assessment_score: '70.00',
+  latest_periodic_exam_score: '70.00',
   knowledge_score: '74.00',
   is_ranked: true,
   last_assessed_at: '2026-10-08T06:00:00Z',
@@ -34,7 +34,7 @@ function leaderboardEntry(
   user_id: number,
   first_name: string,
   knowledge_score: string | null,
-  latest_level_assessment_score: string | null,
+  latest_periodic_exam_score: string | null,
   last_assessed_at: string | null,
 ): LeaderboardEntry {
   return {
@@ -42,7 +42,7 @@ function leaderboardEntry(
     user_id,
     first_name,
     knowledge_score,
-    latest_level_assessment_score,
+    latest_periodic_exam_score,
     last_assessed_at,
   } as LeaderboardEntry
 }
@@ -56,14 +56,14 @@ describe('LeaderboardWidget', () => {
     expect(screen.getByText('80%')).toBeInTheDocument()
     expect(screen.getByText('70%')).toBeInTheDocument()
     expect(screen.getByText('Officer Level')).toBeInTheDocument()
-    expect(screen.getByText('Overall Score = 40% Path Quiz Score + 60% Latest Level Assessment')).toBeInTheDocument()
+    expect(screen.getByText('Overall Score = 40% Path Quiz Score + 60% Latest Periodic Exam')).toBeInTheDocument()
     expect(screen.getByText('Knowledge Leaderboard')).toBeInTheDocument()
   })
 
   it('explains why an eligible ranking is not available yet', () => {
     render(<LeaderboardWidget entries={[]} />)
 
-    expect(screen.getByText(/Complete a Level Assessment to join the leaderboard/)).toBeInTheDocument()
+    expect(screen.getByText(/Complete a Periodic Exam to join the leaderboard/)).toBeInTheDocument()
   })
 
   it('shows the learner card metrics and own row below the Top 5 while excluding unassessed learners from ranked places', () => {
@@ -95,7 +95,7 @@ describe('LeaderboardWidget', () => {
     expect(screen.getByText(/Asha Gurung/)).toBeInTheDocument()
   })
 
-  it('shows a clear card state when the learner has not taken a level assessment', () => {
+  it('shows a clear card state when the learner has not taken a periodic exam', () => {
     mockAuth.userId = 7
     render(<LeaderboardWidget entries={[entry, leaderboardEntry(7, 'Not Assessed', null, null, null)]} />)
 

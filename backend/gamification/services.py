@@ -9,6 +9,7 @@ from assessments.models import Quiz, QuizAttempt
 from certificates.models import Certificate
 from courses.models import Enrollment, LevelCourseAssignment
 from levelassessments.models import LevelAssessmentAttempt
+from periodic_exams.models import PeriodicExamAttempt
 
 from .models import Badge, LeaderboardEntry, UserBadge
 
@@ -30,7 +31,7 @@ HIGH_ACHIEVER_MIN_QUIZZES = 3
 HIGH_ACHIEVER_MIN_AVERAGE = Decimal('90')
 
 COURSE_QUIZ_KNOWLEDGE_WEIGHT = Decimal('0.40')
-LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT = Decimal('0.60')
+PERIODIC_EXAM_KNOWLEDGE_WEIGHT = Decimal('0.60')
 
 # Ascending consecutive-active-day thresholds that award a streak badge — the
 # only place a longer streak (7-day, 30-day, ...) needs to be added later:
@@ -84,9 +85,8 @@ def _current_knowledge_metrics(user, path_course_ids):
     path. For each one we use the learner's most recently submitted attempt,
     not the historical best. The path quiz score is weighted by the total
     points assigned in each quiz, and unanswered assigned points count as zero.
-    The level component likewise uses the most recently submitted attempt for
-    the learner's currently assigned assessment level, whether it passed or
-    failed.
+    The periodic component uses the learner's most recently submitted Periodic
+    Exam attempt, whether it passed or failed.
 
     Each input is reported on its own even when the other is missing, so the
     learner's own dashboard can say which one is outstanding. knowledge_score
@@ -121,36 +121,32 @@ def _current_knowledge_metrics(user, path_course_ids):
         for quiz_id, total_points in required_quizzes
     ])
 
-    if not user.assessment_level:
-        return course_average, None, None, None, quizzes_completed, quizzes_required
-
-    latest_level_attempt = (
-        LevelAssessmentAttempt.objects.filter(
-            user=user,
-            assessment_level__organization_id=user.organization_id,
-            assessment_level__name=user.assessment_level,
+    latest_periodic_attempt = (
+        PeriodicExamAttempt.objects.filter(
+            participant__learner=user,
+            participant__cycle__organization_id=user.organization_id,
             submitted_at__isnull=False,
         )
         .order_by('-submitted_at', '-id')
         .first()
     )
-    if latest_level_attempt is None:
+    if latest_periodic_attempt is None:
         return course_average, None, None, None, quizzes_completed, quizzes_required
 
-    assessment_score = latest_level_attempt.score_percent
+    assessment_score = latest_periodic_attempt.score_percent
     if course_average is None:
-        return None, assessment_score, None, latest_level_attempt.submitted_at, quizzes_completed, quizzes_required
+        return None, assessment_score, None, latest_periodic_attempt.submitted_at, quizzes_completed, quizzes_required
 
     knowledge_score = round(
         course_average * COURSE_QUIZ_KNOWLEDGE_WEIGHT
-        + assessment_score * LEVEL_ASSESSMENT_KNOWLEDGE_WEIGHT,
+        + assessment_score * PERIODIC_EXAM_KNOWLEDGE_WEIGHT,
         2,
     )
     return (
         course_average,
         assessment_score,
         knowledge_score,
-        latest_level_attempt.submitted_at,
+        latest_periodic_attempt.submitted_at,
         quizzes_completed,
         quizzes_required,
     )
@@ -165,7 +161,7 @@ def current_knowledge_defaults(user):
 
     (
         course_average,
-        latest_level_score,
+        latest_periodic_score,
         knowledge_score,
         last_assessed_at,
         quizzes_completed,
@@ -174,7 +170,7 @@ def current_knowledge_defaults(user):
     return {
         'organization_id': user.organization_id,
         'current_course_quiz_average': course_average,
-        'latest_level_assessment_score': latest_level_score,
+        'latest_periodic_exam_score': latest_periodic_score,
         'knowledge_score': knowledge_score,
         'last_assessed_at': last_assessed_at,
         'quizzes_completed': quizzes_completed,
@@ -252,8 +248,9 @@ def recalculate_leaderboard_entry(user):
     conditions), distinct from the path-scoped points above.
 
     Not called on every dashboard read — only from the events that can
-    change it (course completion, quiz attempt, level assessment
-    submission, certificate generation); see update_gamification_for_user.
+    change it (course completion, quiz attempt, Periodic Exam submission,
+    level assessment submission, certificate generation); see
+    update_gamification_for_user and periodic_exams.signals.
     """
     if user.organization_id is None:
         return None
@@ -304,8 +301,19 @@ def recalculate_leaderboard_entry(user):
     for best_score in best_passing_scores_by_level.values():
         total_points += round(LEVEL_ASSESSMENT_PASS_POINTS * (best_score / 100))
 
+    # Historical data migrations call this live service before the latest
+    # leaderboard schema (and, on a fresh database, before Periodic Exam
+    # tables) exists. Detect that state before querying Periodic Exam data.
+    table_name = LeaderboardEntry._meta.db_table
+    with connection.cursor() as cursor:
+        database_columns = {
+            column.name for column in connection.introspection.get_table_description(cursor, table_name)
+        }
+    model_columns = {field.column for field in LeaderboardEntry._meta.concrete_fields}
+    schema_is_current = model_columns.issubset(database_columns)
+
     overall_average = _average(_best_scores_per_quiz(user))
-    current_knowledge = current_knowledge_defaults(user)
+    current_knowledge = current_knowledge_defaults(user) if schema_is_current else {}
 
     defaults = {
         'organization_id': user.organization_id,
@@ -317,17 +325,7 @@ def recalculate_leaderboard_entry(user):
         'level_assessments_passed_count': len(best_passing_scores_by_level),
     }
 
-    # Historical data migrations 0013/0014 call this service. During an
-    # upgrade they run before later additive columns exist, so restrict that
-    # legacy path to columns physically present in the database. Normal
-    # application calls take the update_or_create branch below.
-    table_name = LeaderboardEntry._meta.db_table
-    with connection.cursor() as cursor:
-        database_columns = {
-            column.name for column in connection.introspection.get_table_description(cursor, table_name)
-        }
-    model_columns = {field.column for field in LeaderboardEntry._meta.concrete_fields}
-    if not model_columns.issubset(database_columns):
+    if not schema_is_current:
         compatible_defaults = {
             field_name: value
             for field_name, value in defaults.items()

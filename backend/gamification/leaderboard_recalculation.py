@@ -9,7 +9,7 @@ from .services import current_knowledge_defaults
 CURRENT_KNOWLEDGE_FIELDS = (
     'organization_id',
     'current_course_quiz_average',
-    'latest_level_assessment_score',
+    'latest_periodic_exam_score',
     'knowledge_score',
     'last_assessed_at',
     'quizzes_completed',

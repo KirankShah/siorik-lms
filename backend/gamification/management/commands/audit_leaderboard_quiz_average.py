@@ -37,7 +37,7 @@ class Command(BaseCommand):
                 entry.knowledge_score if entry else '',
                 proposed['knowledge_score'] if proposed['knowledge_score'] is not None else '',
                 'Ranked' if entry and entry.knowledge_score is not None else 'In progress',
-                'Ranked' if proposed['knowledge_score'] is not None else 'Awaiting Level Assessment',
+                'Ranked' if proposed['knowledge_score'] is not None else 'Awaiting Periodic Exam',
                 row['old_rank'] or '',
                 row['new_rank'] or '',
             ])

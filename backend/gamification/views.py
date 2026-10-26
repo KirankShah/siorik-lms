@@ -34,7 +34,7 @@ class LeaderboardEntryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             .order_by(
                 F('knowledge_score').desc(nulls_last=True),
                 '-current_course_quiz_average',
-                '-latest_level_assessment_score',
+                '-latest_periodic_exam_score',
                 '-last_assessed_at',
                 'user_id',
             )

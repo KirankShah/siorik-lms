@@ -13,7 +13,7 @@ export interface LeaderboardEntry {
   current_course_quiz_average: string | null
   quizzes_completed: number
   quizzes_required: number
-  latest_level_assessment_score: string | null
+  latest_periodic_exam_score: string | null
   knowledge_score: string | null
   is_ranked: boolean
   last_assessed_at: string | null

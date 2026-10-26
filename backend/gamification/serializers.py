@@ -33,7 +33,7 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
             'current_course_quiz_average',
             'quizzes_completed',
             'quizzes_required',
-            'latest_level_assessment_score',
+            'latest_periodic_exam_score',
             'knowledge_score',
             'is_ranked',
             'last_assessed_at',

@@ -111,3 +111,43 @@ class LeaderboardQuizCoverageMigrationTests(TransactionTestCase):
         reversed_entry = reversed_apps.get_model('gamification', 'LeaderboardEntry').objects.get(pk=entry.pk)
         self.assertEqual(reversed_entry.total_points, 321)
         self.assertEqual(reversed_entry.knowledge_score, 74)
+
+
+class PeriodicExamScoreMigrationTests(TransactionTestCase):
+    migrate_from = ('gamification', '0016_recalculate_question_weighted_scores')
+    migrate_to = ('gamification', '0017_use_periodic_exam_score')
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_level_assessment_value_is_not_relabelled_as_a_periodic_exam_score(self):
+        executor = MigrationExecutor(connection)
+        latest_targets = executor.loader.graph.leaf_nodes()
+        old_targets = [target for target in latest_targets if target[0] != 'gamification'] + [self.migrate_from]
+        executor.migrate(old_targets)
+        old_apps = executor.loader.project_state(old_targets).apps
+
+        Organization = old_apps.get_model('accounts', 'Organization')
+        User = old_apps.get_model('accounts', 'User')
+        Entry = old_apps.get_model('gamification', 'LeaderboardEntry')
+        organization = Organization.objects.create(name='Periodic Migration Bank', slug='periodic-migration-bank')
+        learner = User.objects.create(
+            email='periodic-migration@example.com', role='LEARNER', organization=organization,
+            password='not-a-real-password',
+        )
+        Entry.objects.create(
+            user=learner, organization=organization,
+            current_course_quiz_average=80,
+            latest_level_assessment_score=70,
+            knowledge_score=74,
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_to])
+        migrated_apps = executor.loader.project_state([self.migrate_to]).apps
+        migrated = migrated_apps.get_model('gamification', 'LeaderboardEntry').objects.get(user_id=learner.pk)
+
+        self.assertIsNone(migrated.latest_periodic_exam_score)
+        self.assertIsNone(migrated.knowledge_score)

@@ -83,6 +83,7 @@ from levelassessments.services import LevelAssessmentError, normalize_question_t
 from narration.models import SlideNarration
 from org_settings.models import OrganizationSettings
 from org_settings.services import send_due_inactivity_reminders
+from periodic_exams.models import PeriodicExamAttempt, PeriodicExamCycle, PeriodicExamParticipant
 from resources.models import Resource
 from scenarios.models import ScenarioAttempt, ScenarioChoice, ScenarioNode
 
@@ -7887,6 +7888,32 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             quiz=self.quiz_two, question_text='Second?',
             question_type=Question.QuestionType.SINGLE_CHOICE, points=1, order=1,
         )
+        now = timezone.now()
+        self.periodic_cycle = PeriodicExamCycle.objects.create(
+            organization=self.org,
+            sequence=1,
+            frequency_snapshot='MONTHLY',
+            configuration_version=1,
+            questions_per_exam=1,
+            pass_mark_percent=70,
+            seconds_per_question=60,
+            max_attempts_per_cycle=3,
+            reminders_enabled=False,
+            reminder_days_before_end=[7, 2],
+            starts_at=now - timedelta(days=30),
+            ends_at=now + timedelta(days=30),
+            start_date_ad=(now - timedelta(days=30)).date(),
+            end_date_ad=(now + timedelta(days=30)).date(),
+            start_year_bs=2083,
+            start_month_bs=1,
+            start_day_bs=1,
+            end_year_bs=2083,
+            end_month_bs=2,
+            end_day_bs=1,
+            fiscal_year_start_bs=2083,
+            period_number=1,
+            display_label='Test Period',
+        )
 
     def quiz_attempt(self, quiz, score, submitted_at):
         return QuizAttempt.objects.create(
@@ -7895,43 +7922,80 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             score_percent=score, passed=score >= 70, submitted_at=submitted_at,
         )
 
-    def level_attempt(self, score, submitted_at):
-        return LevelAssessmentAttempt.objects.create(
-            user=self.learner, assessment_level=self.level, questions_drawn=[],
-            score_percent=score, passed=score >= 70, submitted_at=submitted_at,
+    def periodic_attempt(self, score, submitted_at, user=None):
+        user = user or self.learner
+        participant, _created = PeriodicExamParticipant.objects.get_or_create(
+            cycle=self.periodic_cycle,
+            learner_id_snapshot=user.id,
+            defaults={
+                'learner': user,
+                'name_snapshot': user.get_full_name(),
+                'email_snapshot': user.email,
+                'level_snapshot': user.assessment_level or '',
+                'branch_department_snapshot': user.branch_department or '',
+                'eligible_at': submitted_at - timedelta(days=1),
+            },
+        )
+        return PeriodicExamAttempt.objects.create(
+            participant=participant,
+            attempt_number=participant.attempts.count() + 1,
+            started_at=submitted_at - timedelta(minutes=5),
+            timer_segment_started_at=submitted_at - timedelta(minutes=5),
+            score_percent=score,
+            passed=score >= self.periodic_cycle.pass_mark_percent,
+            submitted_at=submitted_at,
+            submission_reason=PeriodicExamAttempt.SubmissionReason.LEARNER,
         )
 
-    def test_knowledge_score_uses_latest_quiz_attempts_and_latest_level_attempt(self):
+    def test_knowledge_score_uses_latest_quiz_attempts_and_latest_periodic_attempt(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now - timedelta(days=4))
         self.quiz_attempt(self.quiz_one, Decimal('60'), now - timedelta(days=1))
         self.quiz_attempt(self.quiz_two, Decimal('100'), now - timedelta(days=2))
-        self.level_attempt(Decimal('95'), now - timedelta(days=3))
-        latest_level = self.level_attempt(Decimal('70'), now)
+        self.periodic_attempt(Decimal('95'), now - timedelta(days=3))
+        latest_periodic = self.periodic_attempt(Decimal('70'), now)
+        LevelAssessmentAttempt.objects.create(
+            user=self.learner, assessment_level=self.level, questions_drawn=[],
+            score_percent=100, passed=True, submitted_at=now + timedelta(minutes=1),
+        )
 
         entry = recalculate_leaderboard_entry(self.learner)
 
         self.assertEqual(entry.current_course_quiz_average, Decimal('80'))
-        self.assertEqual(entry.latest_level_assessment_score, Decimal('70'))
+        self.assertEqual(entry.latest_periodic_exam_score, Decimal('70'))
         self.assertEqual(entry.knowledge_score, Decimal('74'))
-        self.assertEqual(entry.last_assessed_at, latest_level.submitted_at)
+        self.assertEqual(entry.last_assessed_at, latest_periodic.submitted_at)
 
-    def test_latest_failed_assessment_lowers_current_score_without_removing_historical_pass(self):
+    def test_submitted_periodic_attempt_refreshes_leaderboard_immediately(self):
+        now = timezone.now()
+        self.quiz_attempt(self.quiz_one, Decimal('80'), now - timedelta(days=1))
+        self.quiz_attempt(self.quiz_two, Decimal('80'), now - timedelta(days=1))
+        before = recalculate_leaderboard_entry(self.learner)
+        self.assertIsNone(before.knowledge_score)
+
+        self.periodic_attempt(Decimal('90'), now)
+
+        before.refresh_from_db()
+        self.assertEqual(before.latest_periodic_exam_score, Decimal('90'))
+        self.assertEqual(before.knowledge_score, Decimal('86'))
+        self.assertEqual(before.last_assessed_at, now)
+
+    def test_latest_failed_periodic_exam_lowers_current_score(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now - timedelta(days=3))
         self.quiz_attempt(self.quiz_two, Decimal('80'), now - timedelta(days=3))
-        self.level_attempt(Decimal('90'), now - timedelta(days=2))
-        self.level_attempt(Decimal('50'), now)
+        self.periodic_attempt(Decimal('90'), now - timedelta(days=2))
+        self.periodic_attempt(Decimal('50'), now)
 
         entry = recalculate_leaderboard_entry(self.learner)
 
         self.assertEqual(entry.knowledge_score, Decimal('62'))
-        self.assertEqual(entry.level_assessments_passed_count, 1)
+        self.assertEqual(entry.latest_periodic_exam_score, Decimal('50'))
 
     def test_unattempted_path_quiz_questions_count_as_zero(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
-        self.level_attempt(Decimal('80'), now)
+        self.periodic_attempt(Decimal('80'), now)
         entry = recalculate_leaderboard_entry(self.learner)
 
         self.assertEqual(entry.current_course_quiz_average, Decimal('40'))
@@ -7955,17 +8019,14 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             score_percent=100, passed=True, submitted_at=now,
         )
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
-        self.level_attempt(Decimal('80'), now)
+        self.periodic_attempt(Decimal('80'), now)
         partial = recalculate_leaderboard_entry(self.learner)
 
         no_attempts = User.objects.create_user(
             email='no-quizzes@example.com', password='pass12345', role=User.Role.LEARNER,
             organization=self.org, assessment_level=User.AssessmentLevel.OFFICER,
         )
-        LevelAssessmentAttempt.objects.create(
-            user=no_attempts, assessment_level=self.level, questions_drawn=[],
-            score_percent=80, passed=True, submitted_at=now,
-        )
+        self.periodic_attempt(Decimal('80'), now, no_attempts)
         none_entry = recalculate_leaderboard_entry(no_attempts)
 
         complete = User.objects.create_user(
@@ -7980,10 +8041,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             user=complete, quiz=self.quiz_two, attempt_number=1,
             score_percent=80, passed=True, submitted_at=now,
         )
-        LevelAssessmentAttempt.objects.create(
-            user=complete, assessment_level=self.level, questions_drawn=[],
-            score_percent=80, passed=True, submitted_at=now,
-        )
+        self.periodic_attempt(Decimal('80'), now, complete)
         complete_entry = recalculate_leaderboard_entry(complete)
 
         with self.subTest('one perfect result earns half of the two assigned quiz points'):
@@ -8007,13 +8065,13 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
 
     def test_no_course_quiz_attempt_scores_assigned_questions_as_zero(self):
         now = timezone.now()
-        level = self.level_attempt(Decimal('80'), now)
+        periodic = self.periodic_attempt(Decimal('80'), now)
         entry = recalculate_leaderboard_entry(self.learner)
 
         self.assertEqual(entry.current_course_quiz_average, Decimal('0'))
-        self.assertEqual(entry.latest_level_assessment_score, Decimal('80'))
+        self.assertEqual(entry.latest_periodic_exam_score, Decimal('80'))
         self.assertEqual(entry.knowledge_score, Decimal('48'))
-        self.assertEqual(entry.last_assessed_at, level.submitted_at)
+        self.assertEqual(entry.last_assessed_at, periodic.submitted_at)
 
         self.auth_as(self.learner)
         response = self.client.get('/api/leaderboard/')
@@ -8021,13 +8079,13 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([row['user_id'] for row in response.data], [self.learner.id])
         self.assertEqual(response.data[0]['knowledge_score'], '48.00')
-        self.assertEqual(response.data[0]['latest_level_assessment_score'], '80.00')
+        self.assertEqual(response.data[0]['latest_periodic_exam_score'], '80.00')
 
     def test_all_levels_receive_the_same_organization_wide_standings(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('80'), now)
         self.quiz_attempt(self.quiz_two, Decimal('80'), now)
-        self.level_attempt(Decimal('70'), now)
+        self.periodic_attempt(Decimal('70'), now)
         recalculate_leaderboard_entry(self.learner)
 
         colleague = User.objects.create_user(
@@ -8036,10 +8094,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         QuizAttempt.objects.create(user=colleague, quiz=self.quiz_one, attempt_number=1, score_percent=90, submitted_at=now)
         QuizAttempt.objects.create(user=colleague, quiz=self.quiz_two, attempt_number=1, score_percent=90, submitted_at=now)
-        LevelAssessmentAttempt.objects.create(
-            user=colleague, assessment_level=self.level, questions_drawn=[], score_percent=90,
-            passed=True, submitted_at=now,
-        )
+        self.periodic_attempt(Decimal('90'), now, colleague)
         recalculate_leaderboard_entry(colleague)
 
         management_user = User.objects.create_user(
@@ -8048,7 +8103,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         LeaderboardEntry.objects.create(
             user=management_user, organization=self.org, knowledge_score=Decimal('100'),
-            current_course_quiz_average=Decimal('100'), latest_level_assessment_score=Decimal('100'),
+            current_course_quiz_average=Decimal('100'), latest_periodic_exam_score=Decimal('100'),
             last_assessed_at=now,
         )
 
@@ -8083,7 +8138,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             score = Decimal(40) if learner == self.learner else Decimal(100 - index * 5)
             LeaderboardEntry.objects.create(
                 user=learner, organization=self.org, current_course_quiz_average=score,
-                latest_level_assessment_score=score, knowledge_score=score, last_assessed_at=now,
+                latest_periodic_exam_score=score, knowledge_score=score, last_assessed_at=now,
             )
 
         unscored_colleague = User.objects.create_user(
@@ -8092,7 +8147,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         LeaderboardEntry.objects.create(
             user=unscored_colleague, organization=self.org, current_course_quiz_average=Decimal('90'),
-            latest_level_assessment_score=None, knowledge_score=None, last_assessed_at=None,
+            latest_periodic_exam_score=None, knowledge_score=None, last_assessed_at=None,
             quizzes_completed=1, quizzes_required=2,
         )
 
@@ -8102,7 +8157,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         LeaderboardEntry.objects.create(
             user=foreign_learner, organization=self.other_org, current_course_quiz_average=Decimal('100'),
-            latest_level_assessment_score=Decimal('100'), knowledge_score=Decimal('100'), last_assessed_at=now,
+            latest_periodic_exam_score=Decimal('100'), knowledge_score=Decimal('100'), last_assessed_at=now,
         )
 
         self.auth_as(self.learner)
@@ -8136,7 +8191,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
         self.quiz_attempt(self.quiz_two, Decimal('100'), now)
-        self.level_attempt(Decimal('80'), now)
+        self.periodic_attempt(Decimal('80'), now)
         ranked = recalculate_leaderboard_entry(self.learner)
         self.assertEqual(ranked.knowledge_score, Decimal('88'))
 
@@ -8161,7 +8216,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
         self.quiz_attempt(self.quiz_two, Decimal('100'), now)
-        self.level_attempt(Decimal('80'), now)
+        self.periodic_attempt(Decimal('80'), now)
         recalculate_leaderboard_entry(self.learner)
 
         second_course = Course.objects.create(
@@ -8195,10 +8250,15 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
     def test_recalculation_commands_are_read_only_by_default_and_apply_idempotently(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
-        self.level_attempt(Decimal('80'), now)
-        stale = LeaderboardEntry.objects.create(
-            user=self.learner, organization=self.org, current_course_quiz_average=Decimal('100'),
-            latest_level_assessment_score=Decimal('80'), knowledge_score=Decimal('88'),
+        self.periodic_attempt(Decimal('80'), now)
+        stale, _created = LeaderboardEntry.objects.update_or_create(
+            user=self.learner,
+            defaults={
+                'organization': self.org,
+                'current_course_quiz_average': Decimal('100'),
+                'latest_periodic_exam_score': Decimal('80'),
+                'knowledge_score': Decimal('88'),
+            },
         )
 
         audit_output = io.StringIO()
@@ -8243,7 +8303,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
         self.quiz_attempt(self.quiz_two, Decimal('80'), now)
         self.quiz_attempt(third_quiz, Decimal('80'), now)
-        self.level_attempt(Decimal('80'), now)
+        self.periodic_attempt(Decimal('80'), now)
 
         entry = recalculate_leaderboard_entry(self.learner)
         self.assertEqual(entry.current_course_quiz_average, Decimal('86.67'))
@@ -8251,7 +8311,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         call_command('recalculate_leaderboard', '--organization-id', str(self.org.id), stdout=output)
         self.assertIn('0 learner leaderboard rows would change', output.getvalue())
 
-    def test_deactivated_learner_is_not_returned_and_no_level_assessment_stays_unranked(self):
+    def test_deactivated_learner_is_not_returned_and_no_periodic_exam_stays_unranked(self):
         now = timezone.now()
         self.quiz_attempt(self.quiz_one, Decimal('100'), now)
         self.quiz_attempt(self.quiz_two, Decimal('100'), now)
@@ -8265,7 +8325,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
         )
         LeaderboardEntry.objects.create(
             user=inactive, organization=self.org, knowledge_score=Decimal('100'),
-            current_course_quiz_average=Decimal('100'), latest_level_assessment_score=Decimal('100'),
+            current_course_quiz_average=Decimal('100'), latest_periodic_exam_score=Decimal('100'),
             quizzes_completed=2, quizzes_required=2,
         )
         self.auth_as(self.learner)
@@ -8283,7 +8343,7 @@ class CurrentKnowledgeLeaderboardTests(BaseAPITestCase):
             peers.append(peer)
             LeaderboardEntry.objects.create(
                 user=peer, organization=self.org, current_course_quiz_average=Decimal('80'),
-                latest_level_assessment_score=Decimal('80'), knowledge_score=Decimal('80'),
+                latest_periodic_exam_score=Decimal('80'), knowledge_score=Decimal('80'),
                 last_assessed_at=now - timedelta(minutes=index), quizzes_completed=2, quizzes_required=2,
             )
         in_progress = User.objects.create_user(

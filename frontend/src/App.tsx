@@ -6,7 +6,6 @@ import { CourseDetailPage } from './pages/CourseDetailPage'
 import { CoursesPage } from './pages/CoursesPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
-import { LevelAssessmentPage } from './pages/LevelAssessmentPage'
 import { PeriodicExamAttemptPage } from './pages/PeriodicExamAttemptPage'
 import { PeriodicExamIntroPage } from './pages/PeriodicExamIntroPage'
 import { PeriodicExamResultPage } from './pages/PeriodicExamResultPage'
@@ -42,7 +41,6 @@ import { PeriodicExamReportPage } from './pages/admin/PeriodicExamReportPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { AppLayout } from './routes/AppLayout'
 import { AssessmentsRoute } from './routes/AssessmentsRoute'
-import { LevelAssessmentRoute } from './routes/LevelAssessmentRoute'
 import { OrgAdminRoute } from './routes/OrgAdminRoute'
 import { PlatformAdminRoute } from './routes/PlatformAdminRoute'
 import { PeriodicExamRoute } from './routes/PeriodicExamRoute'
@@ -67,9 +65,6 @@ function App() {
           <Route path="/courses/:id" element={<CourseDetailPage />} />
           <Route element={<AssessmentsRoute />}>
             <Route path="/assessments" element={<AssessmentsPage />} />
-          </Route>
-          <Route element={<LevelAssessmentRoute />}>
-            <Route path="/level-assessment" element={<LevelAssessmentPage />} />
           </Route>
           <Route element={<PeriodicExamRoute />}>
             <Route path="/periodic-exam" element={<PeriodicExamIntroPage />} />
