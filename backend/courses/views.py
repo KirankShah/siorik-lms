@@ -1457,9 +1457,10 @@ def _build_staff_training_report(organization, date_from, date_to):
     One row per real (is_demo=False) LEARNER account in `organization`,
     regardless of activity — course completions and quiz/level-assessment
     attempts are only counted when they fall within [date_from, date_to];
-    staff-level fields (name, titles, branch) are always current. See the
-    individual column comments below for exactly what "complete"/"pass"
-    means for each one.
+    staff-level fields (name, login status, titles, branch) are always
+    current. Login status is lifetime account status (based on last_login),
+    not activity within the selected report range. See the individual column
+    comments below for exactly what "complete"/"pass" means for each one.
     """
     pass_mark_percent = organization.settings.pass_mark_percent
     curriculum_courses = list(curriculum_courses_for_organization(organization.id))
@@ -1481,7 +1482,7 @@ def _build_staff_training_report(organization, date_from, date_to):
             for e in Enrollment.objects.filter(user=user, course_id__in=[c.id for c in curriculum_courses])
         }
 
-        # Column 6/7: every course in the learner's own effective path
+        # Path completion columns: every course in the learner's own effective path
         # must be COMPLETED with a completion date inside the range for the
         # path to count as done *for this report period* — blank ("incomplete")
         # if any of them isn't, Pass/Fail only once every one of them is.
@@ -1510,7 +1511,7 @@ def _build_staff_training_report(organization, date_from, date_to):
             course_path_status = 'Pass' if all_passing else 'Fail'
             date_path_completed = max(completions_in_range).date().isoformat()
 
-        # Column 8: every retake attempt (2nd+ submitted attempt on the same
+        # Total Course Retakes: every retake attempt (2nd+ submitted attempt on the same
         # quiz) within the date range, across every quiz in the learner's path.
         quiz_ids = list(Quiz.objects.filter(slide__lesson__module__course_id__in=path_course_ids).values_list('id', flat=True))
         attempt_counts = Counter(
@@ -1521,7 +1522,7 @@ def _build_staff_training_report(organization, date_from, date_to):
         )
         total_retakes = sum(max(0, count - 1) for count in attempt_counts.values())
 
-        # Column 9 (one cell per curriculum course, not just this learner's
+        # Course score columns (one cell per curriculum course, not just this learner's
         # own tier — see curriculum_courses_for_organization): blank unless
         # that specific course was completed within the date range.
         course_scores = {}
@@ -1538,7 +1539,7 @@ def _build_staff_training_report(organization, date_from, date_to):
             else:
                 course_scores[course.id] = ''
 
-        # Columns 10-12: this learner's assigned tier's attempts submitted
+        # Level-assessment columns: this learner's assigned tier's attempts submitted
         # within the date range, chronologically — "Attempt N"/"Score N"
         # columns are sized to the report's overall highest attempt count,
         # not a fixed number (padded below once every staff row is built).
@@ -1571,7 +1572,7 @@ def _build_staff_training_report(organization, date_from, date_to):
         })
 
     headers = [
-        'Full Name', 'Email Address', 'Corporate Title', 'Functional Title', 'Branch/Department',
+        'Full Name', 'Email Address', 'Login Status', 'Corporate Title', 'Functional Title', 'Branch/Department',
         'Course Path Completed (Pass/Fail)', 'Date Path Completed', 'Total Course Retakes',
         *[course.title for course in curriculum_courses],
         'Level Assessment (Pass/Fail)',
@@ -1586,6 +1587,7 @@ def _build_staff_training_report(organization, date_from, date_to):
         row = [
             user.get_full_name() or user.email,
             user.email,
+            'Logged In' if user.last_login is not None else 'Never Logged In',
             user.corporate_title or '',
             user.functional_title or '',
             user.branch_department or '',

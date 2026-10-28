@@ -3680,6 +3680,11 @@ class StaffTrainingReportApiTests(BaseAPITestCase):
             'alice@acme.test', first_name='Alice', last_name='Amaya',
             assessment_level=User.AssessmentLevel.OFFICER,
         )
+        # Login status is lifetime account state, deliberately independent of
+        # the report date range. Alice logged in before this report period;
+        # Bob has never logged in.
+        self.alice.last_login = self.OUT_OF_RANGE
+        self.alice.save(update_fields=['last_login'])
         complete_course(self.alice, self.foundation_course, completed_at=self.IN_RANGE)
         submit_quiz_attempt(self.alice, self.foundation_quiz, attempt_number=1, score_percent=90, submitted_at=self.IN_RANGE)
         submit_quiz_attempt(self.alice, self.officer_quiz, attempt_number=1, score_percent=50, submitted_at=self.IN_RANGE)
@@ -3747,6 +3752,14 @@ class StaffTrainingReportApiTests(BaseAPITestCase):
         self.assertEqual(
             set(emails), {self.alice.email, self.bob.email, self.carol.email, self.dave.email, self.learner.email}
         )
+
+    def test_login_status_reports_whether_staff_have_ever_logged_in(self):
+        response = self.get_report(self.org_admin)
+        headers, rows = response.data['headers'], response.data['rows']
+
+        self.assertEqual(headers.index('Login Status'), headers.index('Email Address') + 1)
+        self.assertEqual(self.row_for(headers, rows, self.alice.email)['Login Status'], 'Logged In')
+        self.assertEqual(self.row_for(headers, rows, self.bob.email)['Login Status'], 'Never Logged In')
 
     def test_columns_only_include_this_organizations_curriculum(self):
         response = self.get_report(self.org_admin)
