@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PeriodicExamIntroPage } from './PeriodicExamIntroPage'
 import { PeriodicExamDashboardCard } from '../components/PeriodicExamDashboardCard'
 import { ApiError } from '../lib/apiClient'
-import { fetchPeriodicExamSummary } from '../lib/periodicExamsApi'
+import { fetchPeriodicExamHistory, fetchPeriodicExamSummary } from '../lib/periodicExamsApi'
 import type { PeriodicExamAvailability } from '../types/periodicExams'
 
 const state = vi.hoisted(() => ({ availability: null as PeriodicExamAvailability | null }))
@@ -15,6 +15,7 @@ vi.mock('../context/usePeriodicExamAvailability', () => ({
 
 vi.mock('../lib/periodicExamsApi', () => ({
   fetchPeriodicExamSummary: vi.fn(),
+  fetchPeriodicExamHistory: vi.fn(),
   startPeriodicExamAttempt: vi.fn(),
 }))
 
@@ -42,6 +43,7 @@ function renderIntro() {
 describe('Periodic Exam before a cycle is open', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchPeriodicExamHistory).mockResolvedValue([])
   })
 
   it('shows when the first cycle opens instead of an error, without requesting the summary', () => {
@@ -92,6 +94,6 @@ describe('Periodic Exam before a cycle is open', () => {
     render(<MemoryRouter><PeriodicExamDashboardCard /></MemoryRouter>)
     expect(screen.getByText(/opens on/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Start' })).not.toBeInTheDocument()
-    await waitFor(() => expect(fetchPeriodicExamSummary).not.toHaveBeenCalled())
+    await waitFor(() => expect(fetchPeriodicExamHistory).toHaveBeenCalled())
   })
 })

@@ -182,8 +182,8 @@ class AbandonedAttemptReconciliationTests(TestCase):
         self.assertEqual(participant.attempts_used, 1)
         self.assertEqual(participant.best_score_percent, Decimal('33.33'))
         row = build_report_row(report_participants(participant.cycle).get(pk=participant.pk))
-        self.assertEqual(row.status, 'Failed')
-        self.assertTrue(row.completed)
+        self.assertEqual(row.status, 'Retake required')
+        self.assertFalse(row.completed)
         self.assertEqual(close_expired_periodic_attempts(now=NOW + timedelta(days=4)), 0)
 
     def test_closes_even_when_learner_access_is_now_disabled(self):
@@ -208,7 +208,7 @@ class AbandonedAttemptReconciliationTests(TestCase):
         with patch('django.utils.timezone.now', return_value=NOW + timedelta(hours=1)):
             response = client.get(f'/api/periodic-exams/report/cycles/{cycle.id}/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['results'][0]['status'], 'Failed')
+        self.assertEqual(response.data['results'][0]['status'], 'Retake required')
 
         retake = start(self.learner, now=NOW + timedelta(minutes=1), seed=5)
         out = StringIO()

@@ -21,6 +21,7 @@ const row = {
   branch_department: 'Risk', cycle: 'Shrawan 2083', attempted: true, completed: true,
   attempts_used: 2, best_score: 80, status: 'Passed' as const,
   last_attempt_date: '2026-07-20T10:00:00+05:45',
+  attempt_scores: [50, 80],
 }
 
 describe('PeriodicExamReportPage', () => {
@@ -38,13 +39,13 @@ describe('PeriodicExamReportPage', () => {
     expect(screen.getByRole('cell', { name: 'Passed' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'प्रगति' } })
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'Passed' } })
-    await waitFor(() => expect(api.fetchPeriodicExamReport).toHaveBeenLastCalledWith(10, {
+    await waitFor(() => expect(api.fetchPeriodicExamReport).toHaveBeenLastCalledWith(0, {
       organizationId: undefined, search: 'प्रगति', status: 'Passed', page: 1,
     }))
     fireEvent.click(screen.getByRole('button', { name: 'Download CSV' }))
     fireEvent.click(screen.getByRole('button', { name: 'Download Excel' }))
-    expect(api.downloadPeriodicExamReportCsv).toHaveBeenCalledWith(10, undefined)
-    expect(api.downloadPeriodicExamReportXlsx).toHaveBeenCalledWith(10, undefined)
+    expect(api.downloadPeriodicExamReportCsv).toHaveBeenCalledWith(0, undefined)
+    expect(api.downloadPeriodicExamReportXlsx).toHaveBeenCalledWith(0, undefined)
   })
 
   it('shows empty and error states', async () => {
@@ -65,6 +66,6 @@ describe('PeriodicExamReportPage', () => {
     render(<PeriodicExamReportPage />)
     expect(await screen.findByLabelText('Organization')).toHaveValue('7')
     await waitFor(() => expect(api.fetchPeriodicExamReportCycles).toHaveBeenCalledWith(7))
-    await waitFor(() => expect(api.fetchPeriodicExamReport).toHaveBeenCalledWith(10, expect.objectContaining({ organizationId: 7 })))
+    await waitFor(() => expect(api.fetchPeriodicExamReport).toHaveBeenCalledWith(0, expect.objectContaining({ organizationId: 7 })))
   })
 })

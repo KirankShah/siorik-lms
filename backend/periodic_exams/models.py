@@ -5,7 +5,7 @@ from django.db.models import Q
 
 
 def default_reminder_days():
-    return [7, 2]
+    return [7]
 
 
 class PeriodicExamSettings(models.Model):
@@ -28,7 +28,7 @@ class PeriodicExamSettings(models.Model):
     )
     seconds_per_question = models.PositiveIntegerField(default=60, validators=[MinValueValidator(5)])
     max_attempts_per_cycle = models.PositiveSmallIntegerField(default=2, validators=[MinValueValidator(1)])
-    reminders_enabled = models.BooleanField(default=False)
+    reminders_enabled = models.BooleanField(default=True)
     reminder_days_before_end = models.JSONField(default=default_reminder_days)
     configuration_version = models.PositiveIntegerField(default=1)
     enabled_at = models.DateTimeField(null=True, blank=True)

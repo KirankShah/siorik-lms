@@ -30,7 +30,7 @@ export interface PeriodicExamReportCycle {
   end_date_ad: string
 }
 
-export type PeriodicExamReportStatus = 'Passed' | 'Failed' | 'Not attempted' | 'In progress'
+export type PeriodicExamReportStatus = 'Passed' | 'Failed' | 'Retake required' | 'Not attempted' | 'In progress'
 
 export interface PeriodicExamReportRow {
   staff_name: string
@@ -44,6 +44,7 @@ export interface PeriodicExamReportRow {
   best_score: number | null
   status: PeriodicExamReportStatus
   last_attempt_date: string | null
+  attempt_scores: Array<number | null>
 }
 
 export interface PeriodicExamReportPage {
@@ -94,7 +95,8 @@ export type PeriodicExamReasonCode =
   | 'CYCLE_CLOSED'
 
 export interface PeriodicExamLearnerSummary {
-  cycle: Pick<PeriodicExamCycleSummary, 'id' | 'display_label' | 'starts_at' | 'ends_at'>
+  cycle: Pick<PeriodicExamCycleSummary, 'id' | 'display_label' | 'starts_at' | 'ends_at' | 'questions_per_exam' | 'pass_mark_percent' | 'seconds_per_question' | 'max_attempts_per_cycle'>
+  status: 'PENDING' | 'IN_PROGRESS' | 'RETAKE' | 'PASSED' | 'FAILED'
   attempted: boolean
   completed: boolean
   attempts_used: number
@@ -173,6 +175,4 @@ export type PeriodicExamSettingsUpdate = Pick<
   | 'pass_mark_percent'
   | 'seconds_per_question'
   | 'max_attempts_per_cycle'
-  | 'reminders_enabled'
-  | 'reminder_days_before_end'
 >

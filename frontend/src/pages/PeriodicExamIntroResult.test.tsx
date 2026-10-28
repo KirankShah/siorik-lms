@@ -40,7 +40,8 @@ vi.mock('../lib/periodicExamsApi', () => ({
 }))
 
 const summary = {
-  cycle: { id: 1, display_label: 'Shrawan 2083', starts_at: '2026-07-17T00:00:00+05:45', ends_at: '2026-08-17T00:00:00+05:45' },
+  cycle: { id: 1, display_label: 'Shrawan 2083', starts_at: '2026-07-17T00:00:00+05:45', ends_at: '2026-08-17T00:00:00+05:45', questions_per_exam: 30, pass_mark_percent: 60, seconds_per_question: 60, max_attempts_per_cycle: 2 },
+  status: 'PENDING' as const,
   attempted: false,
   completed: false,
   attempts_used: 0,
@@ -83,7 +84,7 @@ describe('Periodic Exam introduction and result', () => {
   })
 
   it('offers resume instead of creating another attempt', async () => {
-    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue({ ...summary, open_attempt_id: 77, can_start: false, reason_code: 'ATTEMPT_IN_PROGRESS' })
+    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue({ ...summary, status: 'IN_PROGRESS', open_attempt_id: 77, can_start: false, reason_code: 'ATTEMPT_IN_PROGRESS' })
     render(
       <MemoryRouter initialEntries={['/periodic-exam']}>
         <Routes>
@@ -99,7 +100,7 @@ describe('Periodic Exam introduction and result', () => {
 
   it('shows only score/pass state and attempt aggregates on the result page', async () => {
     vi.mocked(fetchPeriodicExamResult).mockResolvedValue({ score_percent: '80.00', passed: true })
-    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue({ ...summary, attempted: true, completed: true, attempts_used: 1, attempts_remaining: 1, best_score_percent: '80.00', passed: true, last_completed_attempt_id: 91, can_start: false, reason_code: 'ALREADY_PASSED' })
+    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue({ ...summary, status: 'PASSED', attempted: true, completed: true, attempts_used: 1, attempts_remaining: 1, best_score_percent: '80.00', passed: true, last_completed_attempt_id: 91, can_start: false, reason_code: 'ALREADY_PASSED' })
     render(
       <MemoryRouter initialEntries={['/periodic-exam/attempt/91/result']}>
         <Routes><Route path="/periodic-exam/attempt/:attemptId/result" element={<PeriodicExamResultPage />} /></Routes>

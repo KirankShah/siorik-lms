@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PeriodicExamDashboardCard } from './PeriodicExamDashboardCard'
 import { Sidebar } from './shell/Sidebar'
 import { PeriodicExamRoute } from '../routes/PeriodicExamRoute'
-import { fetchPeriodicExamSummary } from '../lib/periodicExamsApi'
+import { fetchPeriodicExamHistory } from '../lib/periodicExamsApi'
 
 const mocks = vi.hoisted(() => ({
   role: 'LEARNER',
@@ -28,10 +28,11 @@ vi.mock('../context/usePeriodicExamAvailability', () => ({
   }),
 }))
 
-vi.mock('../lib/periodicExamsApi', () => ({ fetchPeriodicExamSummary: vi.fn() }))
+vi.mock('../lib/periodicExamsApi', () => ({ fetchPeriodicExamHistory: vi.fn() }))
 
 const summary = {
-  cycle: { id: 1, display_label: '2083 Shrawan', starts_at: '2026-07-17T00:00:00+05:45', ends_at: '2026-08-17T00:00:00+05:45' },
+  cycle: { id: 1, display_label: '2083 Shrawan', starts_at: '2026-07-17T00:00:00+05:45', ends_at: '2026-08-17T00:00:00+05:45', questions_per_exam: 30, pass_mark_percent: 60, seconds_per_question: 60, max_attempts_per_cycle: 2 },
+  status: 'PENDING' as const,
   attempted: false,
   completed: false,
   attempts_used: 0,
@@ -49,7 +50,7 @@ describe('Periodic Exam visibility', () => {
     mocks.role = 'LEARNER'
     mocks.enabled = true
     mocks.isLoading = false
-    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue(summary)
+    vi.mocked(fetchPeriodicExamHistory).mockResolvedValue([summary])
   })
 
   it('shows learner navigation only when enabled and never changes other roles', () => {
@@ -75,10 +76,10 @@ describe('Periodic Exam visibility', () => {
     mocks.enabled = true
     rerender(<MemoryRouter><PeriodicExamDashboardCard /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('2083 Shrawan')).toBeInTheDocument())
-    expect(screen.getByText('Not started')).toBeInTheDocument()
+    expect(screen.getAllByText('Pending').length).toBeGreaterThan(0)
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText('—')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Start' })).toHaveAttribute('href', '/periodic-exam')
+    expect(screen.getByRole('link', { name: 'Start' })).toHaveAttribute('href', '/periodic-exam?cycle=1')
   })
 
   it('renders a not-available page for a disabled direct route', () => {
@@ -97,11 +98,11 @@ describe('Periodic Exam visibility', () => {
   })
 
   it('shows a clear cannot-start reason', async () => {
-    vi.mocked(fetchPeriodicExamSummary).mockResolvedValue({
+    vi.mocked(fetchPeriodicExamHistory).mockResolvedValue([{
       ...summary,
       can_start: false,
       reason_code: 'INSUFFICIENT_POOL',
-    })
+    }])
     render(<MemoryRouter><PeriodicExamDashboardCard /></MemoryRouter>)
     expect(await screen.findByText('A full exam cannot be formed for your assigned level yet.')).toBeInTheDocument()
   })

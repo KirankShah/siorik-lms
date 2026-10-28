@@ -26,6 +26,7 @@ from periodic_exams.services import (
     get_periodic_attempt,
     grade_selection,
     periodic_attempt_payload,
+    periodic_exam_summary,
     save_periodic_answer,
     select_questions_for_participant,
     set_feature_enabled,
@@ -169,8 +170,12 @@ class PeriodicExamPhase3ServiceTests(TestCase):
         attempt = self.start(seed=5)
         failed = self.complete(attempt, correct=False)
         self.assertEqual(failed.score_percent, Decimal('0.00'))
-        retake = self.start(now=NOW + timedelta(minutes=1), seed=6)
-        passed = self.complete(retake, correct=True, start_time=NOW + timedelta(minutes=1))
+        self.assertEqual(periodic_exam_summary(self.first, now=NOW + timedelta(minutes=1))['status'], 'RETAKE')
+        historical_now = failed.participant.cycle.ends_at + timedelta(days=1)
+        retake = start_periodic_exam_attempt(
+            self.first, cycle_id=failed.participant.cycle_id, now=historical_now, rng=random.Random(6),
+        )[0]
+        passed = self.complete(retake, correct=True, start_time=historical_now)
         passed.participant.refresh_from_db()
         self.assertEqual(passed.participant.attempts_used, 2)
         self.assertEqual(passed.participant.best_score_percent, Decimal('100.00'))
@@ -191,6 +196,10 @@ class PeriodicExamPhase3ServiceTests(TestCase):
         configure(self.settings, attempts=1)
         attempt = self.start(seed=8)
         self.complete(attempt, correct=False)
+        summary = periodic_exam_summary(self.first, now=NOW + timedelta(minutes=1))
+        self.assertEqual(summary['status'], 'FAILED')
+        self.assertTrue(summary['completed'])
+        self.assertEqual(summary['attempts_remaining'], 0)
         with self.assertRaises(PeriodicExamError) as error:
             self.start(now=NOW + timedelta(minutes=1), seed=9)
         self.assertEqual(error.exception.code, 'ATTEMPT_LIMIT_REACHED')
@@ -409,6 +418,11 @@ class PeriodicExamPhase3ApiTests(TestCase):
         summary = self.client.get('/api/periodic-exams/me/summary/')
         self.assertEqual(summary.status_code, 200)
         self.assertTrue(summary.data['can_start'])
+        self.assertEqual(summary.data['status'], 'PENDING')
+        history = self.client.get('/api/periodic-exams/me/history/')
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(len(history.data), 1)
+        self.assertEqual(history.data[0]['cycle']['id'], summary.data['cycle']['id'])
         for role in (User.Role.INSTRUCTOR, User.Role.ORG_ADMIN, User.Role.PLATFORM_ADMIN):
             user = User.objects.create_user(
                 email=f'{role.lower()}@example.com', password='Pass1234', role=role,

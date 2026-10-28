@@ -16,7 +16,8 @@ class Command(BaseCommand):
         result = send_due_periodic_exam_reminders(dry_run=options['dry_run'])
         mode = 'Dry run' if options['dry_run'] else 'Run'
         self.stdout.write(
-            f"{mode}: due={result['due']} sent={result['sent']} "
+            f"{mode}: due={result['due']} activation_due={result['activation_due']} "
+            f"deadline_due={result['deadline_due']} sent={result['sent']} "
             f"failed={result['failed']} duplicate={result['duplicate']}"
         )
         if options['dry_run'] and result['recipients']:

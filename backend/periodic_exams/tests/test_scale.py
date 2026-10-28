@@ -25,7 +25,7 @@ class PeriodicExamLumbiniScaleTests(TestCase):
         cls.organization = Organization.objects.create(name='Scale Bank', slug='scale-bank')
         feature = enable(cls.organization, questions_per_exam=30)
         feature.reminders_enabled = True
-        feature.reminder_days_before_end = [7, 2]
+        feature.reminder_days_before_end = [7]
         feature.save(update_fields=['reminders_enabled', 'reminder_days_before_end'])
         assessment_level = cls.organization.assessment_levels.get(name=User.AssessmentLevel.OFFICER)
         question_set = QuestionSet.objects.create(assessment_level=assessment_level, label='Scale pool')
@@ -94,6 +94,8 @@ class PeriodicExamLumbiniScaleTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             result = send_due_periodic_exam_reminders(now=self.due_now, dry_run=True)
         elapsed = perf_counter() - started
-        self.assertEqual(result['due'], self.LEARNER_COUNT)
+        self.assertEqual(result['activation_due'], self.LEARNER_COUNT)
+        self.assertEqual(result['deadline_due'], self.LEARNER_COUNT)
+        self.assertEqual(result['due'], self.LEARNER_COUNT * 2)
         self.assertLessEqual(len(queries), 15)
         self.assertLess(elapsed, self.MAX_SECONDS)

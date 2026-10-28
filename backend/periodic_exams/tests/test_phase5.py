@@ -87,7 +87,9 @@ class PeriodicExamReportTests(TestCase):
         self.assertFalse(rows['none@example.com']['attempted'])
         self.assertEqual(rows['progress@example.com']['status'], 'In progress')
         self.assertFalse(rows['progress@example.com']['completed'])
-        self.assertEqual(rows['failed@example.com']['status'], 'Failed')
+        self.assertEqual(rows['failed@example.com']['status'], 'Retake required')
+        self.assertFalse(rows['failed@example.com']['completed'])
+        self.assertEqual(rows['failed@example.com']['attempt_scores'], [40.0])
         self.assertEqual(rows['passed@example.com']['status'], 'Passed')
         self.assertEqual(rows['passed@example.com']['attempts_used'], 2)
         self.assertEqual(rows['passed@example.com']['best_score'], 80.0)
@@ -116,8 +118,9 @@ class PeriodicExamReportTests(TestCase):
         csv_text = b''.join(csv_response.streaming_content).decode('utf-8-sig')
         csv_rows = list(csv.reader(io.StringIO(csv_text)))
         self.assertEqual(csv_rows[0], [
-            'Staff name', 'Email', 'Level', 'Branch/department', 'Cycle', 'Attempted',
+            'Staff name', 'Email', 'Level', 'Branch/department', 'Exam month', 'Attempted',
             'Completed', 'Attempts used', 'Best score', 'Status', 'Last attempt date',
+            'Attempt 1 score', 'Attempt 2 score',
         ])
         self.assertEqual(len(csv_rows) - 1, len(json_rows))
         formula_row = next(row for row in csv_rows[1:] if row[1] == 'none@example.com')
@@ -133,6 +136,18 @@ class PeriodicExamReportTests(TestCase):
         xlsx_formula = next(row for row in values[1:] if row[1] == 'none@example.com')
         self.assertEqual(xlsx_formula[0], "'=Formula Learner")
         self.assertIn('प्रगति Learner', [row[0] for row in values[1:]])
+
+    def test_history_report_grows_by_month_and_keeps_attempt_scores(self):
+        response = self.client.get('/api/periodic-exams/report/history/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 6)
+        passed = next(row for row in response.data['results'] if row['email'] == 'passed@example.com')
+        self.assertEqual(passed['cycle'], self.cycle.display_label)
+        self.assertEqual(passed['attempt_scores'], [40.0, 80.0])
+
+        csv_response = self.client.get('/api/periodic-exams/report/history.csv')
+        csv_rows = list(csv.reader(io.StringIO(b''.join(csv_response.streaming_content).decode('utf-8-sig'))))
+        self.assertIn('Attempt 2 score', csv_rows[0])
 
     def test_tenant_platform_selector_cycle_ownership_and_role_denials(self):
         other_org = Organization.objects.create(name='Other Report', slug='other-report')

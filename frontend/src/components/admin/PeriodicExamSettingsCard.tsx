@@ -14,14 +14,12 @@ export function PeriodicExamSettingsCard() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [reminderDays, setReminderDays] = useState('7, 2')
 
   useEffect(() => {
     Promise.all([fetchPeriodicExamSettings(), fetchPeriodicExamReadiness()])
       .then(([value, readinessValue]) => {
         setSettings(value)
         setReadiness(readinessValue)
-        setReminderDays(value.reminder_days_before_end.join(', '))
       })
       .catch((requestError) => {
         if (requestError instanceof ApiError && requestError.status === 404) setIsEnabled(false)
@@ -38,7 +36,6 @@ export function PeriodicExamSettingsCard() {
     if (!settings) return
     setError(null)
     setSuccess(null)
-    const days = reminderDays.split(',').map((value) => Number(value.trim()))
     setSaving(true)
     try {
       const updated = await updatePeriodicExamSettings({
@@ -47,16 +44,13 @@ export function PeriodicExamSettingsCard() {
         pass_mark_percent: settings.pass_mark_percent,
         seconds_per_question: settings.seconds_per_question,
         max_attempts_per_cycle: settings.max_attempts_per_cycle,
-        reminders_enabled: settings.reminders_enabled,
-        reminder_days_before_end: days,
       })
       setSettings(updated)
-      setReminderDays(updated.reminder_days_before_end.join(', '))
       setSuccess('Periodic Exam settings saved for the next cycle.')
     } catch (requestError) {
       setError(
         requestError instanceof ApiError && requestError.status === 400
-          ? 'Check the values and reminder days, then try again.'
+          ? 'Check the values, then try again.'
           : 'Could not save Periodic Exam settings.',
       )
     } finally {
@@ -118,11 +112,10 @@ export function PeriodicExamSettingsCard() {
           <Input id="periodic-pass-mark" label="Pass mark (%)" type="number" min={0} max={100} value={settings.pass_mark_percent} onChange={(event) => updateNumber('pass_mark_percent', event.target.value)} />
           <Input id="periodic-seconds" label="Seconds per question" type="number" min={5} value={settings.seconds_per_question} onChange={(event) => updateNumber('seconds_per_question', event.target.value)} />
           <Input id="periodic-attempts" label="Maximum attempts per cycle" type="number" min={1} value={settings.max_attempts_per_cycle} onChange={(event) => updateNumber('max_attempts_per_cycle', event.target.value)} />
-          <Input id="periodic-reminder-days" label="Reminder days before end (comma-separated)" value={reminderDays} onChange={(event) => setReminderDays(event.target.value)} />
-          <label className="flex items-center gap-2 text-sm text-neutral-700">
-            <input type="checkbox" checked={settings.reminders_enabled} onChange={(event) => setSettings({ ...settings, reminders_enabled: event.target.checked })} />
-            Send Periodic Exam reminders
-          </label>
+          <div className="rounded-md bg-blue-50 p-3 text-sm text-blue-900 md:col-span-2">
+            Learners are notified when each cycle opens. A second reminder is sent seven days before the Nepali
+            month ends only to learners whose exam is pending or requires a retake.
+          </div>
           <div className="md:col-span-2">
             {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
             {success && <p className="mb-3 text-sm text-emerald-700">{success}</p>}

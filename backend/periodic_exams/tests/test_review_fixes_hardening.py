@@ -122,8 +122,7 @@ class ClaimBeforeSendReminderTests(TestCase):
         add_question(self.organization, User.AssessmentLevel.OFFICER, 'Claim question')
         self.learner = make_learner(self.organization, 'claim@example.com')
         self.cycle = ensure_current_cycle(self.organization, NOW)
-        days = self.cycle.reminder_days_before_end[0]
-        self.due_now = local_instant(self.cycle.end_date_ad - timedelta(days=days))
+        self.due_now = NOW
 
     def test_ledger_claim_is_written_before_the_email_is_sent(self):
         seen = []
@@ -141,7 +140,7 @@ class ClaimBeforeSendReminderTests(TestCase):
         participant = self.cycle.participants.get(learner=self.learner)
         PeriodicExamReminderDelivery.objects.create(
             cycle=self.cycle, participant=participant,
-            days_before_end=self.cycle.reminder_days_before_end[0],
+            days_before_end=0,
             attempt_count=1, last_attempt_at=self.due_now - timedelta(minutes=5),
         )
         calls = []

@@ -33,17 +33,8 @@ class PeriodicExamSettingsSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'enabled', 'pending_frequency', 'pending_frequency_effective_at',
             'configuration_version', 'enabled_from', 'current_cycle',
-            'question_counts',
+            'question_counts', 'reminders_enabled', 'reminder_days_before_end',
         ]
-
-    def validate_reminder_days_before_end(self, value):
-        if not isinstance(value, list) or not value:
-            raise serializers.ValidationError('Provide at least one reminder day.')
-        if any(type(day) is not int or day < 1 or day > 366 for day in value):
-            raise serializers.ValidationError('Reminder days must be unique integers from 1 to 366.')
-        if len(set(value)) != len(value):
-            raise serializers.ValidationError('Reminder days must be unique.')
-        return sorted(value, reverse=True)
 
     def get_current_cycle(self, obj):
         cycle = getattr(obj, '_current_cycle', None)

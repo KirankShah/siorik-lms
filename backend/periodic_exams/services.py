@@ -380,6 +380,8 @@ def set_feature_enabled(organization, enabled, actor, now=None):
             row.enabled = True
             row.enabled_at = now
             row.disabled_at = None
+            row.reminders_enabled = True
+            row.reminder_days_before_end = [7]
             row.enabled_from = (
                 current.starts_at if current
                 else _calendar_boundary(next_full_period_start, row.frequency, now)
@@ -539,7 +541,9 @@ def _record_question_usage(participant, questions, usages, *, now):
                 times_used=1,
             ))
         else:
-            usage.last_cycle_sequence = participant.cycle.sequence
+            # A learner may complete an older pending month after a newer
+            # cycle has opened. Never move lifetime usage history backwards.
+            usage.last_cycle_sequence = max(usage.last_cycle_sequence, participant.cycle.sequence)
             usage.last_used_at = now
             usage.times_used += 1
             changed.append(usage)
@@ -550,19 +554,23 @@ def _record_question_usage(participant, questions, usages, *, now):
         )
 
 
-def start_periodic_exam_attempt(user, *, now=None, rng=None):
+def start_periodic_exam_attempt(user, *, cycle_id=None, now=None, rng=None):
     now = now or timezone.now()
     _learner_access_settings(user, now=now)
-    cycle = ensure_current_cycle(user.organization, now)
-    if cycle is None or now >= cycle.ends_at:
+    cycle = ensure_current_cycle(user.organization, now) if cycle_id is None else None
+    if cycle_id is None and (cycle is None or now >= cycle.ends_at):
         raise PeriodicExamError('No Periodic Exam cycle is open.', code='CYCLE_CLOSED')
 
     with transaction.atomic():
-        participant = PeriodicExamParticipant.objects.select_for_update().select_related('cycle').filter(
-            cycle=cycle, learner=user
+        participant_query = PeriodicExamParticipant.objects.select_for_update().select_related('cycle').filter(
+            learner=user, cycle__organization_id=user.organization_id,
+        )
+        participant = participant_query.filter(
+            cycle_id=cycle_id if cycle_id is not None else cycle.id,
         ).first()
         if participant is None:
             raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
+        cycle = participant.cycle
         _validate_participant_access(user, participant, now=now)
         if participant.passed_at is not None:
             raise PeriodicExamError('This cycle has already been passed.', code='ALREADY_PASSED')
@@ -859,16 +867,10 @@ def periodic_attempt_payload(attempt, *, now=None):
     return data
 
 
-def periodic_exam_summary(user, *, now=None):
-    now = now or timezone.now()
-    _learner_access_settings(user, now=now)
-    cycle = ensure_current_cycle(user.organization, now)
-    if cycle is None:
-        raise PeriodicExamError('No Periodic Exam cycle is open.', code='CYCLE_CLOSED', status_code=404)
-    participant = PeriodicExamParticipant.objects.filter(cycle=cycle, learner=user).first()
-    if participant is None:
-        raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
+def _participant_summary(user, participant, *, now):
     _validate_participant_access(user, participant, now=now)
+    cycle = participant.cycle
+    historical = cycle.ends_at <= now
     open_attempt = participant.attempts.filter(submitted_at__isnull=True).first()
     if open_attempt is not None:
         open_attempt = _catch_up_attempt_by_id(open_attempt.id, now=now)
@@ -879,30 +881,45 @@ def periodic_exam_summary(user, *, now=None):
         submitted_at__isnull=False
     ).order_by('-submitted_at', '-id').first()
     attempts_started = participant.attempts.count()
+    has_completed_attempt = last_completed_attempt is not None
     reason = None
     if participant.passed_at is not None:
         reason = 'ALREADY_PASSED'
+        status = 'PASSED'
     elif participant.revoked_at is not None:
         reason = 'REVOKED'
+        status = 'FAILED'
     elif open_attempt is not None:
         reason = 'ATTEMPT_IN_PROGRESS'
+        status = 'IN_PROGRESS'
     elif attempts_started >= cycle.max_attempts_per_cycle:
         reason = 'ATTEMPT_LIMIT_REACHED'
+        status = 'FAILED'
     elif not participant.can_form_full_exam:
         reason = 'INSUFFICIENT_POOL'
+        status = 'PENDING' if not has_completed_attempt else 'RETAKE'
     elif attempts_started and _fresh_question_count(participant) < cycle.questions_per_exam:
         reason = 'CYCLE_POOL_EXHAUSTED'
-    elif now >= cycle.ends_at:
+        status = 'RETAKE'
+    elif not historical and now >= cycle.ends_at:
         reason = 'CYCLE_CLOSED'
+        status = 'PENDING' if not has_completed_attempt else 'RETAKE'
+    else:
+        status = 'RETAKE' if has_completed_attempt else 'PENDING'
     return {
         'cycle': {
             'id': cycle.id,
             'display_label': cycle.display_label,
             'starts_at': cycle.starts_at,
             'ends_at': cycle.ends_at,
+            'questions_per_exam': cycle.questions_per_exam,
+            'pass_mark_percent': cycle.pass_mark_percent,
+            'seconds_per_question': cycle.seconds_per_question,
+            'max_attempts_per_cycle': cycle.max_attempts_per_cycle,
         },
+        'status': status,
         'attempted': attempts_started > 0,
-        'completed': participant.attempts.filter(submitted_at__isnull=False).exists(),
+        'completed': status in ('PASSED', 'FAILED'),
         'attempts_used': participant.attempts_used,
         'attempts_remaining': max(0, cycle.max_attempts_per_cycle - attempts_started),
         'best_score_percent': participant.best_score_percent,
@@ -912,3 +929,32 @@ def periodic_exam_summary(user, *, now=None):
         'can_start': reason is None,
         'reason_code': reason,
     }
+
+
+def periodic_exam_summary(user, *, cycle_id=None, now=None):
+    now = now or timezone.now()
+    _learner_access_settings(user, now=now)
+    cycle = ensure_current_cycle(user.organization, now) if cycle_id is None else None
+    if cycle_id is None and cycle is None:
+        raise PeriodicExamError('No Periodic Exam cycle is open.', code='CYCLE_CLOSED', status_code=404)
+    participant = PeriodicExamParticipant.objects.select_related('cycle').filter(
+        cycle_id=cycle_id if cycle_id is not None else cycle.id,
+        cycle__organization_id=user.organization_id,
+        learner=user,
+    ).first()
+    if participant is None:
+        raise PeriodicExamError('You are not eligible for this cycle.', code='NOT_ELIGIBLE', status_code=403)
+    return _participant_summary(user, participant, now=now)
+
+
+def periodic_exam_history(user, *, now=None):
+    now = now or timezone.now()
+    _learner_access_settings(user, now=now)
+    ensure_current_cycle(user.organization, now)
+    participants = PeriodicExamParticipant.objects.filter(
+        learner=user,
+        cycle__organization_id=user.organization_id,
+        cycle__starts_at__lte=now,
+        revoked_at__isnull=True,
+    ).select_related('cycle').order_by('-cycle__starts_at')
+    return [_participant_summary(user, participant, now=now) for participant in participants]

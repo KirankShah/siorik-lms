@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, Clock3, ShieldCheck } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { usePeriodicExamAvailability } from '../context/usePeriodicExamAvailability'
@@ -15,25 +15,27 @@ import type { PeriodicExamLearnerSummary } from '../types/periodicExams'
 
 export function PeriodicExamIntroPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedCycleId = Number(searchParams.get('cycle')) || undefined
   const { availability, isLoading: availabilityLoading } = usePeriodicExamAvailability()
   const [summary, setSummary] = useState<PeriodicExamLearnerSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
-  const cycle = availability?.current_cycle
-  const notOpenYet = !availabilityLoading && !!availability?.enabled && !cycle
+  const cycle = summary?.cycle ?? availability?.current_cycle
+  const notOpenYet = !requestedCycleId && !availabilityLoading && !!availability?.enabled && !cycle
 
   useEffect(() => {
     if (availabilityLoading || notOpenYet) return
-    fetchPeriodicExamSummary().then(setSummary).catch((reason: unknown) => setError(periodicExamErrorMessage(reason)))
-  }, [availabilityLoading, notOpenYet])
+    fetchPeriodicExamSummary(requestedCycleId).then(setSummary).catch((reason: unknown) => setError(periodicExamErrorMessage(reason)))
+  }, [availabilityLoading, notOpenYet, requestedCycleId])
 
   async function start() {
     if (starting) return
     setStarting(true)
     setError(null)
     try {
-      const attempt = await startPeriodicExamAttempt()
+      const attempt = await startPeriodicExamAttempt(requestedCycleId)
       navigate(`/periodic-exam/attempt/${attempt.id}`)
     } catch (reason: unknown) {
       setError(periodicExamErrorMessage(reason))

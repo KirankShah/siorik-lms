@@ -2,7 +2,7 @@ import csv
 import io
 from dataclasses import asdict, dataclass
 
-from django.db.models import Count, Max, Q
+from django.db.models import Count, F, Max, Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from openpyxl import Workbook
@@ -11,8 +11,8 @@ from accounts.models import User
 from .models import PeriodicExamParticipant
 
 
-REPORT_HEADERS = [
-    'Staff name', 'Email', 'Level', 'Branch/department', 'Cycle', 'Attempted',
+BASE_REPORT_HEADERS = [
+    'Staff name', 'Email', 'Level', 'Branch/department', 'Exam month', 'Attempted',
     'Completed', 'Attempts used', 'Best score', 'Status', 'Last attempt date',
 ]
 LEVEL_LABELS = dict(User.AssessmentLevel.choices)
@@ -31,20 +31,35 @@ class PeriodicExamReportRow:
     best_score: float | None
     status: str
     last_attempt_date: str | None
+    attempt_scores: list[float | None]
 
     def json(self):
         return asdict(self)
 
-    def cells(self):
-        return [
+    def cells(self, max_attempts):
+        values = [
             self.staff_name, self.email, self.level, self.branch_department, self.cycle,
             self.attempted, self.completed, self.attempts_used, self.best_score,
             self.status, self.last_attempt_date,
         ]
+        return values + self.attempt_scores + [None] * (max_attempts - len(self.attempt_scores))
+
+
+def report_headers(max_attempts):
+    return BASE_REPORT_HEADERS + [f'Attempt {number} score' for number in range(1, max_attempts + 1)]
 
 
 def report_participants(cycle, *, search='', status_filter=''):
-    queryset = cycle.participants.annotate(
+    return _filter_report_participants(cycle.participants.all(), search=search, status_filter=status_filter)
+
+
+def report_participants_for_organization(organization, *, search='', status_filter=''):
+    queryset = PeriodicExamParticipant.objects.filter(cycle__organization=organization)
+    return _filter_report_participants(queryset, search=search, status_filter=status_filter)
+
+
+def _filter_report_participants(queryset, *, search='', status_filter=''):
+    queryset = queryset.annotate(
         report_attempt_count=Count('attempts', distinct=True),
         report_completed_count=Count(
             'attempts', filter=Q(attempts__submitted_at__isnull=False), distinct=True
@@ -67,8 +82,13 @@ def report_participants(cycle, *, search='', status_filter=''):
         'In progress': Q(passed_at__isnull=True, report_open_count__gt=0),
         'Failed': Q(
             passed_at__isnull=True,
-            report_attempt_count__gt=0,
+            report_completed_count__gte=F('cycle__max_attempts_per_cycle'),
+            report_open_count=0,
+        ),
+        'Retake required': Q(
+            passed_at__isnull=True,
             report_completed_count__gt=0,
+            report_completed_count__lt=F('cycle__max_attempts_per_cycle'),
             report_open_count=0,
         ),
     }
@@ -79,15 +99,18 @@ def report_participants(cycle, *, search='', status_filter=''):
 
 def build_report_row(participant):
     attempts = participant.report_attempt_count
-    completed = participant.report_completed_count > 0
+    attempt_rows = sorted(participant.attempts.all(), key=lambda attempt: attempt.attempt_number)
     if participant.passed_at:
         status = 'Passed'
     elif attempts == 0:
         status = 'Not attempted'
     elif participant.report_open_count:
         status = 'In progress'
-    else:
+    elif participant.report_completed_count >= participant.cycle.max_attempts_per_cycle:
         status = 'Failed'
+    else:
+        status = 'Retake required'
+    completed = status in ('Passed', 'Failed')
     last_attempt = participant.report_last_attempt_at
     if last_attempt:
         last_attempt = timezone.localtime(last_attempt).isoformat()
@@ -103,11 +126,15 @@ def build_report_row(participant):
         best_score=float(participant.best_score_percent) if participant.best_score_percent is not None else None,
         status=status,
         last_attempt_date=last_attempt,
+        attempt_scores=[
+            float(attempt.score_percent) if attempt.submitted_at is not None else None
+            for attempt in attempt_rows
+        ],
     )
 
 
 def iter_report_rows(queryset, *, chunk_size=500):
-    for participant in queryset.select_related('cycle').iterator(chunk_size=chunk_size):
+    for participant in queryset.select_related('cycle').prefetch_related('attempts').iterator(chunk_size=chunk_size):
         yield build_report_row(participant)
 
 
@@ -127,29 +154,37 @@ class _CsvEcho:
 
 def csv_report_response(queryset, cycle):
     writer = csv.writer(_CsvEcho())
+    max_attempts = cycle.max_attempts_per_cycle if cycle else (
+        queryset.aggregate(value=Max('cycle__max_attempts_per_cycle'))['value'] or 0
+    )
 
     def content():
         yield '\ufeff'
-        yield writer.writerow(REPORT_HEADERS)
+        yield writer.writerow(report_headers(max_attempts))
         for row in iter_report_rows(queryset):
-            yield writer.writerow([spreadsheet_safe(value) for value in row.cells()])
+            yield writer.writerow([spreadsheet_safe(value) for value in row.cells(max_attempts)])
 
     response = StreamingHttpResponse(content(), content_type='text/csv; charset=utf-8')
-    response['Content-Disposition'] = f'attachment; filename="periodic_exam_{cycle.id}.csv"'
+    suffix = cycle.id if cycle else 'history'
+    response['Content-Disposition'] = f'attachment; filename="periodic_exam_{suffix}.csv"'
     return response
 
 
 def xlsx_report_response(queryset, cycle):
     workbook = Workbook(write_only=True)
     sheet = workbook.create_sheet('Periodic Exam Report')
-    sheet.append(REPORT_HEADERS)
+    max_attempts = cycle.max_attempts_per_cycle if cycle else (
+        queryset.aggregate(value=Max('cycle__max_attempts_per_cycle'))['value'] or 0
+    )
+    sheet.append(report_headers(max_attempts))
     for row in iter_report_rows(queryset):
-        sheet.append([spreadsheet_safe(value) for value in row.cells()])
+        sheet.append([spreadsheet_safe(value) for value in row.cells(max_attempts)])
     buffer = io.BytesIO()
     workbook.save(buffer)
     response = HttpResponse(
         buffer.getvalue(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-    response['Content-Disposition'] = f'attachment; filename="periodic_exam_{cycle.id}.xlsx"'
+    suffix = cycle.id if cycle else 'history'
+    response['Content-Disposition'] = f'attachment; filename="periodic_exam_{suffix}.xlsx"'
     return response

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Clock3 } from 'lucide-react'
 import { Card } from './ui/Card'
 import { usePeriodicExamAvailability } from '../context/usePeriodicExamAvailability'
-import { fetchPeriodicExamSummary } from '../lib/periodicExamsApi'
+import { fetchPeriodicExamHistory } from '../lib/periodicExamsApi'
 import {
   formatPeriodicExamDate,
   periodicExamErrorMessage,
@@ -16,15 +16,20 @@ import type { PeriodicExamLearnerSummary } from '../types/periodicExams'
 export function PeriodicExamDashboardCard() {
   const { availability, isLoading: availabilityLoading } = usePeriodicExamAvailability()
   const [summary, setSummary] = useState<PeriodicExamLearnerSummary | null>(null)
+  const [history, setHistory] = useState<PeriodicExamLearnerSummary[]>([])
   const [failure, setFailure] = useState<string | null>(null)
   const hasCycle = !!availability?.current_cycle
 
   useEffect(() => {
-    if (!availability?.enabled || !hasCycle) return
+    if (!availability?.enabled) return
     let cancelled = false
-    fetchPeriodicExamSummary()
+    fetchPeriodicExamHistory()
       .then((value) => {
-        if (!cancelled) setSummary(value)
+        if (!cancelled) {
+          setHistory(value)
+          const currentId = availability.current_cycle?.id
+          setSummary(value.find((item) => item.cycle.id === currentId) ?? value[0] ?? null)
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) setFailure(periodicExamErrorMessage(reason))
@@ -32,7 +37,7 @@ export function PeriodicExamDashboardCard() {
     return () => {
       cancelled = true
     }
-  }, [availability?.enabled, hasCycle])
+  }, [availability?.current_cycle?.id, availability?.enabled])
 
   if (availabilityLoading || !availability?.enabled) return null
 
@@ -41,7 +46,12 @@ export function PeriodicExamDashboardCard() {
     ? { label: 'Resume', to: `/periodic-exam/attempt/${summary.open_attempt_id}` }
     : summary?.passed && resultId
       ? { label: 'View result', to: `/periodic-exam/attempt/${resultId}/result` }
-      : { label: 'Start', to: '/periodic-exam' }
+      : summary?.status === 'FAILED' && resultId
+        ? { label: 'View result', to: `/periodic-exam/attempt/${resultId}/result` }
+        : summary?.can_start
+          ? { label: summary.status === 'RETAKE' ? 'Retake' : 'Start', to: `/periodic-exam?cycle=${summary.cycle.id}` }
+          : null
+  const outstanding = history.filter((item) => item.status !== 'PASSED')
 
   return (
     <Card data-testid="periodic-exam-dashboard-card">
@@ -58,7 +68,7 @@ export function PeriodicExamDashboardCard() {
         <Clock3 className="h-6 w-6 text-brand-navy" />
       </div>
 
-      {!hasCycle ? (
+      {!hasCycle && history.length === 0 ? (
         <p className="mt-4 text-sm text-neutral-600">{periodicExamNotOpenMessage(availability)}</p>
       ) : failure ? (
         <p className="mt-4 text-sm text-amber-700">{failure}</p>
@@ -77,12 +87,31 @@ export function PeriodicExamDashboardCard() {
           {!summary.can_start && !summary.open_attempt_id && (
             <p className="mt-3 text-sm text-amber-700">{periodicExamReasonMessage(summary.reason_code)}</p>
           )}
-          <Link
-            to={action.to}
-            className="mt-4 inline-flex rounded-md bg-brand-navy px-4 py-2 text-sm font-medium text-white hover:bg-brand-navy-light"
-          >
-            {action.label}
-          </Link>
+          {action && (
+            <Link
+              to={action.to}
+              className="mt-4 inline-flex rounded-md bg-brand-navy px-4 py-2 text-sm font-medium text-white hover:bg-brand-navy-light"
+            >
+              {action.label}
+            </Link>
+          )}
+          {outstanding.length > 0 && (
+            <div className="mt-5 border-t border-neutral-200 pt-4">
+              <p className="text-sm font-semibold text-neutral-900">Monthly exam status</p>
+              <ul className="mt-2 space-y-2">
+                {outstanding.map((item) => (
+                  <li key={item.cycle.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-neutral-50 px-3 py-2 text-sm">
+                    <span>{item.cycle.display_label} Exam — <strong>{periodicExamStatus(item)}</strong></span>
+                    {item.status !== 'FAILED' && (item.open_attempt_id || item.can_start) && (
+                      <Link className="font-medium text-brand-navy underline" to={item.open_attempt_id ? `/periodic-exam/attempt/${item.open_attempt_id}` : `/periodic-exam?cycle=${item.cycle.id}`}>
+                        {item.open_attempt_id ? 'Resume' : item.status === 'RETAKE' ? 'Retake' : 'Open'}
+                      </Link>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </Card>

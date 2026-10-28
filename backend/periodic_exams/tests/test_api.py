@@ -34,8 +34,8 @@ class PeriodicExamApiTests(TestCase):
         self.assertEqual(row.pass_mark_percent, 60)
         self.assertEqual(row.seconds_per_question, 60)
         self.assertEqual(row.max_attempts_per_cycle, 2)
-        self.assertFalse(row.reminders_enabled)
-        self.assertEqual(row.reminder_days_before_end, [7, 2])
+        self.assertTrue(row.reminders_enabled)
+        self.assertEqual(row.reminder_days_before_end, [7])
 
     def test_only_platform_admin_can_toggle(self):
         url = f'/api/periodic-exams/platform/organizations/{self.org.id}/'

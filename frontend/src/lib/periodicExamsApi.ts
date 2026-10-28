@@ -40,19 +40,23 @@ export function fetchPeriodicExamReport(
   cycleId: number,
   options: { organizationId?: number; search?: string; status?: PeriodicExamReportStatus | ''; page?: number } = {},
 ): Promise<PeriodicExamReportPage> {
-  return apiFetch(`/periodic-exams/report/cycles/${cycleId}/${reportQuery(options.organizationId, {
+  const path = cycleId === 0 ? '/periodic-exams/report/history/' : `/periodic-exams/report/cycles/${cycleId}/`
+  return apiFetch(`${path}${reportQuery(options.organizationId, {
     search: options.search, status: options.status, page: options.page,
   })}`)
 }
 
 async function downloadPeriodicExamReport(cycleId: number, format: 'csv' | 'xlsx', organizationId?: number) {
+  const path = cycleId === 0
+    ? `/periodic-exams/report/history.${format}`
+    : `/periodic-exams/report/cycles/${cycleId}.${format}`
   const blob = await apiFetchBlob(
-    `/periodic-exams/report/cycles/${cycleId}.${format}${reportQuery(organizationId)}`,
+    `${path}${reportQuery(organizationId)}`,
   )
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `periodic_exam_${cycleId}.${format}`
+  link.download = `periodic_exam_${cycleId === 0 ? 'history' : cycleId}.${format}`
   document.body.appendChild(link)
   link.click()
   link.remove()
@@ -64,12 +68,16 @@ export const downloadPeriodicExamReportCsv = (cycleId: number, organizationId?: 
 export const downloadPeriodicExamReportXlsx = (cycleId: number, organizationId?: number) =>
   downloadPeriodicExamReport(cycleId, 'xlsx', organizationId)
 
-export function fetchPeriodicExamSummary(): Promise<PeriodicExamLearnerSummary> {
-  return apiFetch('/periodic-exams/me/summary/')
+export function fetchPeriodicExamSummary(cycleId?: number): Promise<PeriodicExamLearnerSummary> {
+  return apiFetch(`/periodic-exams/me/summary/${cycleId ? `?cycle_id=${cycleId}` : ''}`)
 }
 
-export function startPeriodicExamAttempt(): Promise<PeriodicExamAttempt> {
-  return apiFetch('/periodic-exams/me/attempts/start/', { method: 'POST' })
+export function fetchPeriodicExamHistory(): Promise<PeriodicExamLearnerSummary[]> {
+  return apiFetch('/periodic-exams/me/history/')
+}
+
+export function startPeriodicExamAttempt(cycleId?: number): Promise<PeriodicExamAttempt> {
+  return apiFetch(`/periodic-exams/me/attempts/start/${cycleId ? `?cycle_id=${cycleId}` : ''}`, { method: 'POST' })
 }
 
 export function fetchPeriodicExamAttempt(attemptId: number): Promise<PeriodicExamAttempt> {

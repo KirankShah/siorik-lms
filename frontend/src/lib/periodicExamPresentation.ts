@@ -49,10 +49,13 @@ export function periodicExamReasonMessage(code: PeriodicExamReasonCode | null): 
 }
 
 export function periodicExamStatus(summary: PeriodicExamLearnerSummary): string {
-  if (summary.passed) return 'Passed'
-  if (summary.open_attempt_id) return 'In progress'
-  if (summary.completed) return 'Failed — retake available'
-  return 'Not started'
+  return {
+    PENDING: 'Pending',
+    IN_PROGRESS: 'In progress',
+    RETAKE: 'Retake required',
+    PASSED: 'Passed',
+    FAILED: 'Failed',
+  }[summary.status]
 }
 
 export function formatPeriodicExamDate(value: string): string {

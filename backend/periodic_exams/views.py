@@ -31,6 +31,7 @@ from .services import (
     revoke_ineligible_participants,
     get_periodic_attempt,
     periodic_attempt_payload,
+    periodic_exam_history,
     periodic_exam_summary,
     save_periodic_answer,
     set_feature_enabled,
@@ -38,7 +39,13 @@ from .services import (
     submit_periodic_attempt,
     upcoming_cycle_preview,
 )
-from .reports import csv_report_response, iter_report_rows, report_participants, xlsx_report_response
+from .reports import (
+    csv_report_response,
+    iter_report_rows,
+    report_participants,
+    report_participants_for_organization,
+    xlsx_report_response,
+)
 
 
 class PeriodicExamConflictMixin:
@@ -185,14 +192,31 @@ class LearnerSummaryView(PeriodicExamConflictMixin, APIView):
     permission_classes = [IsAuthenticated, IsExactLearner]
 
     def get(self, request):
-        return Response(periodic_exam_summary(request.user))
+        cycle_id = request.query_params.get('cycle_id')
+        try:
+            cycle_id = int(cycle_id) if cycle_id else None
+        except (TypeError, ValueError):
+            raise PeriodicExamError('Invalid cycle_id.', code='INVALID_CYCLE')
+        return Response(periodic_exam_summary(request.user, cycle_id=cycle_id))
+
+
+class LearnerHistoryView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated, IsExactLearner]
+
+    def get(self, request):
+        return Response(periodic_exam_history(request.user))
 
 
 class LearnerAttemptStartView(PeriodicExamConflictMixin, APIView):
     permission_classes = [IsAuthenticated, IsExactLearner]
 
     def post(self, request):
-        attempt, created = start_periodic_exam_attempt(request.user)
+        cycle_id = request.query_params.get('cycle_id')
+        try:
+            cycle_id = int(cycle_id) if cycle_id else None
+        except (TypeError, ValueError):
+            raise PeriodicExamError('Invalid cycle_id.', code='INVALID_CYCLE')
+        attempt, created = start_periodic_exam_attempt(request.user, cycle_id=cycle_id)
         return Response(
             periodic_attempt_payload(attempt),
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -298,6 +322,38 @@ class ReportView(PeriodicExamConflictMixin, APIView):
             return csv_report_response(queryset, cycle)
         if export_format == 'xlsx':
             return xlsx_report_response(queryset, cycle)
+        try:
+            page_number = max(1, int(request.query_params.get('page', 1)))
+            page_size = min(200, max(1, int(request.query_params.get('page_size', 50))))
+        except (TypeError, ValueError):
+            raise PeriodicExamError('Invalid pagination.', code='INVALID_PAGINATION')
+        page = Paginator(queryset, page_size).get_page(page_number)
+        return Response({
+            'count': page.paginator.count,
+            'page': page.number,
+            'page_size': page_size,
+            'results': [row.json() for row in iter_report_rows(page.object_list)],
+        })
+
+
+class ReportHistoryView(PeriodicExamConflictMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, export_format=None):
+        organization = _report_organization(request)
+        current = ensure_current_cycle(organization)
+        if current is not None:
+            close_expired_periodic_attempts(cycle=current)
+            revoke_ineligible_participants(cycle=current)
+        search = request.query_params.get('search', '').strip()
+        status_filter = request.query_params.get('status', '').strip()
+        queryset = report_participants_for_organization(
+            organization, search=search, status_filter=status_filter,
+        )
+        if export_format == 'csv':
+            return csv_report_response(queryset, None)
+        if export_format == 'xlsx':
+            return xlsx_report_response(queryset, None)
         try:
             page_number = max(1, int(request.query_params.get('page', 1)))
             page_size = min(200, max(1, int(request.query_params.get('page_size', 50))))
