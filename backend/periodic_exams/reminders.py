@@ -129,15 +129,19 @@ def _deliver(participant, delivery_key, now, email_sender):
     return 'sent'
 
 
-def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=None):
+def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=None, max_deliveries=None):
     now = now or timezone.now()
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise ValueError('A timezone-aware now value is required.')
     email_sender = email_sender or send_periodic_exam_notification_email
+    max_deliveries = max_deliveries or getattr(settings, 'PERIODIC_EXAM_EMAIL_BATCH_SIZE', 50)
+    if type(max_deliveries) is not int or max_deliveries < 1:
+        raise ValueError('max_deliveries must be a positive integer.')
+    delivery_budget = max_deliveries
     today = now.astimezone(KATHMANDU).date()
     result = {
         'due': 0, 'activation_due': 0, 'deadline_due': 0,
-        'sent': 0, 'failed': 0, 'duplicate': 0, 'recipients': [],
+        'sent': 0, 'failed': 0, 'duplicate': 0, 'remaining': 0, 'recipients': [],
     }
     feature_rows = PeriodicExamSettings.objects.filter(
         enabled=True, organization__is_active=True
@@ -160,31 +164,50 @@ def send_due_periodic_exam_reminders(*, now=None, dry_run=False, email_sender=No
             learner__role=User.Role.LEARNER,
         ).select_related('learner', 'cycle').order_by('id')
 
-        # Every eligible learner receives exactly one cycle-activation notice.
-        for participant in participants.iterator(chunk_size=500):
-            result['due'] += 1
-            result['activation_due'] += 1
-            result['recipients'].append(participant.id)
-            if dry_run:
-                continue
-            outcome = _deliver(participant, ACTIVATION_DELIVERY_KEY, now, email_sender)
-            result[outcome] += 1
+        def unsent(queryset, delivery_key):
+            delivered_ids = PeriodicExamReminderDelivery.objects.filter(
+                cycle=cycle, days_before_end=delivery_key, sent_at__isnull=False,
+            ).values_list('participant_id', flat=True)
+            return queryset.exclude(pk__in=delivered_ids)
 
-        if reminder_days_remaining(cycle, now) != DEADLINE_REMINDER_DAYS:
+        activation = unsent(participants, ACTIVATION_DELIVERY_KEY)
+        deadline = participants.none()
+        if reminder_days_remaining(cycle, now) == DEADLINE_REMINDER_DAYS:
+            # The seven-day reminder is only actionable for learners who have
+            # not passed and can still submit or resume an attempt. Exhausted
+            # failures are final and receive no misleading retake reminder.
+            incomplete = participants.filter(passed_at__isnull=True).filter(
+                Q(attempts_used__lt=cycle.max_attempts_per_cycle)
+                | Q(attempts__submitted_at__isnull=True)
+            ).distinct()
+            deadline = unsent(incomplete, DEADLINE_REMINDER_DAYS)
+
+        activation_count = activation.count()
+        deadline_count = deadline.count()
+        result['activation_due'] += activation_count
+        result['deadline_due'] += deadline_count
+        result['due'] += activation_count + deadline_count
+
+        if dry_run:
+            result['recipients'].extend(deadline.values_list('id', flat=True))
+            result['recipients'].extend(activation.values_list('id', flat=True))
             continue
-        # The seven-day reminder is only actionable for learners who have not
-        # passed and can still submit or resume an attempt. Exhausted failures
-        # are final and must not receive misleading retake reminders.
-        incomplete = participants.filter(passed_at__isnull=True).filter(
-            Q(attempts_used__lt=cycle.max_attempts_per_cycle)
-            | Q(attempts__submitted_at__isnull=True)
-        ).distinct()
-        for participant in incomplete.iterator(chunk_size=500):
-            result['due'] += 1
-            result['deadline_due'] += 1
-            result['recipients'].append(participant.id)
-            if dry_run:
-                continue
-            outcome = _deliver(participant, DEADLINE_REMINDER_DAYS, now, email_sender)
-            result[outcome] += 1
+
+        # Deadline reminders are more urgent than overdue activation notices.
+        # A single global budget is shared across every organization so the
+        # sending domain stays below its hourly provider quota.
+        for queryset, delivery_key in (
+            (deadline, DEADLINE_REMINDER_DAYS),
+            (activation, ACTIVATION_DELIVERY_KEY),
+        ):
+            for participant in queryset.iterator(chunk_size=500):
+                if delivery_budget <= 0:
+                    break
+                outcome = _deliver(participant, delivery_key, now, email_sender)
+                result[outcome] += 1
+                if outcome in ('sent', 'failed'):
+                    delivery_budget -= 1
+            if delivery_budget <= 0:
+                break
+    result['remaining'] = max(0, result['due'] - result['sent'] - result['duplicate'])
     return result

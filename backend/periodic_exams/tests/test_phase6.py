@@ -81,13 +81,13 @@ class PeriodicExamReminderTests(TestCase):
         self.assertTrue(all(self.cycle.display_label in message.body for message in mail.outbox))
 
         due = send_due_periodic_exam_reminders(now=self.due_now)
-        self.assertEqual((due['deadline_due'], due['sent'], due['duplicate']), (2, 2, 4))
+        self.assertEqual((due['deadline_due'], due['sent'], due['duplicate']), (2, 2, 0))
         self.assertEqual(len(mail.outbox), 6)
         self.assertIn(str(self.cycle.end_date_ad), mail.outbox[-1].body)
         self.assertTrue(any('retake' in message.body.lower() for message in mail.outbox[-2:]))
 
         second = send_due_periodic_exam_reminders(now=self.due_now)
-        self.assertEqual((second['sent'], second['duplicate']), (0, 6))
+        self.assertEqual((second['due'], second['sent'], second['duplicate']), (0, 0, 0))
         self.assertEqual(len(mail.outbox), 6)
         self.assertEqual(PeriodicExamReminderDelivery.objects.filter(sent_at__isnull=False).count(), 6)
         self.learners['exempt'].refresh_from_db()
@@ -108,11 +108,24 @@ class PeriodicExamReminderTests(TestCase):
         self.assertIn('temporary mail failure', failed.last_error)
 
         second = send_due_periodic_exam_reminders(now=CYCLE_NOW, email_sender=fail_once)
-        self.assertEqual((second['sent'], second['duplicate']), (1, 3))
+        self.assertEqual((second['sent'], second['duplicate']), (1, 0))
         failed.refresh_from_db()
         self.assertEqual(failed.attempt_count, 2)
         self.assertIsNotNone(failed.sent_at)
         self.assertEqual(failed.last_error, '')
+
+    def test_hourly_batch_limit_resumes_without_duplicates(self):
+        first = send_due_periodic_exam_reminders(now=CYCLE_NOW, max_deliveries=2)
+        self.assertEqual((first['due'], first['sent'], first['remaining']), (4, 2, 2))
+        second = send_due_periodic_exam_reminders(
+            now=CYCLE_NOW + timedelta(hours=1), max_deliveries=2,
+        )
+        self.assertEqual((second['due'], second['sent'], second['remaining']), (2, 2, 0))
+        third = send_due_periodic_exam_reminders(
+            now=CYCLE_NOW + timedelta(hours=2), max_deliveries=2,
+        )
+        self.assertEqual((third['due'], third['sent'], third['remaining']), (0, 0, 0))
+        self.assertEqual(len(mail.outbox), 4)
 
     def test_disabled_or_subscription_expired_organization_is_skipped(self):
         self.settings.enabled = False

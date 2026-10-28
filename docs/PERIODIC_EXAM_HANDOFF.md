@@ -36,7 +36,7 @@ Phase 7 adds the scale tests, final design reconciliation and this handoff. Reco
 - [ ] Record real Lumbini unique single-/multiple-choice question counts for every level and identify levels below 30.
 - [ ] Take and verify a production backup; record the exact pre-deploy `main` commit hash and rollback owner.
 - [ ] Merge the reviewed fresh-database fix first, then `integration/main-2026-10`; rebase this feature branch on that updated `main`, dropping equivalent commits, rerun all checks, and merge the Periodic Exam review last.
-- [ ] Install the pinned Python dependencies before migration, schedule `send_periodic_exam_reminders` daily, and perform a disabled-state smoke test before enabling any tenant.
+- [ ] Install the pinned Python dependencies before migration, schedule `send_periodic_exam_reminders` hourly, and perform a disabled-state smoke test before enabling any tenant. The command sends at most 50 messages per run by default so the shared sending domain remains below its hourly quota.
 
 ## Enable exactly one organisation
 
